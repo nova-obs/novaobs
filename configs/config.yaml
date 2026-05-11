@@ -1,0 +1,32 @@
+server:
+  host: "127.0.0.1"
+  port: 7890
+  mode: "debug"
+database:
+  driver: "mongodb"
+  uri: "mongodb://admin:mongodb_test@10.72.161.91:27017,10.72.161.92:27017,10.72.161.93:27017/"
+collector_template: |
+  receivers:
+    kafka/syslog:
+      brokers:
+        - 10.72.136.215:9092
+      group_id: syslog-vl
+      initial_offset: latest
+      logs:
+        topics:
+          - syslog
+        encoding: text
+  {{PROCESSORS_YAML}}
+  exporters:
+    otlphttp/victorialogs:
+      logs_endpoint: http://10.86.11.30:9428/insert/opentelemetry/v1/logs
+      timeout: 5s
+      compression: gzip
+      headers:
+        VL-Stream-Fields: tenant,source_type,hostname
+  service:
+    pipelines:
+      logs:
+        receivers: [kafka/syslog]
+        processors: [{{PROCESSOR_CHAIN}}]
+        exporters: [otlphttp/victorialogs]

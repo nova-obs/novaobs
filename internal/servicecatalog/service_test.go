@@ -1,0 +1,142 @@
+package servicecatalog
+
+import (
+	"context"
+	"testing"
+
+	"novaobs/internal/database/memstore"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestRepositoryCreatesAndListsServices(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{
+		Name:        "payment-gateway",
+		Environment: "production",
+		Cluster:     "prod-cluster-1",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, svc.ID)
+	require.Equal(t, "pending", svc.Status)
+	require.Equal(t, "manual", svc.Source)
+	require.Equal(t, "local", svc.SyncStatus)
+	require.False(t, svc.CreatedAt.IsZero())
+	require.False(t, svc.UpdatedAt.IsZero())
+
+	services, err := repo.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+	require.Equal(t, "payment-gateway", services[0].Name)
+}
+
+func TestRepositoryRejectsDuplicateServiceIdentity(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	_, err := repo.Create(ctx, Service{
+		Name:        "payment-gateway",
+		Environment: "production",
+		Cluster:     "prod-cluster-1",
+		Namespace:   "payments",
+	})
+	require.NoError(t, err)
+
+	_, err = repo.Create(ctx, Service{
+		Name:        "payment-gateway",
+		Environment: "production",
+		Cluster:     "prod-cluster-1",
+		Namespace:   "payments",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "服务已存在")
+}
+
+func TestRepositoryFiltersServices(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	_, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production", OwnerTeam: "payments"})
+	require.NoError(t, err)
+	_, err = repo.Create(ctx, Service{Name: "inventory-api", Environment: "staging", OwnerTeam: "inventory"})
+	require.NoError(t, err)
+
+	services, err := repo.List(ctx, ListFilter{Query: "payment", Environment: "production", Source: "manual"})
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+	require.Equal(t, "payment-api", services[0].Name)
+}
+
+func TestRepositoryUpdatesManualService(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	require.NoError(t, err)
+
+	ownerTeam := "payments"
+	status := "active"
+	updated, err := repo.Update(ctx, svc.ID, UpdateRequest{
+		OwnerTeam: &ownerTeam,
+		Status:    &status,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "payments", updated.OwnerTeam)
+	require.Equal(t, "active", updated.Status)
+	require.Equal(t, svc.CreatedAt, updated.CreatedAt)
+	require.True(t, updated.UpdatedAt.After(svc.UpdatedAt) || updated.UpdatedAt.Equal(svc.UpdatedAt))
+}
+
+func TestRepositoryGetsService(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{
+		Name:          "payment-gateway",
+		Environment:   "production",
+		CMDBServiceID: "svc-001",
+		DisplayName:   "支付网关",
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get(ctx, svc.ID)
+	require.NoError(t, err)
+	require.Equal(t, "支付网关", got.DisplayName)
+	require.Equal(t, "svc-001", got.CMDBServiceID)
+}
+
+func TestRepositoryPersistsAllFields(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{
+		Name:          "api-gateway",
+		Environment:   "staging",
+		Cluster:       "staging-1",
+		Namespace:     "default",
+		BusinessID:    "biz-001",
+		ApplicationID: "app-001",
+		OwnerTeam:     "platform-team",
+		AlertRoute:    "pagerduty-team-a",
+		IdentityType:  "syslog_device",
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get(ctx, svc.ID)
+	require.NoError(t, err)
+	require.Equal(t, "api-gateway", got.Name)
+	require.Equal(t, "staging", got.Environment)
+	require.Equal(t, "staging-1", got.Cluster)
+	require.Equal(t, "default", got.Namespace)
+	require.Equal(t, "biz-001", got.BusinessID)
+	require.Equal(t, "app-001", got.ApplicationID)
+	require.Equal(t, "syslog_device", got.IdentityType)
+}

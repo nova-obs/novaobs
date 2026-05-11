@@ -1,0 +1,746 @@
+openapi: 3.0.3
+info:
+  title: 统一可观测性平台后端 API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      responses:
+        "200":
+          description: 服务可用
+  /overview:
+    get:
+      summary: 平台总览摘要
+      responses:
+        "200":
+          description: 返回服务、Pipeline、日志和告警摘要
+  /services:
+    get:
+      summary: 服务目录列表
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: 按服务名、展示名、CMDB ID、业务 ID、应用 ID、负责人或告警路由搜索
+        - name: environment
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, active, degraded]
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [manual, cmdb]
+      responses:
+        "200":
+          description: 返回服务目录
+    post:
+      summary: 创建服务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, environment]
+              properties:
+                name:
+                  type: string
+                environment:
+                  type: string
+                owner_team:
+                  type: string
+                owner:
+                  type: string
+                alert_route:
+                  type: string
+                source:
+                  type: string
+                  enum: [manual, cmdb]
+      responses:
+        "201":
+          description: 服务已创建
+        "409":
+          description: 相同服务身份或 CMDB 服务 ID 已存在
+  /services/{id}:
+    get:
+      summary: 服务详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回服务详情
+        "404":
+          description: 服务不存在
+    patch:
+      summary: 更新服务目录条目
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cmdb_service_id:
+                  type: string
+                business_id:
+                  type: string
+                application_id:
+                  type: string
+                name:
+                  type: string
+                display_name:
+                  type: string
+                description:
+                  type: string
+                environment:
+                  type: string
+                cluster:
+                  type: string
+                namespace:
+                  type: string
+                owner_team:
+                  type: string
+                owner:
+                  type: string
+                alert_route:
+                  type: string
+                slo_level:
+                  type: string
+                status:
+                  type: string
+                  enum: [pending, active, degraded]
+                sync_status:
+                  type: string
+                  enum: [local, synced, stale]
+      responses:
+        "200":
+          description: 返回更新后的服务详情
+        "404":
+          description: 服务不存在
+        "409":
+          description: 更新后的服务身份或 CMDB 服务 ID 已存在
+  /services/{id}/onboarding:
+    get:
+      summary: 获取服务接入工作台
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回服务、接入状态、身份、Collector 目标、生成配置和检查清单
+    post:
+      summary: 保存服务接入配置
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode, collector_group_id]
+              properties:
+                mode:
+                  type: string
+                  enum: [shared_gateway, dedicated_collector]
+                collector_group_id:
+                  type: string
+                identity_type:
+                  type: string
+                  enum: [k8s_workload, host_process, syslog_device]
+                  deprecated: true
+                  description: 已迁移到服务目录字段；表示服务运行身份类型，未传时后端使用服务级 identity_type。
+                k8s_namespace:
+                  type: string
+                k8s_workload:
+                  type: string
+      responses:
+        "200":
+          description: 返回保存后的服务接入工作台
+        "400":
+          description: 接入配置无效
+  /services/{id}/onboarding/check:
+    post:
+      summary: 执行服务接入检查
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回检查后的服务接入工作台
+        "400":
+          description: 尚未保存接入配置或请求无效
+  /collector-groups:
+    get:
+      summary: Collector Group 列表
+      parameters:
+        - name: environment
+          in: query
+          schema:
+            type: string
+        - name: cluster
+          in: query
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [shared_gateway, dedicated_collector]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, active, draining, disabled, deleted]
+        - name: receiver_profile
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回共享 Gateway 和独立 Collector 分组
+    post:
+      summary: 创建 Collector Group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, mode]
+              properties:
+                name:
+                  type: string
+                display_name:
+                  type: string
+                description:
+                  type: string
+                mode:
+                  type: string
+                  enum: [shared_gateway, dedicated_collector]
+                environment:
+                  type: string
+                cluster:
+                  type: string
+                namespace:
+                  type: string
+                owner_team:
+                  type: string
+                desired_replicas:
+                  type: integer
+                max_services:
+                  type: integer
+      responses:
+        "201":
+          description: Collector Group 已创建
+  /collector-groups/{id}:
+    get:
+      summary: Collector Group 详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回 Collector Group 详情、配置 hash 和发布状态
+        "404":
+          description: Collector Group 不存在
+    patch:
+      summary: 更新 Collector Group
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                description:
+                  type: string
+                status:
+                  type: string
+                  enum: [draft, active, draining, disabled, deleted]
+                desired_replicas:
+                  type: integer
+                max_services:
+                  type: integer
+                receiver_profile:
+                  type: string
+                exporter_profile:
+                  type: string
+      responses:
+        "200":
+          description: 返回更新后的 Collector Group
+        "404":
+          description: Collector Group 不存在
+    delete:
+      summary: 删除 Collector Group
+      description: >
+        软删除 Collector Group。若存在在线实例、服务接入引用、enabled/published Pipeline Binding
+        或未完成发布，默认返回 409；调用方应先迁移/解绑/停用依赖。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Collector Group 已删除
+        "404":
+          description: Collector Group 不存在
+        "409":
+          description: Collector Group 存在依赖，不能删除
+  /collector-groups/{id}/instances:
+    get:
+      summary: Collector Group 实例列表
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回 OpAMP Collector 实例状态
+  /collector-groups/{id}/config-versions:
+    get:
+      summary: Collector Group 配置版本历史
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回该 Collector Group 的配置版本历史
+  /collector-groups/{id}/config/latest.yaml:
+    get:
+      summary: 获取 Collector Group 最新 Collector YAML
+      description: 返回该 Collector Group 最新发布配置的原始 YAML，可直接作为 OTel Collector `--config=http://...` 使用。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回最新 Collector YAML
+          headers:
+            X-Collector-Config-Version:
+              schema:
+                type: string
+              description: 最新配置版本号
+            X-Collector-Config-Hash:
+              schema:
+                type: string
+              description: 最新配置 hash
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+        "404":
+          description: Collector Group 尚未发布配置
+  /collector-groups/{id}/config/sources:
+    get:
+      summary: 获取 Collector Group 配置来源
+      description: 按平台模板、Group Override、服务 Enrichment、业务 Patch 聚合配置来源，并返回 rendered Collector YAML、hash、warnings 和 errors。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回配置来源、rendered YAML 和 config hash
+        "404":
+          description: Collector Group 不存在
+  /collector-groups/{id}/config/override:
+    put:
+      summary: 保存 Collector Group 增量配置
+      description: 保存 Group 级 override YAML，不自动发布。最终配置由 sources 渲染得到。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                override_yaml:
+                  type: string
+      responses:
+        "200":
+          description: Group Override 已保存
+        "400":
+          description: YAML 无效
+  /collector-groups/{id}/config/validate:
+    post:
+      summary: 校验 Collector Group 配置
+      description: 聚合 sources 后渲染 Collector YAML，返回 rendered YAML、hash、source breakdown、warnings 和 errors。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回校验结果、rendered YAML 和 config hash
+        "400":
+          description: YAML 无效或配置为空
+  /collector-groups/{id}/config/publish:
+    post:
+      summary: 发布 Collector Group 配置
+      description: 聚合 sources 渲染最终 Collector YAML，创建配置版本，并通过 OpAMP Remote Config 下发给在线 Agent。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回新的配置版本，meta.active_delivery_count 表示主动下发数量
+        "400":
+          description: YAML 无效或配置为空
+        "404":
+          description: Collector Group 或平台模板不存在
+  /collector-groups/{id}/config/status:
+    get:
+      summary: 获取 Collector Group 配置应用状态
+      description: 返回期望 hash、最新配置版本和该 Group 下所有 Agent 的应用状态矩阵。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回 Agent 配置应用状态矩阵
+  /collector-platform-templates:
+    get:
+      summary: 平台 Collector 模板列表
+      description: 返回从 Agent effective config 导入或手工维护的平台父模板。平台不生成默认假 YAML。
+      responses:
+        "200":
+          description: 返回平台模板列表
+  /collector-platform-templates/import-from-agent:
+    post:
+      summary: 从 Agent Effective Config 导入平台模板
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                source_agent_uid:
+                  type: string
+                collector_group_id:
+                  type: string
+                base_yaml:
+                  type: string
+      responses:
+        "200":
+          description: 返回导入后的平台模板
+        "400":
+          description: 缺少 base_yaml 且 Agent 无 effective config
+  /collector-platform-templates/{id}:
+    get:
+      summary: 获取平台 Collector 模板详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回平台模板
+    put:
+      summary: 更新平台 Collector 模板
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回更新后的平台模板
+  /services/{id}/enrichment-patch:
+    get:
+      summary: 获取服务基础属性补齐 Patch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回 enrichment patch
+  /services/{id}/enrichment-patch/regenerate:
+    post:
+      summary: 重新生成服务基础属性补齐 Patch
+      responses:
+        "200":
+          description: 返回 enrichment patch
+  /services/{id}/parser-rule:
+    get:
+      summary: 获取服务业务解析规则
+      responses:
+        "200":
+          description: 返回 parser rule
+    put:
+      summary: 保存服务业务解析规则
+      description: >
+        支持 none、json、regex、ottl。json/regex 先从 parse_from 提取字段，再通过
+        attribute_mappings/resource_mappings 生成 stanza move operators；字段映射格式为
+        source -> target，数组和复杂处理建议使用 ottl。
+      responses:
+        "200":
+          description: 返回 parser rule
+  /services/{id}/parser-rule/preview:
+    post:
+      summary: 预览服务业务解析规则
+      description: >
+        regex 模式支持 Go regexp 命名分组。返回 parsed_fields、mapped_attributes、
+        mapped_resources、unmapped_fields、warnings 和 errors，便于用户在发布前验证字段提取和标准化映射。
+      responses:
+        "200":
+          description: 返回解析结果或错误列表
+  /services/{id}/parser-rule/generate-patch:
+    post:
+      summary: 根据服务业务解析规则生成 Patch
+      responses:
+        "200":
+          description: 返回 service pipeline patch
+  /opamp/agents:
+    get:
+      summary: OpAMP Agent 列表
+      description: 返回 DB 中 Collector Instance 与内存 OpAMP 连接状态合并后的视图，online 必须按 last_seen_at TTL 动态计算。
+      responses:
+        "200":
+          description: 返回已发现的 Collector Agent
+  /opamp/agents/{uid}:
+    get:
+      summary: OpAMP Agent 详情
+      description: >
+        返回单个 Agent 的运行状态、OpAMP attributes、effective configuration、latest remote configuration、
+        Collector Group、服务接入、配置版本和 Additional Configuration 聚合视图。
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回 Agent detail 聚合视图
+        "404":
+          description: OpAMP Agent 不存在
+  /opamp/instances/{uid}/group:
+    post:
+      summary: 将 Collector Instance 绑定到 Collector Group
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group_id]
+              properties:
+                group_id:
+                  type: string
+      responses:
+        "200":
+          description: 返回绑定后的 Collector Instance
+        "404":
+          description: Collector Group 或 Instance 不存在
+    delete:
+      summary: 解除 Collector Instance 与 Collector Group 的绑定
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 绑定已解除
+        "404":
+          description: Collector Instance 不存在
+  /opamp/instances/{uid}:
+    delete:
+      summary: 删除离线 Collector Instance 记录
+      description: 仅允许删除已离线或 stale 的实例记录；在线实例应先停止心跳并等待 TTL 过期。
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Collector Instance 记录已删除
+        "409":
+          description: Collector Instance 仍在线，不能删除
+  /logs:
+    get:
+      summary: 查询日志
+      parameters:
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: environment
+          in: query
+          schema:
+            type: string
+        - name: level
+          in: query
+          schema:
+            type: string
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: trace_id
+          in: query
+          schema:
+            type: string
+        - name: request_id
+          in: query
+          schema:
+            type: string
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: 返回过滤后的日志
+  /alert-rules:
+    get:
+      summary: 告警规则列表
+      responses:
+        "200":
+          description: 返回告警规则列表
+    post:
+      summary: 创建告警规则
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, rule_type]
+              properties:
+                name:
+                  type: string
+                rule_type:
+                  type: string
+                source:
+                  type: string
+                query:
+                  type: string
+      responses:
+        "201":
+          description: 告警规则已创建
+components:
+  schemas:
+    Envelope:
+      type: object
+      required: [success, data, error, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+        error:
+          nullable: true
+          $ref: "#/components/schemas/ErrorBody"
+        meta:
+          type: object
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
