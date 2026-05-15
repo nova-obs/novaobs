@@ -13,7 +13,6 @@ type Store interface {
 	ServiceEnrichmentPatches() ServiceEnrichmentPatchStore
 	ServiceParserRules() ServiceParserRuleStore
 	ServicePipelinePatches() ServicePipelinePatchStore
-	CollectorAdditionalConfigs() CollectorAdditionalConfigStore
 	IngestionIdentities() IngestionIdentityStore
 	Onboardings() OnboardingStore
 	AlertRules() AlertRuleStore
@@ -83,11 +82,6 @@ type ServicePipelinePatchStore interface {
 	Upsert(ctx context.Context, serviceID string, patch interface{}) error
 	FindByService(ctx context.Context, serviceID string, result interface{}) error
 	FindByCollectorGroup(ctx context.Context, groupID string, results interface{}) error
-}
-
-type CollectorAdditionalConfigStore interface {
-	Upsert(ctx context.Context, targetID string, config interface{}) error
-	FindByTarget(ctx context.Context, targetID string, result interface{}) error
 }
 
 // IngestionIdentityStore manages ingestion identities.

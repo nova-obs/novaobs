@@ -20,7 +20,6 @@ type Service struct {
 	enrichmentPatches database.ServiceEnrichmentPatchStore
 	parserRules       database.ServiceParserRuleStore
 	pipelinePatches   database.ServicePipelinePatchStore
-	additionalConfigs database.CollectorAdditionalConfigStore
 	collectorService  collectormanagement.Service
 	serviceRepo       servicecatalog.Repository
 }
@@ -31,7 +30,6 @@ func NewService(
 	enrichmentPatches database.ServiceEnrichmentPatchStore,
 	parserRules database.ServiceParserRuleStore,
 	pipelinePatches database.ServicePipelinePatchStore,
-	additionalConfigs database.CollectorAdditionalConfigStore,
 	collectorService collectormanagement.Service,
 	serviceRepo servicecatalog.Repository,
 ) Service {
@@ -41,65 +39,9 @@ func NewService(
 		enrichmentPatches: enrichmentPatches,
 		parserRules:       parserRules,
 		pipelinePatches:   pipelinePatches,
-		additionalConfigs: additionalConfigs,
 		collectorService:  collectorService,
 		serviceRepo:       serviceRepo,
 	}
-}
-
-func (s Service) UpsertAdditionalConfig(ctx context.Context, targetID string, patch string, groupID string) (CollectorAdditionalConfig, error) {
-	patch = strings.TrimSpace(patch)
-	if patch != "" {
-		if _, err := parseYAMLDocument(patch); err != nil {
-			return CollectorAdditionalConfig{}, apperr.InvalidRequest(fmt.Sprintf("additional configuration YAML 无效: %v", err))
-		}
-	}
-	current, _ := s.GetAdditionalConfig(ctx, targetID)
-	now := time.Now().UTC()
-	version := current.Version + 1
-	if version == 0 {
-		version = 1
-	}
-	cfg := CollectorAdditionalConfig{
-		ID:               firstNonEmpty(current.ID, primitive.NewObjectID().Hex()),
-		Scope:            "instance",
-		TargetID:         targetID,
-		CollectorGroupID: groupID,
-		ConfigMapKey:     "",
-		YAMLPatch:        patch,
-		ConfigHash:       HashYAML(patch),
-		Status:           "draft",
-		Version:          version,
-		CreatedAt:        current.CreatedAt,
-		UpdatedAt:        now,
-	}
-	if cfg.CreatedAt.IsZero() {
-		cfg.CreatedAt = now
-	}
-	if err := s.additionalConfigs.Upsert(ctx, targetID, cfg); err != nil {
-		return CollectorAdditionalConfig{}, err
-	}
-	return cfg, nil
-}
-
-func (s Service) GetAdditionalConfig(ctx context.Context, targetID string) (CollectorAdditionalConfig, error) {
-	var cfg CollectorAdditionalConfig
-	err := s.additionalConfigs.FindByTarget(ctx, targetID, &cfg)
-	return cfg, err
-}
-
-func (s Service) MarkAdditionalConfigPending(ctx context.Context, targetID string, remoteHash string) (CollectorAdditionalConfig, error) {
-	cfg, err := s.GetAdditionalConfig(ctx, targetID)
-	if err != nil {
-		return CollectorAdditionalConfig{}, err
-	}
-	cfg.LastRemoteConfigHash = remoteHash
-	cfg.Status = "pending"
-	cfg.UpdatedAt = time.Now().UTC()
-	if err := s.additionalConfigs.Upsert(ctx, targetID, cfg); err != nil {
-		return CollectorAdditionalConfig{}, err
-	}
-	return cfg, nil
 }
 
 type ImportTemplateRequest struct {
@@ -231,7 +173,7 @@ func (s Service) RegenerateEnrichmentPatch(ctx context.Context, serviceID string
 		collectorGroupID = existing.CollectorGroupID
 	}
 	if strings.TrimSpace(collectorGroupID) == "" {
-		return ServiceEnrichmentPatch{}, apperr.InvalidRequest("collector_group_id 不能为空，请先保存服务接入目标")
+		collectorGroupID = serviceID
 	}
 	patch := BuildEnrichmentPatch(serviceAttributes(service), collectorGroupID)
 	now := time.Now().UTC()
@@ -261,7 +203,7 @@ func (s Service) UpsertParserRule(ctx context.Context, serviceID string, rule Se
 		}
 	}
 	if strings.TrimSpace(rule.CollectorGroupID) == "" {
-		return ServiceParserRule{}, apperr.InvalidRequest("collector_group_id 不能为空，请先选择 Agent/Collector Group")
+		rule.CollectorGroupID = serviceID
 	}
 	rule.ServiceID = serviceID
 	rule.ParseMode = firstNonEmpty(rule.ParseMode, "none")
@@ -370,4 +312,96 @@ func serviceAttributes(service servicecatalog.Service) ServiceAttributes {
 		OwnerTeam:     service.OwnerTeam,
 		AlertRoute:    service.AlertRoute,
 	}
+}
+
+type ServicePipelineSources struct {
+	ServiceID       string                     `json:"service_id"`
+	Base            *CollectorPlatformTemplate `json:"base,omitempty"`
+	Enrichment      *ServiceEnrichmentPatch    `json:"enrichment,omitempty"`
+	Parser          *ServicePipelinePatch      `json:"parser,omitempty"`
+	RenderedYAML    string                     `json:"rendered_yaml"`
+	ConfigHash      string                     `json:"config_hash"`
+	Warnings        []string                   `json:"warnings"`
+	Errors          []string                   `json:"errors"`
+	SourceBreakdown []SourceBreakdown          `json:"source_breakdown"`
+}
+
+func serviceBaseTemplateID(serviceID string) string {
+	return "service-base:" + serviceID
+}
+
+func (s Service) UpsertServiceBaseConfig(ctx context.Context, serviceID string, baseYAML string) (CollectorPlatformTemplate, error) {
+	if _, err := s.serviceRepo.Get(ctx, serviceID); err != nil {
+		return CollectorPlatformTemplate{}, err
+	}
+	baseYAML = strings.TrimSpace(baseYAML)
+	if baseYAML != "" {
+		if _, err := parseYAMLDocument(baseYAML); err != nil {
+			return CollectorPlatformTemplate{}, apperr.InvalidRequest(fmt.Sprintf("base_yaml 无效: %v", err))
+		}
+	}
+	now := time.Now().UTC()
+	id := serviceBaseTemplateID(serviceID)
+	template := CollectorPlatformTemplate{}
+	if err := s.templates.FindByID(ctx, id, &template); err != nil {
+		template = CollectorPlatformTemplate{ID: id, Name: "service-processing-" + serviceID, Source: "service_processing_config", Status: "active", Version: 1, CreatedAt: now}
+	} else {
+		template.Version++
+	}
+	template.BaseYAML = baseYAML
+	template.ConfigHash = HashYAML(baseYAML)
+	template.UpdatedAt = now
+	if template.CreatedAt.IsZero() {
+		template.CreatedAt = now
+	}
+	if template.Version <= 0 {
+		template.Version = 1
+	}
+	if err := s.templates.Update(ctx, id, template); err != nil {
+		if err := s.templates.Insert(ctx, template); err != nil {
+			return CollectorPlatformTemplate{}, err
+		}
+	}
+	return template, nil
+}
+
+func (s Service) ServiceConfigSources(ctx context.Context, serviceID string) (ServicePipelineSources, error) {
+	if _, err := s.serviceRepo.Get(ctx, serviceID); err != nil {
+		return ServicePipelineSources{}, err
+	}
+	result := ServicePipelineSources{ServiceID: serviceID, Warnings: []string{}, Errors: []string{}, SourceBreakdown: []SourceBreakdown{}}
+	var base CollectorPlatformTemplate
+	if err := s.templates.FindByID(ctx, serviceBaseTemplateID(serviceID), &base); err == nil {
+		result.Base = &base
+	}
+	var enrichment ServiceEnrichmentPatch
+	if err := s.enrichmentPatches.FindByService(ctx, serviceID, &enrichment); err == nil {
+		result.Enrichment = &enrichment
+	}
+	var parser ServicePipelinePatch
+	if err := s.pipelinePatches.FindByService(ctx, serviceID, &parser); err == nil {
+		result.Parser = &parser
+	}
+	configSources := ConfigSources{PlatformTemplate: result.Base}
+	if result.Enrichment != nil {
+		configSources.ServiceEnrichmentPatches = []ServiceEnrichmentPatch{*result.Enrichment}
+	}
+	if result.Parser != nil {
+		configSources.ServicePipelinePatches = []ServicePipelinePatch{*result.Parser}
+	}
+	validation := ValidateSources(configSources)
+	result.RenderedYAML = validation.RenderedYAML
+	result.ConfigHash = validation.ConfigHash
+	result.Warnings = validation.Warnings
+	result.Errors = validation.Errors
+	result.SourceBreakdown = validation.SourceBreakdown
+	return result, nil
+}
+
+func (s Service) ValidateServicePipeline(ctx context.Context, serviceID string) (ValidationResult, error) {
+	sources, err := s.ServiceConfigSources(ctx, serviceID)
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	return ValidationResult{Valid: len(sources.Errors) == 0, RenderedYAML: sources.RenderedYAML, ConfigHash: sources.ConfigHash, SourceBreakdown: sources.SourceBreakdown, Warnings: sources.Warnings, Errors: sources.Errors}, nil
 }

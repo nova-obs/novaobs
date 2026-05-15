@@ -36,7 +36,6 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		store.ServiceEnrichmentPatches(),
 		store.ServiceParserRules(),
 		store.ServicePipelinePatches(),
-		store.CollectorAdditionalConfigs(),
 		collectorSvc,
 		svcRepo,
 	)

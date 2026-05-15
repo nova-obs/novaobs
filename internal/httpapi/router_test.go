@@ -63,7 +63,6 @@ func newTestRouter(t *testing.T) testEnv {
 		store.ServiceEnrichmentPatches(),
 		store.ServiceParserRules(),
 		store.ServicePipelinePatches(),
-		store.CollectorAdditionalConfigs(),
 		collectorSvc,
 		svcRepo,
 	)
@@ -227,39 +226,8 @@ func TestRouterReturnsOpAMPAgentDetailWithConfigSources(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"instance_uid":"collector-a"`)
-	require.Contains(t, recorder.Body.String(), `"expected_rendered_config"`)
 	require.Contains(t, recorder.Body.String(), `"config_sources"`)
 	require.Contains(t, recorder.Body.String(), `"name":"orders-api"`)
-}
-
-func TestRouterSavesAgentAdditionalConfiguration(t *testing.T) {
-	env := newTestRouter(t)
-	env.manager.RegisterInstanceGroup("collector-a", env.group.ID)
-	env.manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
-		InstanceUid:  []byte("collector-a"),
-		Capabilities: uint64(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig | protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig),
-		EffectiveConfig: &protobufs.EffectiveConfig{ConfigMap: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
-			"collector.yaml": {Body: []byte("receivers:\n  otlp:\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n")},
-		}}},
-	})
-	importBody := `{"name":"platform-prod","source_agent_uid":"collector-a","collector_group_id":"` + env.group.ID + `"}`
-	importRecorder := httptest.NewRecorder()
-	importRequest := httptest.NewRequest(http.MethodPost, "/api/v1/collector-platform-templates/import-from-agent", bytes.NewBufferString(importBody))
-	importRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(importRecorder, importRequest)
-	require.Equal(t, http.StatusCreated, importRecorder.Code)
-
-	body := `{"yaml_patch":"exporters:\n  otlp:\n    endpoint: otel-gateway:4317","send":true}`
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/opamp/agents/collector-a/additional-config", bytes.NewBufferString(body))
-	request.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(recorder, request)
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Contains(t, recorder.Body.String(), `"config_map_key":""`)
-	require.Contains(t, recorder.Body.String(), `"status":"pending"`)
-	require.Contains(t, recorder.Body.String(), "otel-gateway:4317")
-	require.NotEmpty(t, env.manager.PendingConfigHash("collector-a"))
 }
 
 func TestRouterRejectsInvalidParserPreview(t *testing.T) {
@@ -293,4 +261,109 @@ func TestRouterCreatesResources(t *testing.T) {
 		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body), item.path)
 		require.Equal(t, true, body["success"], item.path)
 	}
+}
+
+func TestRouterPublishesServicePipelineToBoundAgents(t *testing.T) {
+	env := newTestRouter(t)
+	env.manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
+		InstanceUid:  []byte("collector-a"),
+		Capabilities: uint64(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig | protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig),
+		Health:       &protobufs.ComponentHealth{Healthy: true, StartTimeUnixNano: uint64(time.Now().UnixNano())},
+		EffectiveConfig: &protobufs.EffectiveConfig{ConfigMap: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
+			"collector.yaml": {Body: []byte("receivers:\n  otlp:\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n")},
+		}}},
+	})
+
+	assignRecorder := httptest.NewRecorder()
+	assignRequest := httptest.NewRequest(http.MethodPost, "/api/v1/opamp/instances/collector-a/service", bytes.NewBufferString(`{"service_id":"`+env.service.ID+`"}`))
+	assignRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(assignRecorder, assignRequest)
+	require.Equal(t, http.StatusOK, assignRecorder.Code)
+	require.Contains(t, assignRecorder.Body.String(), `"service_id":"`+env.service.ID+`"`)
+
+	agentsRecorder := httptest.NewRecorder()
+	agentsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/agents", nil)
+	env.router.ServeHTTP(agentsRecorder, agentsRequest)
+	require.Equal(t, http.StatusOK, agentsRecorder.Code)
+	require.Contains(t, agentsRecorder.Body.String(), `"instance_uid":"collector-a"`)
+
+	baseBody := `{"base_yaml":""}`
+	baseRecorder := httptest.NewRecorder()
+	baseRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/base", bytes.NewBufferString(baseBody))
+	baseRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(baseRecorder, baseRequest)
+	require.Equal(t, http.StatusOK, baseRecorder.Code)
+
+	enrichmentRecorder := httptest.NewRecorder()
+	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/enrichment/regenerate", nil)
+	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
+	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
+	require.Contains(t, enrichmentRecorder.Body.String(), "transform/enrich")
+
+	parserRecorder := httptest.NewRecorder()
+	parserRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/parser-rule", bytes.NewBufferString(`{"parse_mode":"regex","regex_pattern":"order_id=(?P<order_id>[\\w-]+)","sample_log":"INFO order_id=o-1","enabled":true}`))
+	parserRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(parserRecorder, parserRequest)
+	require.Equal(t, http.StatusOK, parserRecorder.Code)
+
+	patchRecorder := httptest.NewRecorder()
+	patchRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/parser-rule/generate-patch", nil)
+	env.router.ServeHTTP(patchRecorder, patchRequest)
+	require.Equal(t, http.StatusOK, patchRecorder.Code)
+
+	sourcesRecorder := httptest.NewRecorder()
+	sourcesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/pipeline/sources", nil)
+	env.router.ServeHTTP(sourcesRecorder, sourcesRequest)
+	require.Equal(t, http.StatusOK, sourcesRecorder.Code)
+	require.Contains(t, sourcesRecorder.Body.String(), `"enrichment"`)
+	require.Contains(t, sourcesRecorder.Body.String(), `"parser"`)
+	require.Contains(t, sourcesRecorder.Body.String(), `"rendered_yaml"`)
+
+	publishRecorder := httptest.NewRecorder()
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/publish", nil)
+	env.router.ServeHTTP(publishRecorder, publishRequest)
+	require.Equal(t, http.StatusOK, publishRecorder.Code)
+	require.Contains(t, publishRecorder.Body.String(), `"service_id":"`+env.service.ID+`"`)
+	require.Contains(t, publishRecorder.Body.String(), `"active_delivery_count":1`)
+}
+
+func TestRouterReturnsServiceBoundAgentDetail(t *testing.T) {
+	env := newTestRouter(t)
+	env.manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
+		InstanceUid:  []byte("collector-service-a"),
+		Capabilities: uint64(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig | protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig),
+		AgentDescription: &protobufs.AgentDescription{
+			IdentifyingAttributes: []*protobufs.KeyValue{
+				{Key: "service.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "otelcol-contrib"}}},
+			},
+		},
+		EffectiveConfig: &protobufs.EffectiveConfig{ConfigMap: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
+			"collector.yaml": {Body: []byte("receivers:\n  otlp:\n")},
+		}}},
+	})
+
+	assignRecorder := httptest.NewRecorder()
+	assignRequest := httptest.NewRequest(http.MethodPost, "/api/v1/opamp/instances/collector-service-a/service", bytes.NewBufferString(`{"service_id":"`+env.service.ID+`"}`))
+	assignRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(assignRecorder, assignRequest)
+	require.Equal(t, http.StatusOK, assignRecorder.Code)
+
+	baseRecorder := httptest.NewRecorder()
+	baseRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/base", bytes.NewBufferString(`{"base_yaml":""}`))
+	baseRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(baseRecorder, baseRequest)
+	require.Equal(t, http.StatusOK, baseRecorder.Code)
+
+	enrichmentRecorder := httptest.NewRecorder()
+	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/enrichment/regenerate", nil)
+	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
+	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
+
+	detailRecorder := httptest.NewRecorder()
+	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/opamp/agents/collector-service-a", nil)
+	env.router.ServeHTTP(detailRecorder, detailRequest)
+	require.Equal(t, http.StatusOK, detailRecorder.Code)
+	require.Contains(t, detailRecorder.Body.String(), `"service_id":"`+env.service.ID+`"`)
+	require.Contains(t, detailRecorder.Body.String(), `"name":"orders-api"`)
+
 }

@@ -68,21 +68,6 @@ type ServicePipelinePatch struct {
 	UpdatedAt        time.Time `json:"updated_at" bson:"updated_at"`
 }
 
-type CollectorAdditionalConfig struct {
-	ID                   string    `json:"id" bson:"_id"`
-	Scope                string    `json:"scope" bson:"scope"`
-	TargetID             string    `json:"target_id" bson:"target_id"`
-	CollectorGroupID     string    `json:"collector_group_id" bson:"collector_group_id"`
-	ConfigMapKey         string    `json:"config_map_key" bson:"config_map_key"`
-	YAMLPatch            string    `json:"yaml_patch" bson:"yaml_patch"`
-	ConfigHash           string    `json:"config_hash" bson:"config_hash"`
-	LastRemoteConfigHash string    `json:"last_remote_config_hash" bson:"last_remote_config_hash"`
-	Status               string    `json:"status" bson:"status"`
-	Version              int       `json:"version" bson:"version"`
-	CreatedAt            time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
-}
-
 type SourceBreakdown struct {
 	Type     string   `json:"type"`
 	ID       string   `json:"id"`

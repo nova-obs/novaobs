@@ -69,9 +69,6 @@ func (s *Store) ServiceParserRules() database.ServiceParserRuleStore {
 func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 	return &sppStore{s}
 }
-func (s *Store) CollectorAdditionalConfigs() database.CollectorAdditionalConfigStore {
-	return &cacStore{s}
-}
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
@@ -386,7 +383,35 @@ func (st *cgoStore) FindByGroup(ctx context.Context, groupID string, result inte
 type sepStore struct{ s *Store }
 type sprStore struct{ s *Store }
 type sppStore struct{ s *Store }
-type cacStore struct{ s *Store }
+
+func upsertByService(ctx context.Context, store *Store, target map[string]interface{}, serviceID string, v interface{}) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	target[serviceID] = v
+	return nil
+}
+
+func findByService(ctx context.Context, store *Store, target map[string]interface{}, serviceID string, result interface{}) error {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	v, ok := target[serviceID]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func findByCollectorGroup(ctx context.Context, store *Store, target map[string]interface{}, groupID string, results interface{}) error {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range target {
+		if extractCollectorGroupID(value) == groupID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
 
 func (st *sepStore) Upsert(ctx context.Context, serviceID string, v interface{}) error {
 	return upsertByService(ctx, st.s, st.s.seps, serviceID, v)
@@ -416,51 +441,6 @@ func (st *sppStore) FindByService(ctx context.Context, serviceID string, result 
 }
 func (st *sppStore) FindByCollectorGroup(ctx context.Context, groupID string, results interface{}) error {
 	return findByCollectorGroup(ctx, st.s, st.s.spps, groupID, results)
-}
-
-func (st *cacStore) Upsert(ctx context.Context, targetID string, v interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	st.s.cacs[targetID] = v
-	return nil
-}
-func (st *cacStore) FindByTarget(ctx context.Context, targetID string, result interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	v, ok := st.s.cacs[targetID]
-	if !ok {
-		return errNotFound
-	}
-	return copyValue(v, result)
-}
-
-func upsertByService(ctx context.Context, store *Store, target map[string]interface{}, serviceID string, v interface{}) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	target[serviceID] = v
-	return nil
-}
-
-func findByService(ctx context.Context, store *Store, target map[string]interface{}, serviceID string, result interface{}) error {
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	v, ok := target[serviceID]
-	if !ok {
-		return errNotFound
-	}
-	return copyValue(v, result)
-}
-
-func findByCollectorGroup(ctx context.Context, store *Store, target map[string]interface{}, groupID string, results interface{}) error {
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for key, value := range target {
-		if extractCollectorGroupID(value) == groupID {
-			filtered[key] = value
-		}
-	}
-	return copyAll(filtered, results)
 }
 
 // ---------- Alert Rules ----------

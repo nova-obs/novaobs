@@ -44,6 +44,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.OpAMPManager != nil {
 		deps.OpAMPManager.SetStateSink(func(ctx context.Context, state opamp.AgentState) {
 			_, _ = deps.CollectorService.UpsertInstance(ctx, state.InstanceUID, state.CollectorGroupID, collectormanagement.InstanceStatus{
+				ServiceID:           state.ServiceID,
 				Online:              state.Online,
 				Healthy:             state.Healthy,
 				HealthSet:           state.HealthSet,
@@ -68,6 +69,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/services", createServiceHandler(deps.ServiceRepo))
 	api.GET("/services/:id", getServiceHandler(deps.ServiceRepo))
 	api.PATCH("/services/:id", updateServiceHandler(deps.ServiceRepo))
+	api.GET("/services/:id/agents", listServiceAgentsHandler(deps.ServiceRepo, deps.CollectorService))
+	api.PUT("/services/:id/pipeline/base", putServicePipelineBaseHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.POST("/services/:id/pipeline/enrichment/regenerate", regenerateServicePipelineEnrichmentHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.PUT("/services/:id/pipeline/parser-rule", putServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.POST("/services/:id/pipeline/parser-rule/preview", previewServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.POST("/services/:id/pipeline/parser-rule/generate-patch", generateServicePipelineParserPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.GET("/services/:id/pipeline/sources", getServicePipelineSourcesHandler(deps.ServiceRepo, deps.CollectorConfigService))
+	api.POST("/services/:id/pipeline/publish", publishServicePipelineHandler(deps.ServiceRepo, deps.CollectorConfigService, deps.CollectorService, deps.OpAMPManager))
 	api.GET("/services/:id/onboarding", getOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding", upsertOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding/check", checkOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
@@ -100,8 +109,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
-	api.PUT("/opamp/agents/:uid/additional-config", putOpAMPAgentAdditionalConfigHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
+	api.POST("/opamp/instances/:uid/service", assignOpAMPInstanceServiceHandler(deps.OpAMPManager, deps.ServiceRepo, deps.CollectorService))
+	api.DELETE("/opamp/instances/:uid/service", unassignOpAMPInstanceServiceHandler(deps.OpAMPManager, deps.CollectorService))
 	api.DELETE("/opamp/instances/:uid/group", unassignOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
 	api.DELETE("/opamp/instances/:uid", deleteOpAMPInstanceHandler(deps.CollectorService))
 

@@ -344,25 +344,6 @@ func (s *serviceScopedStore) FindByCollectorGroup(ctx context.Context, groupID s
 	return cursor.All(ctx, results)
 }
 
-type additionalConfigStore struct{ col *mongo.Collection }
-
-func (s *additionalConfigStore) Upsert(ctx context.Context, targetID string, value interface{}) error {
-	opts := options.Update().SetUpsert(true)
-	setDoc, insertID, err := scopedUpsertDocuments(value, targetID)
-	if err != nil {
-		return err
-	}
-	setDoc["target_id"] = targetID
-	_, err = s.col.UpdateOne(ctx, bson.M{"target_id": targetID}, bson.M{
-		"$set":         setDoc,
-		"$setOnInsert": bson.M{"_id": insertID},
-	}, opts)
-	return err
-}
-func (s *additionalConfigStore) FindByTarget(ctx context.Context, targetID string, result interface{}) error {
-	return s.col.FindOne(ctx, bson.M{"target_id": targetID}).Decode(result)
-}
-
 // ---------- AlertRuleStore ----------
 type arStore struct{ col *mongo.Collection }
 

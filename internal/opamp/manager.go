@@ -20,7 +20,8 @@ import (
 
 type AgentState struct {
 	InstanceUID         string    `json:"instance_uid"`
-	CollectorGroupID    string    `json:"collector_group_id"`
+	CollectorGroupID    string    `json:"collector_group_id,omitempty"`
+	ServiceID           string    `json:"service_id"`
 	Online              bool      `json:"online"`
 	Healthy             bool      `json:"healthy"`
 	HealthSet           bool      `json:"-"`
@@ -61,6 +62,7 @@ type Manager struct {
 	details        map[string]AgentRuntimeDetail
 	pending        map[string]collectorconfig.RemoteConfigDeployment
 	instanceGroups map[string]string
+	serviceAgents  map[string]string
 	connectionUIDs map[opampservertypes.Connection]string
 	uidConnections map[string]opampservertypes.Connection
 	groupPending   map[string]collectorconfig.RemoteConfigDeployment
@@ -74,6 +76,7 @@ func NewManager() *Manager {
 		details:        map[string]AgentRuntimeDetail{},
 		pending:        map[string]collectorconfig.RemoteConfigDeployment{},
 		instanceGroups: map[string]string{},
+		serviceAgents:  map[string]string{},
 		connectionUIDs: map[opampservertypes.Connection]string{},
 		uidConnections: map[string]opampservertypes.Connection{},
 		groupPending:   map[string]collectorconfig.RemoteConfigDeployment{},
@@ -144,6 +147,8 @@ func (m *Manager) RegisterInstanceGroup(instanceUID string, groupID string) {
 	state := m.agents[instanceUID]
 	state.InstanceUID = instanceUID
 	state.CollectorGroupID = groupID
+	delete(m.serviceAgents, instanceUID)
+	state.ServiceID = ""
 	m.agents[instanceUID] = state
 }
 
@@ -217,6 +222,7 @@ func (m *Manager) HandleConnectionMessage(ctx context.Context, conn opampservert
 	state := m.agents[uid]
 	state.InstanceUID = uid
 	state.CollectorGroupID = groupID
+	state.ServiceID = m.serviceAgents[uid]
 	state.Online = true
 	state.Capabilities = message.Capabilities
 	state.RemoteConfigCapable = agentAcceptsRemoteConfig(message.Capabilities)
@@ -582,4 +588,57 @@ func instanceUIDToText(value []byte) string {
 		}
 	}
 	return string(value)
+}
+
+func (m *Manager) RegisterInstanceService(instanceUID string, serviceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.serviceAgents[instanceUID] = serviceID
+	delete(m.instanceGroups, instanceUID)
+	state := m.agents[instanceUID]
+	state.InstanceUID = instanceUID
+	state.ServiceID = serviceID
+	state.CollectorGroupID = ""
+	m.agents[instanceUID] = state
+}
+
+func (m *Manager) UnregisterInstanceService(instanceUID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.serviceAgents, instanceUID)
+	state := m.agents[instanceUID]
+	state.InstanceUID = instanceUID
+	state.ServiceID = ""
+	m.agents[instanceUID] = state
+}
+
+func (m *Manager) SendServiceDeployment(ctx context.Context, serviceID string, deployment collectorconfig.RemoteConfigDeployment) (int, error) {
+	type target struct {
+		uid  string
+		conn opampservertypes.Connection
+	}
+	var targets []target
+	m.mu.Lock()
+	for uid, state := range m.agents {
+		if state.ServiceID != serviceID || !state.Online || !state.RemoteConfigCapable {
+			continue
+		}
+		conn := m.uidConnections[uid]
+		if conn == nil {
+			continue
+		}
+		targets = append(targets, target{uid: uid, conn: conn})
+	}
+	m.mu.Unlock()
+
+	for _, item := range targets {
+		m.sendMu.Lock()
+		err := item.conn.Send(ctx, remoteConfigMessage(item.uid, deployment))
+		m.sendMu.Unlock()
+		if err != nil {
+			return len(targets), err
+		}
+		m.recordLastRemoteConfig(item.uid, deployment)
+	}
+	return len(targets), nil
 }

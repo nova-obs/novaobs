@@ -38,7 +38,8 @@ type CollectorGroup struct {
 type CollectorInstance struct {
 	ID                  string    `json:"id" bson:"_id"`
 	InstanceUID         string    `json:"instance_uid" bson:"instance_uid"`
-	CollectorGroupID    string    `json:"collector_group_id" bson:"collector_group_id"`
+	CollectorGroupID    string    `json:"collector_group_id,omitempty" bson:"collector_group_id"`
+	ServiceID           string    `json:"service_id" bson:"service_id"`
 	Hostname            string    `json:"hostname" bson:"hostname"`
 	PodName             string    `json:"pod_name" bson:"pod_name"`
 	NodeName            string    `json:"node_name" bson:"node_name"`
@@ -73,6 +74,7 @@ type CollectorConfigVersion struct {
 }
 
 type InstanceStatus struct {
+	ServiceID           string
 	Online              bool
 	Healthy             bool
 	HealthSet           bool

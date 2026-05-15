@@ -178,6 +178,9 @@ func (s Service) UpsertInstance(ctx context.Context, instanceUID string, groupID
 	}
 	instance.InstanceUID = instanceUID
 	instance.CollectorGroupID = groupID
+	if strings.TrimSpace(status.ServiceID) != "" {
+		instance.ServiceID = strings.TrimSpace(status.ServiceID)
+	}
 	instance.Online = status.Online
 	if status.HealthSet || existingErr != nil {
 		instance.Healthy = status.Healthy
@@ -631,4 +634,51 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s Service) ListInstancesByService(ctx context.Context, serviceID string) ([]CollectorInstance, error) {
+	instances, err := s.ListInstances(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CollectorInstance, 0, len(instances))
+	for _, instance := range instances {
+		if instance.ServiceID == serviceID {
+			out = append(out, instance)
+		}
+	}
+	return out, nil
+}
+
+func (s Service) AssignInstanceService(ctx context.Context, instanceUID string, serviceID string) (CollectorInstance, error) {
+	if strings.TrimSpace(instanceUID) == "" {
+		return CollectorInstance{}, apperr.InvalidRequest("instance_uid 不能为空")
+	}
+	if strings.TrimSpace(serviceID) == "" {
+		return CollectorInstance{}, apperr.InvalidRequest("service_id 不能为空")
+	}
+	var instance CollectorInstance
+	if err := s.instanceStore.FindByUID(ctx, instanceUID, &instance); err != nil {
+		return CollectorInstance{}, err
+	}
+	instance.ServiceID = strings.TrimSpace(serviceID)
+	instance.CollectorGroupID = ""
+	instance.UpdatedAt = time.Now().UTC()
+	if err := s.instanceStore.Update(ctx, instanceUID, instance); err != nil {
+		return CollectorInstance{}, err
+	}
+	return s.applyRuntimeStatus(instance), nil
+}
+
+func (s Service) UnassignInstanceService(ctx context.Context, instanceUID string) (CollectorInstance, error) {
+	var instance CollectorInstance
+	if err := s.instanceStore.FindByUID(ctx, instanceUID, &instance); err != nil {
+		return CollectorInstance{}, err
+	}
+	instance.ServiceID = ""
+	instance.UpdatedAt = time.Now().UTC()
+	if err := s.instanceStore.Update(ctx, instanceUID, instance); err != nil {
+		return CollectorInstance{}, err
+	}
+	return s.applyRuntimeStatus(instance), nil
 }

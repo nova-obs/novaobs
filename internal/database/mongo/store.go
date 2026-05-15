@@ -25,7 +25,6 @@ type Store struct {
 	sepCol *mongo.Collection
 	sprCol *mongo.Collection
 	sppCol *mongo.Collection
-	cacCol *mongo.Collection
 	iiCol  *mongo.Collection
 	onbCol *mongo.Collection
 	arCol  *mongo.Collection
@@ -54,7 +53,6 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		sepCol: db.Collection("service_enrichment_patches"),
 		sprCol: db.Collection("service_parser_rules"),
 		sppCol: db.Collection("service_pipeline_patches"),
-		cacCol: db.Collection("collector_additional_configs"),
 		iiCol:  db.Collection("ingestion_identities"),
 		onbCol: db.Collection("service_onboardings"),
 		arCol:  db.Collection("alert_rules"),
@@ -87,9 +85,6 @@ func (s *Store) ServiceParserRules() database.ServiceParserRuleStore {
 }
 func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 	return &serviceScopedStore{s.sppCol}
-}
-func (s *Store) CollectorAdditionalConfigs() database.CollectorAdditionalConfigStore {
-	return &additionalConfigStore{s.cacCol}
 }
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s.iiCol} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s.onbCol} }
