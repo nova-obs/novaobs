@@ -17,6 +17,7 @@ type Store struct {
 	client *mongo.Client
 	db     *mongo.Database
 	svcCol *mongo.Collection
+	stgCol *mongo.Collection
 	cgCol  *mongo.Collection
 	ciCol  *mongo.Collection
 	ccvCol *mongo.Collection
@@ -45,6 +46,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		client: client,
 		db:     db,
 		svcCol: db.Collection("services"),
+		stgCol: db.Collection("service_targets"),
 		cgCol:  db.Collection("collector_groups"),
 		ciCol:  db.Collection("collector_instances"),
 		ccvCol: db.Collection("collector_config_versions"),
@@ -66,6 +68,7 @@ func (s *Store) Close(ctx context.Context) error {
 // ---------- sub-store accessors ----------
 
 func (s *Store) Services() database.ServiceStore                     { return &svcStore{s.svcCol} }
+func (s *Store) ServiceTargets() database.ServiceTargetStore         { return &targetStore{s.stgCol} }
 func (s *Store) CollectorGroups() database.CollectorGroupStore       { return &cgStore{s.cgCol} }
 func (s *Store) CollectorInstances() database.CollectorInstanceStore { return &ciStore{s.ciCol} }
 func (s *Store) CollectorConfigVersions() database.CollectorConfigVersionStore {

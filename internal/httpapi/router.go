@@ -29,6 +29,7 @@ var bg = context.Background()
 type Dependencies struct {
 	Store                  database.Store
 	ServiceRepo            servicecatalog.Repository
+	ServiceTargetRepo      servicecatalog.TargetRepository
 	CollectorConfigService collectorconfig.Service
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
@@ -69,6 +70,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/services", createServiceHandler(deps.ServiceRepo))
 	api.GET("/services/:id", getServiceHandler(deps.ServiceRepo))
 	api.PATCH("/services/:id", updateServiceHandler(deps.ServiceRepo))
+	api.GET("/services/:id/observability-graph", getServiceObservabilityGraphHandler(deps))
+	api.GET("/services/:id/targets", listServiceTargetsHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
+	api.POST("/services/:id/targets", createServiceTargetHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.GET("/services/:id/agents", listServiceAgentsHandler(deps.ServiceRepo, deps.CollectorService))
 	api.PUT("/services/:id/pipeline/base", putServicePipelineBaseHandler(deps.ServiceRepo, deps.CollectorConfigService))
 	api.POST("/services/:id/pipeline/enrichment/regenerate", regenerateServicePipelineEnrichmentHandler(deps.ServiceRepo, deps.CollectorConfigService))

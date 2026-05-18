@@ -140,3 +140,40 @@ func TestRepositoryPersistsAllFields(t *testing.T) {
 	require.Equal(t, "app-001", got.ApplicationID)
 	require.Equal(t, "syslog_device", got.IdentityType)
 }
+
+func TestTargetRepositoryCreatesHostProcessWithoutNamespace(t *testing.T) {
+	store := memstore.NewStore()
+	serviceRepo := NewRepository(store.Services())
+	targetRepo := NewTargetRepository(store.ServiceTargets())
+	ctx := context.Background()
+
+	svc, err := serviceRepo.Create(ctx, Service{Name: "legacy-billing", Environment: "prod"})
+	require.NoError(t, err)
+
+	target, err := targetRepo.Create(ctx, ObservedTarget{
+		ServiceID:   svc.ID,
+		TargetType:  "host_process",
+		Environment: "prod",
+		DisplayName: "legacy-billing on vm-01",
+		IdentityAttributes: map[string]string{
+			"host.name":               "vm-01",
+			"process.executable.name": "legacy-billing",
+			"net.host.port":           "8080",
+		},
+		MatchRules: map[string]string{
+			"service.name": "legacy-billing",
+			"host.name":    "vm-01",
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, target.ID)
+	require.Equal(t, "host_process", target.TargetType)
+	require.Equal(t, "vm-01", target.IdentityAttributes["host.name"])
+	require.Equal(t, "manual", target.Source)
+	require.Equal(t, "local", target.SyncStatus)
+
+	targets, err := targetRepo.ListByService(ctx, svc.ID)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	require.Equal(t, target.ID, targets[0].ID)
+}

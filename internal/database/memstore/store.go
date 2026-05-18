@@ -12,6 +12,7 @@ import (
 type Store struct {
 	mu   sync.RWMutex
 	svcs map[string]interface{}
+	stgs map[string]interface{}
 	cgs  map[string]interface{}
 	cis  map[string]interface{}
 	ccvs map[string]interface{}
@@ -29,6 +30,7 @@ type Store struct {
 func NewStore() *Store {
 	return &Store{
 		svcs: map[string]interface{}{},
+		stgs: map[string]interface{}{},
 		cgs:  map[string]interface{}{},
 		cis:  map[string]interface{}{},
 		ccvs: map[string]interface{}{},
@@ -49,6 +51,7 @@ func (s *Store) Close(ctx context.Context) error { return nil }
 // ---------- Sub-store accessors ----------
 
 func (s *Store) Services() database.ServiceStore                     { return &svcStore{s} }
+func (s *Store) ServiceTargets() database.ServiceTargetStore         { return &targetStore{s} }
 func (s *Store) CollectorGroups() database.CollectorGroupStore       { return &cgStore{s} }
 func (s *Store) CollectorInstances() database.CollectorInstanceStore { return &ciStore{s} }
 func (s *Store) CollectorConfigVersions() database.CollectorConfigVersionStore {
@@ -112,6 +115,53 @@ func (st *svcStore) Count(ctx context.Context) (int64, error) {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
 	return int64(len(st.s.svcs)), nil
+}
+
+// ---------- Service Targets ----------
+
+type targetStore struct{ s *Store }
+
+func (st *targetStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	st.s.stgs[id] = v
+	return nil
+}
+
+func (st *targetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.stgs {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *targetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.stgs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *targetStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.stgs[id]; !ok {
+		return errNotFound
+	}
+	st.s.stgs[id] = v
+	return nil
 }
 
 // ---------- Collector Groups ----------

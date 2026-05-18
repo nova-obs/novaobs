@@ -5,6 +5,7 @@ import "context"
 // Store is the top-level database abstraction.
 type Store interface {
 	Services() ServiceStore
+	ServiceTargets() ServiceTargetStore
 	CollectorGroups() CollectorGroupStore
 	CollectorInstances() CollectorInstanceStore
 	CollectorConfigVersions() CollectorConfigVersionStore
@@ -26,6 +27,14 @@ type ServiceStore interface {
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, svc interface{}) error
 	Count(ctx context.Context) (int64, error)
+}
+
+// ServiceTargetStore manages observed runtime targets linked to services.
+type ServiceTargetStore interface {
+	Insert(ctx context.Context, target interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, target interface{}) error
 }
 
 // CollectorGroupStore manages collector groups.

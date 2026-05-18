@@ -70,6 +70,7 @@ func newTestRouter(t *testing.T) testEnv {
 	router := NewRouter(Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
+		ServiceTargetRepo:      servicecatalog.NewTargetRepository(store.ServiceTargets()),
 		CollectorConfigService: configSvc,
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
@@ -87,6 +88,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/health",
 		"/api/v1/services",
 		"/api/v1/services/" + env.service.ID,
+		"/api/v1/services/" + env.service.ID + "/observability-graph",
 		"/api/v1/services/" + env.service.ID + "/onboarding",
 		"/api/v1/logs?service=orders-api&level=error",
 		"/api/v1/opamp/agents",
@@ -99,6 +101,78 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		require.Equal(t, http.StatusOK, recorder.Code, path)
 		require.Contains(t, recorder.Body.String(), `"success":true`, path)
 	}
+}
+
+func TestRouterReturnsServiceObservabilityGraph(t *testing.T) {
+	env := newTestRouter(t)
+	ctx := context.Background()
+	targetRepo := servicecatalog.NewTargetRepository(env.store.ServiceTargets())
+	_, err := targetRepo.Create(ctx, servicecatalog.ObservedTarget{
+		ServiceID:   env.service.ID,
+		TargetType:  "host_process",
+		Environment: "production",
+		DisplayName: "orders-api on vm-01",
+		IdentityAttributes: map[string]string{
+			"host.name":               "vm-01",
+			"process.executable.name": "orders-api",
+		},
+	})
+	require.NoError(t, err)
+
+	collectorSvc := collectormanagement.NewService(env.store.CollectorGroups(), env.store.CollectorInstances())
+	_, err = collectorSvc.UpsertInstance(ctx, "collector-orders", env.group.ID, collectormanagement.InstanceStatus{
+		ServiceID:           env.service.ID,
+		Online:              true,
+		Healthy:             true,
+		RemoteConfigCapable: true,
+		LastSeenAt:          time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	alertSvc := alerting.NewService(env.store.AlertRules())
+	_, err = alertSvc.Create(ctx, alerting.Rule{
+		Name:       "orders-error-count",
+		Query:      `service.name="orders-api" level=error`,
+		OwnerTeam:  "orders-team",
+		AlertRoute: "orders-alerts",
+		Status:     "active",
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/observability-graph", nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"targets"`)
+	require.Contains(t, recorder.Body.String(), `"target_type":"host_process"`)
+	require.Contains(t, recorder.Body.String(), `"agents"`)
+	require.Contains(t, recorder.Body.String(), `"instance_uid":"collector-orders"`)
+	require.Contains(t, recorder.Body.String(), `"pipelines"`)
+	require.Contains(t, recorder.Body.String(), `"alert_rules"`)
+	require.Contains(t, recorder.Body.String(), `"orders-error-count"`)
+	require.NotContains(t, recorder.Body.String(), `"dashboard_panels"`)
+}
+
+func TestRouterCreatesServiceTarget(t *testing.T) {
+	env := newTestRouter(t)
+
+	body := `{"target_type":"physical_or_network_device","environment":"production","display_name":"edge-fw-01","identity_attributes":{"device.name":"edge-fw-01","net.host.ip":"10.0.0.8"},"match_rules":{"syslog.hostname":"edge-fw-01"}}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/targets", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"target_type":"physical_or_network_device"`)
+	require.Contains(t, recorder.Body.String(), `"device.name":"edge-fw-01"`)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/targets", nil)
+	env.router.ServeHTTP(listRecorder, listRequest)
+
+	require.Equal(t, http.StatusOK, listRecorder.Code)
+	require.Contains(t, listRecorder.Body.String(), `"display_name":"edge-fw-01"`)
 }
 
 func TestRouterImportsTemplateConfiguresServiceAndPublishesGroup(t *testing.T) {

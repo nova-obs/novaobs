@@ -26,6 +26,21 @@ type Service struct {
 	UpdatedAt     time.Time  `json:"updated_at" bson:"updated_at"`
 }
 
+type ObservedTarget struct {
+	ID                 string            `json:"id" bson:"_id"`
+	ServiceID          string            `json:"service_id" bson:"service_id"`
+	TargetType         string            `json:"target_type" bson:"target_type"`
+	Environment        string            `json:"environment" bson:"environment"`
+	DisplayName        string            `json:"display_name" bson:"display_name"`
+	IdentityAttributes map[string]string `json:"identity_attributes" bson:"identity_attributes"`
+	MatchRules         map[string]string `json:"match_rules" bson:"match_rules"`
+	Source             string            `json:"source" bson:"source"`
+	SyncStatus         string            `json:"sync_status" bson:"sync_status"`
+	LastSyncedAt       *time.Time        `json:"last_synced_at,omitempty" bson:"last_synced_at,omitempty"`
+	CreatedAt          time.Time         `json:"created_at" bson:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at" bson:"updated_at"`
+}
+
 type ListFilter struct {
 	Query       string
 	Environment string

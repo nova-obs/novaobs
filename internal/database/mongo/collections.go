@@ -37,6 +37,30 @@ func (s *svcStore) Count(ctx context.Context) (int64, error) {
 	return s.col.CountDocuments(ctx, bson.M{})
 }
 
+// ---------- ServiceTargetStore ----------
+type targetStore struct{ col *mongo.Collection }
+
+func (s *targetStore) Insert(ctx context.Context, target interface{}) error {
+	_, err := s.col.InsertOne(ctx, target)
+	return err
+}
+func (s *targetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+func (s *targetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+func (s *targetStore) Update(ctx context.Context, id string, target interface{}) error {
+	oid, _ := objectID(id)
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, target)
+	return err
+}
+
 // ---------- CollectorGroupStore ----------
 type cgStore struct{ col *mongo.Collection }
 

@@ -28,6 +28,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	}
 
 	svcRepo := servicecatalog.NewRepository(store.Services())
+	targetRepo := servicecatalog.NewTargetRepository(store.ServiceTargets())
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances(), collectormanagement.WithConfigVersionStore(store.CollectorConfigVersions()))
 	onboardingSvc := onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc)
 	collectorConfigSvc := collectorconfig.NewService(
@@ -46,6 +47,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	return httpapi.NewRouter(httpapi.Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
+		ServiceTargetRepo:      targetRepo,
 		CollectorConfigService: collectorConfigSvc,
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboardingSvc,
