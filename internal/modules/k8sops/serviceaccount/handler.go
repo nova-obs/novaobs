@@ -5,13 +5,12 @@ import (
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
-
-const SubjectContextKey = "novaobs.subject"
 
 func ListHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
@@ -77,14 +76,7 @@ func writeServiceAccountError(ctx *gin.Context, err error) {
 }
 
 func subjectFromRequest(ctx *gin.Context) rbac.Subject {
-	value, ok := ctx.Get(SubjectContextKey)
-	if !ok {
-		return rbac.Subject{ID: "anonymous", Type: "anonymous", DisplayName: "anonymous"}
-	}
-	subject, ok := value.(rbac.Subject)
-	if !ok || subject.ID == "" || subject.Type == "" {
-		return rbac.Subject{ID: "anonymous", Type: "anonymous", DisplayName: "anonymous"}
-	}
+	subject, _ := authctx.SubjectFrom(ctx.Request.Context())
 	return subject
 }
 

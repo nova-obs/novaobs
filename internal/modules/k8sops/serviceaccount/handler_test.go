@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"novaobs/internal/platform/audit"
+	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/rbac"
 
 	"github.com/gin-gonic/gin"
@@ -159,7 +160,7 @@ func newServiceAccountTestRouter(t *testing.T, rbacRepo testRBACRepo, subject *r
 	router := gin.New()
 	if subject != nil {
 		router.Use(func(ctx *gin.Context) {
-			ctx.Set(SubjectContextKey, *subject)
+			ctx.Request = ctx.Request.WithContext(authctx.WithSubject(ctx.Request.Context(), *subject))
 		})
 	}
 	api := router.Group("/api/v1")
