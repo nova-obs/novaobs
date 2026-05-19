@@ -3,6 +3,7 @@ package k8sops
 import (
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/dashboard"
+	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/namespace"
 	"novaobs/internal/modules/k8sops/resource"
 )
@@ -12,6 +13,7 @@ type Module struct {
 	Cluster   cluster.Service
 	Namespace namespace.Service
 	Resource  resource.Service
+	Deploy    deployment.Service
 }
 
 func NewModule() Module {
@@ -42,6 +44,11 @@ func NewModule() Module {
 				Status:   "healthy",
 				Labels:   map[string]string{"app": "payment-gateway"},
 			},
+		})),
+		Deploy: deployment.NewService(deployment.NewMemoryReader([]deployment.HistoryRecord{
+			{ID: "deploy-orders-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "rollout.pause", Status: "warning", Revision: "rev-1842", Actor: "platform-admin"},
+		}, []deployment.AuditEvent{
+			{ID: "audit-orders-1", ClusterID: "prod", Namespace: "orders", ResourceKind: "Deployment", ResourceName: "orders-api", Action: "rollout.pause", Actor: "platform-admin", Status: "warning", TraceID: "trace-k8s-1842"},
 		})),
 	}
 }
