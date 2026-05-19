@@ -48,12 +48,27 @@ func scopeAllowed(mode string, policy Scope, req Scope) bool {
 		return policy.ClusterID != "" && policy.ClusterID == req.ClusterID &&
 			policy.Namespace != "" && policy.Namespace == req.Namespace
 	case "environment":
-		return policy.Environment != "" && policy.Environment == req.Environment
+		return policy.Environment != "" && policy.Environment == req.Environment &&
+			optionalScopeMatches(policy, req)
 	case "service":
-		return policy.ServiceID != "" && policy.ServiceID == req.ServiceID
+		return policy.ServiceID != "" && policy.ServiceID == req.ServiceID &&
+			optionalScopeMatches(policy, req)
 	default:
 		return scopeContains(policy, req)
 	}
+}
+
+func optionalScopeMatches(policy Scope, req Scope) bool {
+	if policy.ClusterID != "" && policy.ClusterID != req.ClusterID {
+		return false
+	}
+	if policy.Namespace != "" && policy.Namespace != req.Namespace {
+		return false
+	}
+	if policy.Environment != "" && policy.Environment != req.Environment {
+		return false
+	}
+	return true
 }
 
 func scopeContains(policy Scope, req Scope) bool {

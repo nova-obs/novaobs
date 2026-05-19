@@ -88,3 +88,31 @@ func TestServiceAllowsGlobalAdmin(t *testing.T) {
 
 	require.True(t, decision.Allowed)
 }
+
+func TestServiceScopeDoesNotExpandAcrossClusters(t *testing.T) {
+	repo := NewMemoryRepository()
+	require.NoError(t, repo.SaveRole(Role{
+		ID:   "role-prod-service",
+		Name: "Prod Service Operator",
+		Permissions: []Permission{
+			{Resource: "k8s.deployment", Action: "deploy", ScopeMode: "service"},
+		},
+	}))
+	require.NoError(t, repo.SaveBinding(Binding{
+		ID:          "binding-service",
+		SubjectID:   "user-1",
+		SubjectType: "user",
+		RoleID:      "role-prod-service",
+		Scope:       Scope{ClusterID: "prod", Namespace: "orders", ServiceID: "orders-api"},
+	}))
+	svc := NewService(repo)
+
+	decision := svc.Authorize(Subject{ID: "user-1", Type: "user"}, Request{
+		Resource: "k8s.deployment",
+		Action:   "deploy",
+		Scope:    Scope{ClusterID: "staging", Namespace: "orders", ServiceID: "orders-api"},
+	})
+
+	require.False(t, decision.Allowed)
+	require.Equal(t, "permission_denied", decision.Reason)
+}
