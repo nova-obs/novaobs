@@ -385,3 +385,30 @@ func (s *arStore) FindAll(ctx context.Context, results interface{}) error {
 func (s *arStore) Count(ctx context.Context) (int64, error) {
 	return s.col.CountDocuments(ctx, bson.M{})
 }
+
+// ---------- RBAC Stores ----------
+type rbacRoleStore struct{ col *mongo.Collection }
+
+func (s *rbacRoleStore) Upsert(ctx context.Context, id string, role interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, role, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *rbacRoleStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+type rbacBindingStore struct{ col *mongo.Collection }
+
+func (s *rbacBindingStore) Upsert(ctx context.Context, id string, binding interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, binding, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"subject_id": subjectID, "subject_type": subjectType}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}

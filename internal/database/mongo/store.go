@@ -29,6 +29,8 @@ type Store struct {
 	iiCol  *mongo.Collection
 	onbCol *mongo.Collection
 	arCol  *mongo.Collection
+	rrCol  *mongo.Collection
+	rbCol  *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -58,6 +60,8 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		iiCol:  db.Collection("ingestion_identities"),
 		onbCol: db.Collection("service_onboardings"),
 		arCol:  db.Collection("alert_rules"),
+		rrCol:  db.Collection("rbac_roles"),
+		rbCol:  db.Collection("rbac_bindings"),
 	}, nil
 }
 
@@ -92,6 +96,8 @@ func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s.iiCol} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s.onbCol} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s.arCol} }
+func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
+func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
 
 // ---------- helpers ----------
 

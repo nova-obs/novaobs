@@ -17,6 +17,8 @@ type Store interface {
 	IngestionIdentities() IngestionIdentityStore
 	Onboardings() OnboardingStore
 	AlertRules() AlertRuleStore
+	RBACRoles() RBACRoleStore
+	RBACBindings() RBACBindingStore
 	Close(ctx context.Context) error
 }
 
@@ -112,4 +114,14 @@ type AlertRuleStore interface {
 	Insert(ctx context.Context, rule interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
 	Count(ctx context.Context) (int64, error)
+}
+
+type RBACRoleStore interface {
+	Upsert(ctx context.Context, id string, role interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+}
+
+type RBACBindingStore interface {
+	Upsert(ctx context.Context, id string, binding interface{}) error
+	FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error
 }

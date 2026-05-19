@@ -25,6 +25,8 @@ type Store struct {
 	iis  map[string]interface{}
 	onbs map[string]interface{}
 	ars  map[string]interface{}
+	rrs  map[string]interface{}
+	rbs  map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -43,6 +45,8 @@ func NewStore() *Store {
 		iis:  map[string]interface{}{},
 		onbs: map[string]interface{}{},
 		ars:  map[string]interface{}{},
+		rrs:  map[string]interface{}{},
+		rbs:  map[string]interface{}{},
 	}
 }
 
@@ -75,6 +79,8 @@ func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
+func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
+func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
 
 // ---------- Services ----------
 
@@ -516,4 +522,46 @@ func (st *arStore) Count(ctx context.Context) (int64, error) {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
 	return int64(len(st.s.ars)), nil
+}
+
+// ---------- RBAC Stores ----------
+
+type rbacRoleStore struct{ s *Store }
+
+func (st *rbacRoleStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.rrs[id] = v
+	return nil
+}
+
+func (st *rbacRoleStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.rrs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+type rbacBindingStore struct{ s *Store }
+
+func (st *rbacBindingStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.rbs[id] = v
+	return nil
+}
+
+func (st *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.rbs {
+		if extractStringField(value, "SubjectID") == subjectID && extractStringField(value, "SubjectType") == subjectType {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
 }
