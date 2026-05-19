@@ -9,6 +9,7 @@
 | cluster.create | cluster.CreateCluster | POST /api/cluster | ClusterManagement.jsx | POST /api/v1/k8s/clusters | k8sops/cluster | k8s.cluster:create:global | 是 | 是 | 未开始 |
 | cluster.update | cluster.UpdateCluster | PUT /api/cluster | ClusterManagement.jsx | PATCH /api/v1/k8s/clusters/:cluster_id | k8sops/cluster | k8s.cluster:update:cluster | 是 | 是 | 未开始 |
 | cluster.delete | cluster.DeleteCluster | DELETE /api/cluster | ClusterManagement.jsx | DELETE /api/v1/k8s/clusters/:cluster_id | k8sops/cluster | k8s.cluster:delete:cluster | 是 | 是 | 未开始 |
+| cluster.connectivity-check | cluster.InspectKubeconfig | POST /api/cluster/test | ClusterManagement.jsx | POST /api/v1/k8s/clusters/connectivity-check | k8sops/cluster | k8s.cluster:preview:global | 是 | 是 | 未开始 |
 | namespace.list | namespace.ListNamespaces | GET /api/namespace | NamespaceManagement.jsx | GET /api/v1/k8s/namespaces | k8sops/namespace | k8s.namespace:read:cluster | 否 | 是 | 未开始 |
 | namespace.create | namespace.CreateNamespace | POST /api/namespace | NamespaceManagement.jsx | POST /api/v1/k8s/namespaces | k8sops/namespace | k8s.namespace:create:cluster | 是 | 是 | 未开始 |
 | namespace.delete | namespace.DeleteNamespace | DELETE /api/namespace | NamespaceManagement.jsx | DELETE /api/v1/k8s/namespaces/:name | k8sops/namespace | k8s.namespace:delete:namespace | 是 | 是 | 未开始 |
@@ -26,8 +27,8 @@
 | rbac.rolebinding.list | rolebinding.ListRoleBindings | GET /api/role_binding | RoleBindingManagement.jsx | GET /api/v1/k8s/rbac/role-bindings | k8sops/rbac | k8s.rbac:read:namespace | 否 | 是 | 未开始 |
 | rbac.rolebinding.create | rolebinding.CreateRoleBinding | POST /api/role_binding | RoleBindingManagement.jsx | POST /api/v1/k8s/rbac/role-bindings | k8sops/rbac | k8s.rbac:create:namespace | 是 | 是 | 未开始 |
 | rbac.rolebinding.delete | rolebinding.DeleteRoleBinding | DELETE /api/role_binding | RoleBindingManagement.jsx | DELETE /api/v1/k8s/rbac/role-bindings | k8sops/rbac | k8s.rbac:delete:namespace | 是 | 是 | 未开始 |
-| rbac.rolebinding.bind | rolebinding.BindRoleBinding | POST /api/role_binding/bind | RoleBindingManagement.jsx | POST /api/v1/k8s/rbac/role-bindings/bind | k8sops/rbac | k8s.rbac:update:namespace | 是 | 是 | 未开始 |
-| rbac.rolebinding.unbind | rolebinding.UnbindRoleBinding | POST /api/role_binding/unbind | RoleBindingManagement.jsx | POST /api/v1/k8s/rbac/role-bindings/unbind | k8sops/rbac | k8s.rbac:update:namespace | 是 | 是 | 未开始 |
+| rbac.rolebinding.bind | rolebinding.BindServiceAccount | POST /api/role_binding/bind | RoleBindingManagement.jsx | POST /api/v1/k8s/rbac/role-bindings/bind | k8sops/rbac | k8s.rbac:update:namespace | 是 | 是 | 未开始 |
+| rbac.rolebinding.unbind | rolebinding.UnbindServiceAccount | POST /api/role_binding/unbind | RoleBindingManagement.jsx | POST /api/v1/k8s/rbac/role-bindings/unbind | k8sops/rbac | k8s.rbac:update:namespace | 是 | 是 | 未开始 |
 | rbac.clusterrole.list | clusterrole.ListClusterRoles | GET /api/cluster_role | ClusterRoleManagement.jsx | GET /api/v1/k8s/rbac/cluster-roles | k8sops/rbac | k8s.rbac:read:cluster | 否 | 是 | 未开始 |
 | rbac.clusterrole.create | clusterrole.CreateClusterRole | POST /api/cluster_role | ClusterRoleManagement.jsx | POST /api/v1/k8s/rbac/cluster-roles | k8sops/rbac | k8s.rbac:create:cluster | 是 | 是 | 未开始 |
 | rbac.clusterrole.update | clusterrole.UpdateClusterRole | PUT /api/cluster_role | ClusterRoleManagement.jsx | PUT /api/v1/k8s/rbac/cluster-roles | k8sops/rbac | k8s.rbac:update:cluster | 是 | 是 | 未开始 |
@@ -35,8 +36,8 @@
 | rbac.clusterrolebinding.list | clusterrolebinding.ListClusterRoleBindings | GET /api/cluster_role_binding | ClusterRoleBindingManagement.jsx | GET /api/v1/k8s/rbac/cluster-role-bindings | k8sops/rbac | k8s.rbac:read:cluster | 否 | 是 | 未开始 |
 | rbac.clusterrolebinding.create | clusterrolebinding.CreateClusterRoleBinding | POST /api/cluster_role_binding | ClusterRoleBindingManagement.jsx | POST /api/v1/k8s/rbac/cluster-role-bindings | k8sops/rbac | k8s.rbac:create:cluster | 是 | 是 | 未开始 |
 | rbac.clusterrolebinding.delete | clusterrolebinding.DeleteClusterRoleBinding | DELETE /api/cluster_role_binding | ClusterRoleBindingManagement.jsx | DELETE /api/v1/k8s/rbac/cluster-role-bindings | k8sops/rbac | k8s.rbac:delete:cluster | 是 | 是 | 未开始 |
-| rbac.clusterrolebinding.bind | clusterrolebinding.BindClusterRoleBinding | POST /api/cluster_role_binding/bind | ClusterRoleBindingManagement.jsx | POST /api/v1/k8s/rbac/cluster-role-bindings/bind | k8sops/rbac | k8s.rbac:update:cluster | 是 | 是 | 未开始 |
-| rbac.clusterrolebinding.unbind | clusterrolebinding.UnbindClusterRoleBinding | POST /api/cluster_role_binding/unbind | ClusterRoleBindingManagement.jsx | POST /api/v1/k8s/rbac/cluster-role-bindings/unbind | k8sops/rbac | k8s.rbac:update:cluster | 是 | 是 | 未开始 |
+| rbac.clusterrolebinding.bind | clusterrolebinding.BindServiceAccount | POST /api/cluster_role_binding/bind | ClusterRoleBindingManagement.jsx | POST /api/v1/k8s/rbac/cluster-role-bindings/bind | k8sops/rbac | k8s.rbac:update:cluster | 是 | 是 | 未开始 |
+| rbac.clusterrolebinding.unbind | clusterrolebinding.UnbindServiceAccount | POST /api/cluster_role_binding/unbind | ClusterRoleBindingManagement.jsx | POST /api/v1/k8s/rbac/cluster-role-bindings/unbind | k8sops/rbac | k8s.rbac:update:cluster | 是 | 是 | 未开始 |
 | kubeconfig.generate | kubecfg.GenerateKubeConfig | POST /api/kubeconfig | KubeconfigGenerator.jsx | POST /api/v1/k8s/kubeconfigs | k8sops/kubeconfig | k8s.kubeconfig:export:namespace | 是 | 是 | 未开始 |
 | template.list | template.ListTemplates | GET /api/template/list | TemplateManagement.jsx | GET /api/v1/k8s/templates | k8sops/template | k8s.template:read:global | 否 | 是 | 未开始 |
 | template.create | template.CreateTemplate | POST /api/template | TemplateManagement.jsx | POST /api/v1/k8s/templates | k8sops/template | k8s.template:create:global | 是 | 是 | 未开始 |

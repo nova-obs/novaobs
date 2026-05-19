@@ -162,6 +162,32 @@
       "audit": true
     },
     {
+      "id": "cluster.connectivity-check",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "InspectKubeconfig",
+      "source_route": "POST /api/cluster/test",
+      "request_sample": {
+        "kube_config": "[redacted]"
+      },
+      "response_sample": {
+        "success": true,
+        "server_version": "v1.29.0",
+        "cluster_name": "prod"
+      },
+      "error_sample": {
+        "code": "invalid_kubeconfig",
+        "message": "cluster connectivity check failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/clusters/connectivity-check",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "preview",
+        "scope": "global"
+      },
+      "audit": true,
+      "secret": true
+    },
+    {
       "id": "namespace.list",
       "source_service": "startorch/internal/application/namespace/service.go",
       "source_method": "ListNamespaces",
@@ -661,7 +687,7 @@
     {
       "id": "rbac.rolebinding.bind",
       "source_service": "startorch/internal/application/rolebinding/service.go",
-      "source_method": "UpdateRoleBinding",
+      "source_method": "BindServiceAccount",
       "source_route": "POST /api/role_binding/bind",
       "request_sample": {
         "cluster_name": "prod",
@@ -689,7 +715,7 @@
     {
       "id": "rbac.rolebinding.unbind",
       "source_service": "startorch/internal/application/rolebinding/service.go",
-      "source_method": "UpdateRoleBinding",
+      "source_method": "UnbindServiceAccount",
       "source_route": "POST /api/role_binding/unbind",
       "request_sample": {
         "cluster_name": "prod",
@@ -896,7 +922,7 @@
     {
       "id": "rbac.clusterrolebinding.bind",
       "source_service": "startorch/internal/application/clusterrolebinding/service.go",
-      "source_method": "UpdateClusterRoleBinding",
+      "source_method": "BindServiceAccount",
       "source_route": "POST /api/cluster_role_binding/bind",
       "request_sample": {
         "cluster_name": "prod",
@@ -926,7 +952,7 @@
     {
       "id": "rbac.clusterrolebinding.unbind",
       "source_service": "startorch/internal/application/clusterrolebinding/service.go",
-      "source_method": "UpdateClusterRoleBinding",
+      "source_method": "UnbindServiceAccount",
       "source_route": "POST /api/cluster_role_binding/unbind",
       "request_sample": {
         "cluster_name": "prod",
