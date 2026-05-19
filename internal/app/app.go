@@ -11,6 +11,7 @@ import (
 	"novaobs/internal/database/mongo"
 	"novaobs/internal/httpapi"
 	"novaobs/internal/logquery"
+	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -42,6 +43,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	)
 	alertSvc := alerting.NewService(store.AlertRules())
 	logQuerySvc := logquery.NewService()
+	k8sOpsModule := k8sops.NewModule()
 	opampMgr := opamp.NewManager()
 
 	return httpapi.NewRouter(httpapi.Dependencies{
@@ -53,6 +55,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		OnboardingService:      onboardingSvc,
 		LogQueryService:        logQuerySvc,
 		AlertService:           alertSvc,
+		K8sOpsModule:           k8sOpsModule,
 		OpAMPManager:           opampMgr,
 		CollectorTemplate:      cfg.CollectorTemplate,
 	}), nil

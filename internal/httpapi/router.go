@@ -13,6 +13,8 @@ import (
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database"
 	"novaobs/internal/logquery"
+	"novaobs/internal/modules/k8sops"
+	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -35,6 +37,7 @@ type Dependencies struct {
 	OnboardingService      onboarding.Service
 	LogQueryService        logquery.Service
 	AlertService           alerting.Service
+	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
 	CollectorTemplate      string
 }
@@ -111,6 +114,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/logs", searchLogsHandler(deps.LogQueryService))
 	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
+	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
@@ -128,6 +132,19 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	return router
+}
+
+func getK8sOpsDashboardHandler(service k8sopsdashboard.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		snapshot, err := service.Get(ctx.Request.Context(), k8sopsdashboard.Query{
+			ClusterID: strings.TrimSpace(ctx.Query("cluster_id")),
+		})
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, snapshot, gin.H{"source": "k8sops"})
+	}
 }
 
 func healthHandler(ctx *gin.Context) {

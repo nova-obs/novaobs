@@ -14,6 +14,7 @@ import (
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database/memstore"
 	"novaobs/internal/logquery"
+	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -76,6 +77,7 @@ func newTestRouter(t *testing.T) testEnv {
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogQueryService:        logquery.NewService(),
 		AlertService:           alerting.NewService(store.AlertRules()),
+		K8sOpsModule:           k8sops.NewModule(),
 		OpAMPManager:           manager,
 	})
 	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
@@ -91,6 +93,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/services/" + env.service.ID + "/observability-graph",
 		"/api/v1/services/" + env.service.ID + "/onboarding",
 		"/api/v1/logs?service=orders-api&level=error",
+		"/api/v1/k8sops/dashboard?cluster_id=prod",
 		"/api/v1/opamp/agents",
 		"/api/v1/alert-rules",
 	} {
