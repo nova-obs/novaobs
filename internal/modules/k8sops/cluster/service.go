@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"sort"
 	"strings"
 )
 
@@ -39,5 +40,43 @@ func (r MemoryRepository) List(_ context.Context, filter ListFilter) ([]Cluster,
 			out = append(out, item)
 		}
 	}
-	return out, nil
+	sortClusters(out, filter.Sort, filter.Order)
+	return paginate(out, filter.Page, filter.PageSize), nil
+}
+
+func sortClusters(items []Cluster, field string, order string) {
+	desc := strings.EqualFold(order, "desc")
+	sort.SliceStable(items, func(left, right int) bool {
+		var less bool
+		switch field {
+		case "region":
+			less = items[left].Region < items[right].Region
+		case "status":
+			less = items[left].Status < items[right].Status
+		default:
+			less = items[left].Name < items[right].Name
+		}
+		if desc {
+			return !less
+		}
+		return less
+	})
+}
+
+func paginate(items []Cluster, page int, pageSize int) []Cluster {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		return items
+	}
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		return []Cluster{}
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
