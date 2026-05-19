@@ -59,3 +59,21 @@ func TestServiceRequiresAPIVersionForDetailIdentity(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestServiceRequiresUIDForDetailAndYAMLIdentity(t *testing.T) {
+	reader := NewMemoryReader([]ResourceSummary{
+		{
+			Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"},
+			Status:   "warning",
+		},
+	})
+	svc := NewService(reader)
+	withoutUID := DetailQuery{Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api"}}
+	wrongUID := DetailQuery{Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-replaced"}}
+
+	_, err := svc.GetDetail(context.Background(), withoutUID)
+	require.Error(t, err)
+
+	_, err = svc.GetYAML(context.Background(), wrongUID)
+	require.Error(t, err)
+}

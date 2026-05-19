@@ -94,7 +94,7 @@ func (r MemoryReader) find(identity Identity) (ResourceSummary, bool) {
 			item.Identity.APIVersion == identity.APIVersion &&
 			item.Identity.Kind == identity.Kind &&
 			item.Identity.Name == identity.Name &&
-			(identity.UID == "" || item.Identity.UID == identity.UID) {
+			item.Identity.UID == identity.UID {
 			return item, true
 		}
 	}
