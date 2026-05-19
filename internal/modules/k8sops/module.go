@@ -6,6 +6,7 @@ import (
 	"novaobs/internal/modules/k8sops/dashboard"
 	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/namespace"
+	k8srbac "novaobs/internal/modules/k8sops/rbac"
 	"novaobs/internal/modules/k8sops/resource"
 	"novaobs/internal/modules/k8sops/serviceaccount"
 )
@@ -18,6 +19,7 @@ type Module struct {
 	Deploy         deployment.Service
 	Cert           certificate.Service
 	ServiceAccount serviceaccount.Service
+	RBAC           k8srbac.Service
 }
 
 func NewModule() Module {
@@ -63,6 +65,11 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		})),
 		ServiceAccount: serviceaccount.NewService(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
 			{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
+		}), authorizer, auditor),
+		RBAC: k8srbac.NewService(k8srbac.NewMemoryRepository([]k8srbac.RoleResource{
+			{ID: "role-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-role-orders-reader", Rules: []k8srbac.Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}}}, Source: "startorch"},
+		}, []k8srbac.BindingResource{
+			{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
 		}), authorizer, auditor),
 	}
 }

@@ -19,6 +19,7 @@ import (
 	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
 	k8sopsnamespace "novaobs/internal/modules/k8sops/namespace"
+	k8sopsrbac "novaobs/internal/modules/k8sops/rbac"
 	k8sopsresource "novaobs/internal/modules/k8sops/resource"
 	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
 	"novaobs/internal/onboarding"
@@ -133,6 +134,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/k8s/service-accounts", k8sopsserviceaccount.ListHandler(deps.K8sOpsModule.ServiceAccount))
 	api.POST("/k8s/service-accounts", k8sopsserviceaccount.CreateHandler(deps.K8sOpsModule.ServiceAccount))
 	api.DELETE("/k8s/service-accounts", k8sopsserviceaccount.DeleteHandler(deps.K8sOpsModule.ServiceAccount))
+	api.GET("/k8s/rbac/roles", k8sopsrbac.ListRolesHandler(deps.K8sOpsModule.RBAC))
+	api.POST("/k8s/rbac/roles", k8sopsrbac.CreateRoleHandler(deps.K8sOpsModule.RBAC))
+	api.PUT("/k8s/rbac/roles", k8sopsrbac.UpdateRoleHandler(deps.K8sOpsModule.RBAC))
+	api.DELETE("/k8s/rbac/roles", k8sopsrbac.DeleteRoleHandler(deps.K8sOpsModule.RBAC))
+	api.GET("/k8s/rbac/bindings", k8sopsrbac.ListBindingsHandler(deps.K8sOpsModule.RBAC))
+	api.POST("/k8s/rbac/bindings", k8sopsrbac.CreateBindingHandler(deps.K8sOpsModule.RBAC))
+	api.DELETE("/k8s/rbac/bindings", k8sopsrbac.DeleteBindingHandler(deps.K8sOpsModule.RBAC))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
