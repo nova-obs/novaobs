@@ -82,6 +82,73 @@ func TestCreateBindingRecordsAudit(t *testing.T) {
 	require.Equal(t, "binding.create", events[0].Action)
 }
 
+func TestCreateRoleDoesNotOverwriteExistingRole(t *testing.T) {
+	repo := NewMemoryRepository([]RoleResource{
+		{ID: "role-prod-orders-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-existing", Rules: []Rule{{Resources: []string{"secrets"}, Verbs: []string{"get"}}}},
+	}, nil)
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	_, _, err := service.CreateRole(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RoleRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "Role",
+		Name:      "orders-reader",
+		Rules:     []Rule{{Resources: []string{"pods"}, Verbs: []string{"list"}}},
+	})
+
+	require.ErrorIs(t, err, ErrAlreadyExists)
+	items, listErr := repo.ListRoles(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Len(t, items, 1)
+	require.Equal(t, []string{"secrets"}, items[0].Rules[0].Resources)
+	require.Equal(t, "uid-existing", items[0].UID)
+}
+
+func TestUpdateRoleRestoresExistingRoleWhenAuditFails(t *testing.T) {
+	repo := NewMemoryRepository([]RoleResource{
+		{ID: "role-prod-orders-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-existing", Rules: []Rule{{Resources: []string{"secrets"}, Verbs: []string{"get"}}}},
+	}, nil)
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), failingAuditor{})
+
+	_, _, err := service.UpdateRole(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RoleRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "Role",
+		Name:      "orders-reader",
+		UID:       "uid-existing",
+		Rules:     []Rule{{Resources: []string{"pods"}, Verbs: []string{"list"}}},
+	})
+
+	require.Error(t, err)
+	items, listErr := repo.ListRoles(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Len(t, items, 1)
+	require.Equal(t, []string{"secrets"}, items[0].Rules[0].Resources)
+	require.Equal(t, "uid-existing", items[0].UID)
+}
+
+func TestCreateBindingDoesNotOverwriteExistingBinding(t *testing.T) {
+	repo := NewMemoryRepository(nil, []BindingResource{
+		{ID: "binding-prod-orders-orders-reader-binding", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding", RoleRef: RoleRef{Kind: "Role", Name: "existing-role"}},
+	})
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	_, _, err := service.CreateBinding(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, BindingRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "RoleBinding",
+		Name:      "orders-reader-binding",
+		RoleRef:   RoleRef{Kind: "Role", Name: "new-role"},
+		Subjects:  []Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}},
+	})
+
+	require.ErrorIs(t, err, ErrAlreadyExists)
+	items, listErr := repo.ListBindings(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Len(t, items, 1)
+	require.Equal(t, "existing-role", items[0].RoleRef.Name)
+}
+
 func newRBACTestRouter(t *testing.T, rbacRepo testPlatformRBACRepo, subjects ...platformrbac.Subject) (*gin.Engine, *audit.MemoryStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -102,6 +169,12 @@ func newRBACTestRouter(t *testing.T, rbacRepo testPlatformRBACRepo, subjects ...
 	api.POST("/k8s/rbac/bindings", CreateBindingHandler(service))
 	api.DELETE("/k8s/rbac/bindings", DeleteBindingHandler(service))
 	return router, auditStore
+}
+
+type failingAuditor struct{}
+
+func (failingAuditor) Record(ctx context.Context, event audit.Event) (audit.Event, error) {
+	return audit.Event{}, errors.New("audit failed")
 }
 
 func rbacWriterRepo() testPlatformRBACRepo {

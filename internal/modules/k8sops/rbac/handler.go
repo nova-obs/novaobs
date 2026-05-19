@@ -114,6 +114,8 @@ func writeRBACError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", "K8s RBAC 请求参数不完整")
 	case errors.Is(err, ErrNotFound):
 		response.Error(ctx, http.StatusNotFound, "not_found", "K8s RBAC 资源不存在")
+	case errors.Is(err, ErrAlreadyExists):
+		response.Error(ctx, http.StatusConflict, "already_exists", "K8s RBAC 资源已存在")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_operation_failed", "K8s RBAC 操作失败")
 	}

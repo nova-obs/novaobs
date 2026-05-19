@@ -19,6 +19,7 @@ var (
 	ErrPermissionDenied = errors.New("permission_denied")
 	ErrInvalidRequest   = errors.New("invalid_k8s_rbac_request")
 	ErrNotFound         = errors.New("k8s_rbac_resource_not_found")
+	ErrAlreadyExists    = errors.New("k8s_rbac_resource_already_exists")
 )
 
 type Repository interface {
@@ -63,11 +64,11 @@ func (s Service) ListBindings(ctx context.Context, filter ListFilter) ([]Binding
 }
 
 func (s Service) CreateRole(ctx context.Context, subject platformrbac.Subject, req RoleRequest) (RoleResource, audit.Event, error) {
-	return s.upsertRole(ctx, subject, req, "create")
+	return s.upsertRole(ctx, subject, req, "create", false)
 }
 
 func (s Service) UpdateRole(ctx context.Context, subject platformrbac.Subject, req RoleRequest) (RoleResource, audit.Event, error) {
-	return s.upsertRole(ctx, subject, req, "update")
+	return s.upsertRole(ctx, subject, req, "update", true)
 }
 
 func (s Service) DeleteRole(ctx context.Context, subject platformrbac.Subject, req DeleteRequest) (audit.Event, error) {
@@ -104,8 +105,14 @@ func (s Service) CreateBinding(ctx context.Context, subject platformrbac.Subject
 	if !s.allowed(subject, "create", req.ClusterID, req.Namespace) {
 		return BindingResource{}, audit.Event{}, ErrPermissionDenied
 	}
+	id := resourceID("binding", req.ClusterID, req.Namespace, req.Name)
+	if _, ok, err := s.findBinding(ctx, id, req.ClusterID, req.Namespace); err != nil {
+		return BindingResource{}, audit.Event{}, err
+	} else if ok {
+		return BindingResource{}, audit.Event{}, ErrAlreadyExists
+	}
 	item := BindingResource{
-		ID:        resourceID("binding", req.ClusterID, req.Namespace, req.Name),
+		ID:        id,
 		ClusterID: req.ClusterID,
 		Namespace: req.Namespace,
 		Kind:      req.Kind,
@@ -160,7 +167,7 @@ func (s Service) DeleteBinding(ctx context.Context, subject platformrbac.Subject
 	return event, nil
 }
 
-func (s Service) upsertRole(ctx context.Context, subject platformrbac.Subject, req RoleRequest, action string) (RoleResource, audit.Event, error) {
+func (s Service) upsertRole(ctx context.Context, subject platformrbac.Subject, req RoleRequest, action string, requireExisting bool) (RoleResource, audit.Event, error) {
 	req = normalizeRoleRequest(req)
 	if req.ClusterID == "" || req.Kind == "" || req.Name == "" || len(req.Rules) == 0 {
 		return RoleResource{}, audit.Event{}, ErrInvalidRequest
@@ -168,8 +175,19 @@ func (s Service) upsertRole(ctx context.Context, subject platformrbac.Subject, r
 	if !s.allowed(subject, action, req.ClusterID, req.Namespace) {
 		return RoleResource{}, audit.Event{}, ErrPermissionDenied
 	}
+	id := resourceID("role", req.ClusterID, req.Namespace, req.Name)
+	previous, existed, err := s.findRole(ctx, id, req.ClusterID, req.Namespace)
+	if err != nil {
+		return RoleResource{}, audit.Event{}, err
+	}
+	if requireExisting && !existed {
+		return RoleResource{}, audit.Event{}, ErrNotFound
+	}
+	if !requireExisting && existed {
+		return RoleResource{}, audit.Event{}, ErrAlreadyExists
+	}
 	item := RoleResource{
-		ID:        resourceID("role", req.ClusterID, req.Namespace, req.Name),
+		ID:        id,
 		ClusterID: req.ClusterID,
 		Namespace: req.Namespace,
 		Kind:      req.Kind,
@@ -191,10 +209,40 @@ func (s Service) upsertRole(ctx context.Context, subject platformrbac.Subject, r
 		"rules":      len(saved.Rules),
 	})
 	if err != nil {
-		_, _ = s.repo.DeleteRole(ctx, DeleteRequest{ClusterID: saved.ClusterID, Namespace: saved.Namespace, Kind: saved.Kind, Name: saved.Name, UID: saved.UID})
+		if existed {
+			_, _ = s.repo.UpsertRole(ctx, previous)
+		} else {
+			_, _ = s.repo.DeleteRole(ctx, DeleteRequest{ClusterID: saved.ClusterID, Namespace: saved.Namespace, Kind: saved.Kind, Name: saved.Name, UID: saved.UID})
+		}
 		return RoleResource{}, audit.Event{}, err
 	}
 	return saved, event, nil
+}
+
+func (s Service) findRole(ctx context.Context, id string, clusterID string, namespace string) (RoleResource, bool, error) {
+	items, err := s.repo.ListRoles(ctx, ListFilter{ClusterID: clusterID, Namespace: namespace})
+	if err != nil {
+		return RoleResource{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return RoleResource{}, false, nil
+}
+
+func (s Service) findBinding(ctx context.Context, id string, clusterID string, namespace string) (BindingResource, bool, error) {
+	items, err := s.repo.ListBindings(ctx, ListFilter{ClusterID: clusterID, Namespace: namespace})
+	if err != nil {
+		return BindingResource{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return BindingResource{}, false, nil
 }
 
 func (s Service) allowed(subject platformrbac.Subject, action string, clusterID string, namespace string) bool {
