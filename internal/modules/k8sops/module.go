@@ -7,18 +7,24 @@ import (
 	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/namespace"
 	"novaobs/internal/modules/k8sops/resource"
+	"novaobs/internal/modules/k8sops/serviceaccount"
 )
 
 type Module struct {
-	Dashboard dashboard.Service
-	Cluster   cluster.Service
-	Namespace namespace.Service
-	Resource  resource.Service
-	Deploy    deployment.Service
-	Cert      certificate.Service
+	Dashboard      dashboard.Service
+	Cluster        cluster.Service
+	Namespace      namespace.Service
+	Resource       resource.Service
+	Deploy         deployment.Service
+	Cert           certificate.Service
+	ServiceAccount serviceaccount.Service
 }
 
 func NewModule() Module {
+	return NewModuleWithSecurity(nil, nil)
+}
+
+func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor serviceaccount.Auditor) Module {
 	return Module{
 		Dashboard: dashboard.NewService(dashboard.NewStaticReader()),
 		Cluster: cluster.NewService(cluster.NewMemoryRepository([]cluster.Cluster{
@@ -55,5 +61,8 @@ func NewModule() Module {
 		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
 			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
 		})),
+		ServiceAccount: serviceaccount.NewService(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
+			{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
+		}), authorizer, auditor),
 	}
 }

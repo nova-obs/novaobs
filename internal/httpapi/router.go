@@ -20,6 +20,7 @@ import (
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
 	k8sopsnamespace "novaobs/internal/modules/k8sops/namespace"
 	k8sopsresource "novaobs/internal/modules/k8sops/resource"
+	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -129,6 +130,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/k8s/deployment-history", k8sopsdeployment.HistoryHandler(deps.K8sOpsModule.Deploy))
 	api.GET("/k8s/audit-events", k8sopsdeployment.AuditEventsHandler(deps.K8sOpsModule.Deploy))
 	api.GET("/k8s/certificates", k8sopscertificate.ListHandler(deps.K8sOpsModule.Cert))
+	api.GET("/k8s/service-accounts", k8sopsserviceaccount.ListHandler(deps.K8sOpsModule.ServiceAccount))
+	api.POST("/k8s/service-accounts", k8sopsserviceaccount.CreateHandler(deps.K8sOpsModule.ServiceAccount))
+	api.DELETE("/k8s/service-accounts", k8sopsserviceaccount.DeleteHandler(deps.K8sOpsModule.ServiceAccount))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))

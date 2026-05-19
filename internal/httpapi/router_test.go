@@ -103,6 +103,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8s/deployment-history?cluster_id=prod",
 		"/api/v1/k8s/audit-events?cluster_id=prod",
 		"/api/v1/k8s/certificates?cluster_id=prod",
+		"/api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders",
 		"/api/v1/opamp/agents",
 		"/api/v1/alert-rules",
 	} {
