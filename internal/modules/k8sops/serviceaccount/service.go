@@ -24,7 +24,7 @@ var (
 type Repository interface {
 	List(ctx context.Context, filter ListFilter) ([]ServiceAccount, error)
 	Create(ctx context.Context, item ServiceAccount) (ServiceAccount, error)
-	Delete(ctx context.Context, req DeleteRequest) error
+	Delete(ctx context.Context, req DeleteRequest) (ServiceAccount, error)
 }
 
 type Authorizer interface {
@@ -96,6 +96,7 @@ func (s Service) Create(ctx context.Context, subject rbac.Subject, req CreateReq
 		},
 	})
 	if err != nil {
+		_, _ = s.repo.Delete(ctx, DeleteRequest{ClusterID: created.ClusterID, Namespace: created.Namespace, Name: created.Name, UID: created.UID})
 		return ServiceAccount{}, audit.Event{}, err
 	}
 	return created, event, nil
@@ -114,10 +115,11 @@ func (s Service) Delete(ctx context.Context, subject rbac.Subject, req DeleteReq
 	if !decision.Allowed {
 		return audit.Event{}, ErrPermissionDenied
 	}
-	if err := s.repo.Delete(ctx, req); err != nil {
+	deleted, err := s.repo.Delete(ctx, req)
+	if err != nil {
 		return audit.Event{}, err
 	}
-	return s.auditor.Record(ctx, audit.Event{
+	event, err := s.auditor.Record(ctx, audit.Event{
 		Actor:    audit.Actor{ID: subject.ID, Name: subject.DisplayName},
 		Resource: audit.Resource{Type: "k8s.service-account", Name: req.Name},
 		Action:   "delete",
@@ -130,6 +132,11 @@ func (s Service) Delete(ctx context.Context, subject rbac.Subject, req DeleteReq
 			"uid":        req.UID,
 		},
 	})
+	if err != nil {
+		_, _ = s.repo.Create(ctx, deleted)
+		return audit.Event{}, err
+	}
+	return event, nil
 }
 
 type MemoryRepository struct {
@@ -178,24 +185,24 @@ func (r *MemoryRepository) Create(_ context.Context, item ServiceAccount) (Servi
 	return item, nil
 }
 
-func (r *MemoryRepository) Delete(_ context.Context, req DeleteRequest) error {
+func (r *MemoryRepository) Delete(_ context.Context, req DeleteRequest) (ServiceAccount, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := r.items[:0]
-	deleted := false
+	deleted := ServiceAccount{}
 	for _, item := range r.items {
 		match := item.ClusterID == req.ClusterID && item.Namespace == req.Namespace && item.Name == req.Name && item.UID == req.UID
 		if match {
-			deleted = true
+			deleted = item
 			continue
 		}
 		next = append(next, item)
 	}
-	if !deleted {
-		return ErrNotFound
+	if deleted.ID == "" {
+		return ServiceAccount{}, ErrNotFound
 	}
 	r.items = next
-	return nil
+	return deleted, nil
 }
 
 func paginate(items []ServiceAccount, page int, pageSize int) []ServiceAccount {

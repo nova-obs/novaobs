@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const SubjectContextKey = "novaobs.subject"
+
 func ListHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		filter := ListFilter{
@@ -75,15 +77,15 @@ func writeServiceAccountError(ctx *gin.Context, err error) {
 }
 
 func subjectFromRequest(ctx *gin.Context) rbac.Subject {
-	id := ctx.GetHeader("X-NovaObs-User")
-	if id == "" {
-		id = "anonymous"
+	value, ok := ctx.Get(SubjectContextKey)
+	if !ok {
+		return rbac.Subject{ID: "anonymous", Type: "anonymous", DisplayName: "anonymous"}
 	}
-	name := ctx.GetHeader("X-NovaObs-User-Name")
-	if name == "" {
-		name = id
+	subject, ok := value.(rbac.Subject)
+	if !ok || subject.ID == "" || subject.Type == "" {
+		return rbac.Subject{ID: "anonymous", Type: "anonymous", DisplayName: "anonymous"}
 	}
-	return rbac.Subject{ID: id, Type: "user", DisplayName: name}
+	return subject
 }
 
 func parsePositiveInt(raw string, fallback int) int {
