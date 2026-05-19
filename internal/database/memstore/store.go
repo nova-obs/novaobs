@@ -27,6 +27,7 @@ type Store struct {
 	ars  map[string]interface{}
 	rrs  map[string]interface{}
 	rbs  map[string]interface{}
+	secs map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -47,6 +48,7 @@ func NewStore() *Store {
 		ars:  map[string]interface{}{},
 		rrs:  map[string]interface{}{},
 		rbs:  map[string]interface{}{},
+		secs: map[string]interface{}{},
 	}
 }
 
@@ -81,6 +83,7 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
+func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s} }
 
 // ---------- Services ----------
 
@@ -564,4 +567,25 @@ func (st *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string,
 		}
 	}
 	return copyAll(filtered, results)
+}
+
+// ---------- Secret Store ----------
+
+type secretStore struct{ s *Store }
+
+func (st *secretStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.secs[id] = v
+	return nil
+}
+
+func (st *secretStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.secs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
 }

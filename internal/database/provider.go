@@ -19,6 +19,7 @@ type Store interface {
 	AlertRules() AlertRuleStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
+	Secrets() SecretStore
 	Close(ctx context.Context) error
 }
 
@@ -124,4 +125,9 @@ type RBACRoleStore interface {
 type RBACBindingStore interface {
 	Upsert(ctx context.Context, id string, binding interface{}) error
 	FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error
+}
+
+type SecretStore interface {
+	Upsert(ctx context.Context, id string, secret interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
 }

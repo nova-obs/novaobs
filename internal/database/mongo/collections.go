@@ -412,3 +412,15 @@ func (s *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string, 
 	}
 	return cursor.All(ctx, results)
 }
+
+// ---------- SecretStore ----------
+type secretStore struct{ col *mongo.Collection }
+
+func (s *secretStore) Upsert(ctx context.Context, id string, secret interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, secret, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *secretStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
