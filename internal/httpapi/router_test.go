@@ -96,6 +96,10 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8sops/dashboard?cluster_id=prod",
 		"/api/v1/k8s/clusters?q=prod",
 		"/api/v1/k8s/namespaces?cluster_id=prod",
+		"/api/v1/k8s/resources?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/resources/detail?cluster_id=prod&namespace=orders&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-6f7d&container=app",
 		"/api/v1/opamp/agents",
 		"/api/v1/alert-rules",
 	} {
