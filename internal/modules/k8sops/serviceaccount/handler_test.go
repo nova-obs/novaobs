@@ -130,6 +130,26 @@ func TestCreateServiceAccountRollsBackWhenAuditFails(t *testing.T) {
 	require.Empty(t, items)
 }
 
+func TestDeleteServiceAccountRollsBackWhenAuditFails(t *testing.T) {
+	repo := NewMemoryRepository([]ServiceAccount{
+		{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
+	})
+	service := NewService(repo, rbac.NewService(serviceAccountWriterRepo()), failingAuditor{})
+
+	_, err := service.Delete(context.Background(), rbac.Subject{ID: "user-1", Type: "user"}, DeleteRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Name:      "orders-reader",
+		UID:       "uid-orders-reader",
+	})
+
+	require.Error(t, err)
+	items, listErr := repo.List(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Len(t, items, 1)
+	require.Equal(t, "orders-reader", items[0].Name)
+}
+
 func newServiceAccountTestRouter(t *testing.T, rbacRepo testRBACRepo, subject *rbac.Subject, seed ...ServiceAccount) (*gin.Engine, *audit.MemoryStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
