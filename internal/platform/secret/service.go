@@ -16,6 +16,7 @@ import (
 
 type Encryptor interface {
 	Encrypt(plaintext []byte) (string, error)
+	Decrypt(ciphertext string) ([]byte, error)
 }
 
 type AESGCMEncryptor struct {
@@ -43,6 +44,27 @@ func (e AESGCMEncryptor) Encrypt(plaintext []byte) (string, error) {
 	}
 	sealed := aead.Seal(nonce, nonce, plaintext, nil)
 	return base64.StdEncoding.EncodeToString(sealed), nil
+}
+
+func (e AESGCMEncryptor) Decrypt(ciphertext string) ([]byte, error) {
+	sealed, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(e.key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < aead.NonceSize() {
+		return nil, io.ErrUnexpectedEOF
+	}
+	nonce := sealed[:aead.NonceSize()]
+	payload := sealed[aead.NonceSize():]
+	return aead.Open(nil, nonce, payload, nil)
 }
 
 type Service struct {
@@ -76,4 +98,17 @@ func (s Service) Create(ctx context.Context, req CreateRequest) (Secret, error) 
 	}
 	item.Ciphertext = ""
 	return item, nil
+}
+
+func (s Service) Plaintext(ctx context.Context, id string) ([]byte, Secret, error) {
+	item, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return nil, Secret{}, err
+	}
+	plaintext, err := s.encryptor.Decrypt(item.Ciphertext)
+	if err != nil {
+		return nil, Secret{}, err
+	}
+	item.Ciphertext = ""
+	return plaintext, item, nil
 }

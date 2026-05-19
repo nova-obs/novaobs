@@ -16,6 +16,7 @@ import (
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/rbac"
+	"novaobs/internal/platform/secret"
 	"novaobs/internal/servicecatalog"
 
 	"github.com/gin-gonic/gin"
@@ -47,7 +48,8 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	logQuerySvc := logquery.NewService()
 	rbacSvc := rbac.NewService(rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()))
 	auditSvc := audit.NewService(audit.NewMemoryStore())
-	k8sOpsModule := k8sops.NewModuleWithSecurity(rbacSvc, auditSvc)
+	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
+	k8sOpsModule := k8sops.NewModuleWithSecurity(rbacSvc, auditSvc, secretSvc)
 	opampMgr := opamp.NewManager()
 
 	return httpapi.NewRouter(httpapi.Dependencies{

@@ -5,10 +5,12 @@ import (
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/dashboard"
 	"novaobs/internal/modules/k8sops/deployment"
+	"novaobs/internal/modules/k8sops/kubeconfig"
 	"novaobs/internal/modules/k8sops/namespace"
 	k8srbac "novaobs/internal/modules/k8sops/rbac"
 	"novaobs/internal/modules/k8sops/resource"
 	"novaobs/internal/modules/k8sops/serviceaccount"
+	"novaobs/internal/platform/secret"
 )
 
 type Module struct {
@@ -20,13 +22,17 @@ type Module struct {
 	Cert           certificate.Service
 	ServiceAccount serviceaccount.Service
 	RBAC           k8srbac.Service
+	Kubeconfig     kubeconfig.Service
 }
 
 func NewModule() Module {
-	return NewModuleWithSecurity(nil, nil)
+	return NewModuleWithSecurity(nil, nil, nil)
 }
 
-func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor serviceaccount.Auditor) Module {
+func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor serviceaccount.Auditor, secrets kubeconfig.SecretService) Module {
+	if secrets == nil {
+		secrets = secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	}
 	return Module{
 		Dashboard: dashboard.NewService(dashboard.NewStaticReader()),
 		Cluster: cluster.NewService(cluster.NewMemoryRepository([]cluster.Cluster{
@@ -71,5 +77,6 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}, []k8srbac.BindingResource{
 			{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
 		}), authorizer, auditor),
+		Kubeconfig: kubeconfig.NewService(secrets, authorizer, auditor),
 	}
 }
