@@ -16,6 +16,7 @@ import (
 	"novaobs/internal/modules/k8sops"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
+	k8sopsnamespace "novaobs/internal/modules/k8sops/namespace"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -117,6 +118,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
+	api.GET("/k8s/namespaces", k8sopsnamespace.ListHandler(deps.K8sOpsModule.Namespace))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
