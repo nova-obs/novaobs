@@ -150,3 +150,31 @@ func TestServiceDeniesUnknownScopeMode(t *testing.T) {
 	require.False(t, clusterDecision.Allowed)
 	require.False(t, namespaceDecision.Allowed)
 }
+
+func TestServiceDeniesUnknownScopeModeWithGlobalBinding(t *testing.T) {
+	repo := NewMemoryRepository()
+	require.NoError(t, repo.SaveRole(Role{
+		ID:   "role-broken-global",
+		Name: "Broken Global Role",
+		Permissions: []Permission{
+			{Resource: "k8s.cluster", Action: "read", ScopeMode: "clusetr"},
+		},
+	}))
+	require.NoError(t, repo.SaveBinding(Binding{
+		ID:          "binding-broken-global",
+		SubjectID:   "admin",
+		SubjectType: "user",
+		RoleID:      "role-broken-global",
+		Scope:       Scope{Global: true},
+	}))
+	svc := NewService(repo)
+
+	decision := svc.Authorize(Subject{ID: "admin", Type: "user"}, Request{
+		Resource: "k8s.cluster",
+		Action:   "read",
+		Scope:    Scope{ClusterID: "prod"},
+	})
+
+	require.False(t, decision.Allowed)
+	require.Equal(t, "permission_denied", decision.Reason)
+}

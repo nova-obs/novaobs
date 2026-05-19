@@ -35,22 +35,30 @@ func matches(pattern string, value string) bool {
 }
 
 func scopeAllowed(mode string, policy Scope, req Scope) bool {
-	if mode == "global" {
-		return policy.Global
-	}
-	if policy.Global {
-		return true
-	}
 	switch mode {
+	case "global":
+		return policy.Global
 	case "cluster":
+		if policy.Global {
+			return true
+		}
 		return policy.ClusterID != "" && policy.ClusterID == req.ClusterID
 	case "namespace":
+		if policy.Global {
+			return true
+		}
 		return policy.ClusterID != "" && policy.ClusterID == req.ClusterID &&
 			policy.Namespace != "" && policy.Namespace == req.Namespace
 	case "environment":
+		if policy.Global {
+			return true
+		}
 		return policy.Environment != "" && policy.Environment == req.Environment &&
 			optionalScopeMatches(policy, req)
 	case "service":
+		if policy.Global {
+			return true
+		}
 		return policy.ServiceID != "" && policy.ServiceID == req.ServiceID &&
 			optionalScopeMatches(policy, req)
 	default:
