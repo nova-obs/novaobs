@@ -1,9 +1,12 @@
 package deployment
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/platform/authctx"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -33,6 +36,70 @@ func AuditEventsHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func PreviewHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body OperationRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.Preview(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeDeploymentError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func ApplyHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body OperationRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.Apply(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeDeploymentError(ctx, err)
+			return
+		}
+		response.Created(ctx, result)
+	}
+}
+
+func DeleteHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body DeleteRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.Delete(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeDeploymentError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func RollbackHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body RollbackRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.Rollback(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeDeploymentError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func listFilterFromQuery(ctx *gin.Context) ListFilter {
 	return ListFilter{
 		ClusterID: ctx.Query("cluster_id"),
@@ -51,4 +118,20 @@ func parsePositiveInt(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func writeDeploymentError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrPermissionDenied):
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权执行发布部署操作")
+	case errors.Is(err, ErrInvalidRequest):
+		response.Error(ctx, http.StatusBadRequest, "invalid_request", "发布部署请求参数不完整")
+	default:
+		response.Error(ctx, http.StatusInternalServerError, "k8s_deployment_operation_failed", "发布部署操作失败")
+	}
+}
+
+func subjectFromRequest(ctx *gin.Context) platformrbac.Subject {
+	subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+	return subject
 }

@@ -67,7 +67,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			{ID: "deploy-orders-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "rollout.pause", Status: "warning", Revision: "rev-1842", Actor: "platform-admin"},
 		}, []deployment.AuditEvent{
 			{ID: "audit-orders-1", ClusterID: "prod", Namespace: "orders", ResourceKind: "Deployment", ResourceName: "orders-api", Action: "rollout.pause", Actor: "platform-admin", Status: "warning", TraceID: "trace-k8s-1842"},
-		})),
+		}), authorizer, auditor),
 		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
 			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
 		})),
