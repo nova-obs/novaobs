@@ -1,6 +1,7 @@
 package k8sops
 
 import (
+	"novaobs/internal/modules/k8sops/certificate"
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/dashboard"
 	"novaobs/internal/modules/k8sops/deployment"
@@ -14,6 +15,7 @@ type Module struct {
 	Namespace namespace.Service
 	Resource  resource.Service
 	Deploy    deployment.Service
+	Cert      certificate.Service
 }
 
 func NewModule() Module {
@@ -49,6 +51,9 @@ func NewModule() Module {
 			{ID: "deploy-orders-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "rollout.pause", Status: "warning", Revision: "rev-1842", Actor: "platform-admin"},
 		}, []deployment.AuditEvent{
 			{ID: "audit-orders-1", ClusterID: "prod", Namespace: "orders", ResourceKind: "Deployment", ResourceName: "orders-api", Action: "rollout.pause", Actor: "platform-admin", Status: "warning", TraceID: "trace-k8s-1842"},
+		})),
+		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
+			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
 		})),
 	}
 }

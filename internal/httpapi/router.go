@@ -14,6 +14,7 @@ import (
 	"novaobs/internal/database"
 	"novaobs/internal/logquery"
 	"novaobs/internal/modules/k8sops"
+	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
@@ -127,6 +128,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/k8s/pod-logs", k8sopsresource.PodLogsHandler(deps.K8sOpsModule.Resource))
 	api.GET("/k8s/deployment-history", k8sopsdeployment.HistoryHandler(deps.K8sOpsModule.Deploy))
 	api.GET("/k8s/audit-events", k8sopsdeployment.AuditEventsHandler(deps.K8sOpsModule.Deploy))
+	api.GET("/k8s/certificates", k8sopscertificate.ListHandler(deps.K8sOpsModule.Cert))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
