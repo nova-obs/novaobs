@@ -91,6 +91,7 @@ func (r MemoryReader) find(identity Identity) (ResourceSummary, bool) {
 	for _, item := range r.items {
 		if item.Identity.ClusterID == identity.ClusterID &&
 			item.Identity.Namespace == identity.Namespace &&
+			item.Identity.APIVersion == identity.APIVersion &&
 			item.Identity.Kind == identity.Kind &&
 			item.Identity.Name == identity.Name &&
 			(identity.UID == "" || item.Identity.UID == identity.UID) {

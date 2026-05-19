@@ -36,7 +36,7 @@ func TestServiceReturnsDetailAndYAMLByIdentity(t *testing.T) {
 	})
 	svc := NewService(reader)
 
-	detail, err := svc.GetDetail(context.Background(), DetailQuery{Identity: Identity{ClusterID: "prod", Namespace: "orders", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"}})
+	detail, err := svc.GetDetail(context.Background(), DetailQuery{Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"}})
 	require.NoError(t, err)
 	require.Equal(t, "orders-api", detail.Identity.Name)
 
@@ -44,4 +44,18 @@ func TestServiceReturnsDetailAndYAMLByIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, yaml.YAML, "kind: Deployment")
 	require.Contains(t, yaml.YAML, "name: orders-api")
+}
+
+func TestServiceRequiresAPIVersionForDetailIdentity(t *testing.T) {
+	reader := NewMemoryReader([]ResourceSummary{
+		{
+			Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"},
+			Status:   "warning",
+		},
+	})
+	svc := NewService(reader)
+
+	_, err := svc.GetDetail(context.Background(), DetailQuery{Identity: Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"}})
+
+	require.Error(t, err)
 }
