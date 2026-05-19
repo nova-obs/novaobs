@@ -54,7 +54,7 @@ func scopeAllowed(mode string, policy Scope, req Scope) bool {
 		return policy.ServiceID != "" && policy.ServiceID == req.ServiceID &&
 			optionalScopeMatches(policy, req)
 	default:
-		return scopeContains(policy, req)
+		return false
 	}
 }
 

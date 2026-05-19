@@ -90,9 +90,24 @@ func sanitize(input map[string]any) map[string]any {
 			out[key] = "[redacted]"
 			continue
 		}
-		out[key] = value
+		out[key] = sanitizeValue(value)
 	}
 	return out
+}
+
+func sanitizeValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return sanitize(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 type MemoryStore struct {

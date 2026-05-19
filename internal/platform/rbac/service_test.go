@@ -116,3 +116,37 @@ func TestServiceScopeDoesNotExpandAcrossClusters(t *testing.T) {
 	require.False(t, decision.Allowed)
 	require.Equal(t, "permission_denied", decision.Reason)
 }
+
+func TestServiceDeniesUnknownScopeMode(t *testing.T) {
+	repo := NewMemoryRepository()
+	require.NoError(t, repo.SaveRole(Role{
+		ID:   "role-broken",
+		Name: "Broken Role",
+		Permissions: []Permission{
+			{Resource: "k8s.cluster", Action: "read", ScopeMode: "clusetr"},
+			{Resource: "k8s.namespace", Action: "read"},
+		},
+	}))
+	require.NoError(t, repo.SaveBinding(Binding{
+		ID:          "binding-broken",
+		SubjectID:   "user-1",
+		SubjectType: "user",
+		RoleID:      "role-broken",
+		Scope:       Scope{ClusterID: "prod"},
+	}))
+	svc := NewService(repo)
+
+	clusterDecision := svc.Authorize(Subject{ID: "user-1", Type: "user"}, Request{
+		Resource: "k8s.cluster",
+		Action:   "read",
+		Scope:    Scope{ClusterID: "prod"},
+	})
+	namespaceDecision := svc.Authorize(Subject{ID: "user-1", Type: "user"}, Request{
+		Resource: "k8s.namespace",
+		Action:   "read",
+		Scope:    Scope{ClusterID: "prod"},
+	})
+
+	require.False(t, clusterDecision.Allowed)
+	require.False(t, namespaceDecision.Allowed)
+}
