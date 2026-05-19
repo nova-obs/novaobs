@@ -29,11 +29,52 @@ func (s Service) Record(ctx context.Context, event Event) (Event, error) {
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = time.Now().UTC()
 	}
+	event = normalizeEvent(event)
 	event.RequestSummary = sanitize(event.RequestSummary)
 	if err := s.store.Insert(ctx, event); err != nil {
 		return Event{}, err
 	}
 	return event, nil
+}
+
+func normalizeEvent(event Event) Event {
+	if event.Actor.ID == "" {
+		event.Actor.ID = event.ActorID
+	}
+	if event.Actor.Name == "" {
+		event.Actor.Name = event.ActorName
+	}
+	if event.ActorID == "" {
+		event.ActorID = event.Actor.ID
+	}
+	if event.ActorName == "" {
+		event.ActorName = event.Actor.Name
+	}
+	if event.Resource.Type == "" {
+		event.Resource.Type = event.ResourceType
+	}
+	if event.Resource.Name == "" {
+		event.Resource.Name = event.ResourceName
+	}
+	if event.ResourceType == "" {
+		event.ResourceType = event.Resource.Type
+	}
+	if event.ResourceName == "" {
+		event.ResourceName = event.Resource.Name
+	}
+	if event.Error == "" {
+		event.Error = event.ErrorMessage
+	}
+	if event.ErrorMessage == "" {
+		event.ErrorMessage = event.Error
+	}
+	if event.Trace == "" {
+		event.Trace = event.TraceID
+	}
+	if event.TraceID == "" {
+		event.TraceID = event.Trace
+	}
+	return event
 }
 
 func sanitize(input map[string]any) map[string]any {

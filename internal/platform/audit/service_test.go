@@ -28,6 +28,8 @@ func TestServiceRecordsSanitizedEvent(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotEmpty(t, event.ID)
+	require.Equal(t, Actor{ID: "user-1", Name: "alice"}, event.Actor)
+	require.Equal(t, Resource{Type: "k8s.kubeconfig", Name: "orders-admin"}, event.Resource)
 	require.Equal(t, "[redacted]", event.RequestSummary["token"])
 	require.Equal(t, "[redacted]", event.RequestSummary["kubeconfig"])
 	require.Equal(t, "generate readonly kubeconfig", event.RequestSummary["description"])
