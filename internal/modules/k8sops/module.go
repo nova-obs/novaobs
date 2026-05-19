@@ -10,6 +10,7 @@ import (
 	k8srbac "novaobs/internal/modules/k8sops/rbac"
 	"novaobs/internal/modules/k8sops/resource"
 	"novaobs/internal/modules/k8sops/serviceaccount"
+	k8stemplate "novaobs/internal/modules/k8sops/template"
 	"novaobs/internal/platform/secret"
 )
 
@@ -23,6 +24,7 @@ type Module struct {
 	ServiceAccount serviceaccount.Service
 	RBAC           k8srbac.Service
 	Kubeconfig     kubeconfig.Service
+	Template       k8stemplate.Service
 }
 
 func NewModule() Module {
@@ -78,5 +80,20 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
 		}), authorizer, auditor),
 		Kubeconfig: kubeconfig.NewService(secrets, authorizer, auditor),
+		Template: k8stemplate.NewService(k8stemplate.NewMemoryRepository([]k8stemplate.Template{
+			{
+				ID:          "tpl-orders-deployment",
+				Name:        "orders-deployment",
+				Type:        "Deployment",
+				YAMLContent: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: <<name>>\n  namespace: <<namespace>>\nspec:\n  replicas: <<replicas>>\n",
+				Variables: []k8stemplate.Variable{
+					{Name: "name", Required: true},
+					{Name: "namespace", Required: true},
+					{Name: "replicas", DefaultValue: "2"},
+				},
+				Description: "来自 startorch deployment 基线的 NovaObs 模板",
+				Source:      "startorch",
+			},
+		}), authorizer, auditor),
 	}
 }
