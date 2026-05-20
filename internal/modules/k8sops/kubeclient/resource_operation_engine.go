@@ -10,10 +10,7 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 )
 
@@ -44,6 +41,7 @@ type OperationObject struct {
 	Namespace  string                  `json:"namespace,omitempty"`
 	Name       string                  `json:"name"`
 	Resolved   ResolvedResourceVersion `json:"resolved"`
+	Executor   string                  `json:"executor,omitempty"`
 }
 
 type DryRunApplyRequest struct {
@@ -89,69 +87,111 @@ func NewProviderBackedResourceOperationEngine(provider BundleProvider, opts ...R
 }
 
 func (e ProviderBackedResourceOperationEngine) DryRunApply(ctx context.Context, req ClusterDryRunApplyRequest) (DryRunApplyResult, error) {
+	result, err := e.Apply(ctx, ClusterApplyRequest{
+		ClusterID:    req.ClusterID,
+		Mode:         OperationModeDryRun,
+		YAMLContent:  req.YAMLContent,
+		FieldManager: req.FieldManager,
+	})
+	return DryRunApplyResult{Objects: result.Objects, Warnings: result.Warnings}, err
+}
+
+func (e ProviderBackedResourceOperationEngine) Apply(ctx context.Context, req ClusterApplyRequest) (ResourceOperationResult, error) {
 	clusterID := strings.TrimSpace(req.ClusterID)
 	if clusterID == "" {
-		return DryRunApplyResult{}, ErrClusterRequired
+		return ResourceOperationResult{}, ErrClusterRequired
 	}
 	if e.provider == nil {
-		return DryRunApplyResult{}, fmt.Errorf("%w: bundle provider required", ErrResourceOperationInvalid)
+		return ResourceOperationResult{}, fmt.Errorf("%w: bundle provider required", ErrResourceOperationInvalid)
 	}
 	bundle, err := e.provider.Bundle(ctx, clusterID)
 	if err != nil {
-		return DryRunApplyResult{}, err
+		return ResourceOperationResult{}, err
 	}
 	snapshot, err := DiscoverCapabilities(clusterID, bundle.Discovery)
 	if err != nil {
-		return DryRunApplyResult{}, err
+		return ResourceOperationResult{}, err
 	}
 	fieldManager := e.fieldManager
 	if trimmed := strings.TrimSpace(req.FieldManager); trimmed != "" {
 		fieldManager = trimmed
 	}
 	engine := NewResourceOperationEngine(bundle, snapshot, WithFieldManager(fieldManager))
-	return engine.DryRunApply(ctx, DryRunApplyRequest{YAMLContent: req.YAMLContent})
+	return engine.Apply(ctx, ApplyRequest{Mode: req.Mode, YAMLContent: req.YAMLContent})
+}
+
+func (e ProviderBackedResourceOperationEngine) Delete(ctx context.Context, req ClusterDeleteRequest) (ResourceOperationResult, error) {
+	clusterID := strings.TrimSpace(req.ClusterID)
+	if clusterID == "" {
+		return ResourceOperationResult{}, ErrClusterRequired
+	}
+	if e.provider == nil {
+		return ResourceOperationResult{}, fmt.Errorf("%w: bundle provider required", ErrResourceOperationInvalid)
+	}
+	bundle, err := e.provider.Bundle(ctx, clusterID)
+	if err != nil {
+		return ResourceOperationResult{}, err
+	}
+	snapshot, err := DiscoverCapabilities(clusterID, bundle.Discovery)
+	if err != nil {
+		return ResourceOperationResult{}, err
+	}
+	fieldManager := e.fieldManager
+	if trimmed := strings.TrimSpace(req.FieldManager); trimmed != "" {
+		fieldManager = trimmed
+	}
+	engine := NewResourceOperationEngine(bundle, snapshot, WithFieldManager(fieldManager))
+	return engine.Delete(ctx, DeleteRequest{Mode: req.Mode, Identity: req.Identity})
 }
 
 func (e ResourceOperationEngine) DryRunApply(ctx context.Context, req DryRunApplyRequest) (DryRunApplyResult, error) {
-	if e.bundle.Dynamic == nil {
-		return DryRunApplyResult{}, fmt.Errorf("%w: dynamic client required", ErrResourceOperationInvalid)
+	result, err := e.Apply(ctx, ApplyRequest{Mode: OperationModeDryRun, YAMLContent: req.YAMLContent})
+	return DryRunApplyResult{Objects: result.Objects, Warnings: result.Warnings}, err
+}
+
+func (e ResourceOperationEngine) Apply(ctx context.Context, req ApplyRequest) (ResourceOperationResult, error) {
+	mode, err := normalizeApplyMode(req.Mode)
+	if err != nil {
+		return ResourceOperationResult{}, err
 	}
 	objects, err := decodeOperationObjects(req.YAMLContent)
 	if err != nil {
-		return DryRunApplyResult{}, err
+		return ResourceOperationResult{}, err
 	}
 	resolver := NewResourceVersionResolver(e.snapshot)
-	result := DryRunApplyResult{Objects: make([]OperationObject, 0, len(objects)), Warnings: append([]string{}, e.snapshot.Warnings...)}
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	result := ResourceOperationResult{Objects: make([]OperationObject, 0, len(objects)), Warnings: append([]string{}, e.snapshot.Warnings...)}
 	for _, object := range objects {
 		resolved, err := resolver.Resolve(ResourceVersionRequest{APIVersion: object.GetAPIVersion(), Kind: object.GetKind()})
 		if err != nil {
-			return DryRunApplyResult{}, err
+			return ResourceOperationResult{}, err
 		}
 		object.SetAPIVersion(resolved.APIVersion)
 		object.SetKind(resolved.Kind)
 		if resolved.Namespaced && object.GetNamespace() == "" {
-			return DryRunApplyResult{}, ErrResourceOperationInvalid
+			return ResourceOperationResult{}, ErrResourceOperationInvalid
 		}
 		patch, err := json.Marshal(object.Object)
 		if err != nil {
-			return DryRunApplyResult{}, fmt.Errorf("%w: json marshal failed", ErrResourceOperationInvalid)
+			return ResourceOperationResult{}, fmt.Errorf("%w: json marshal failed", ErrResourceOperationInvalid)
 		}
-		gvr := schema.GroupVersionResource{Group: resolved.Group, Version: resolved.Version, Resource: resolved.Resource}
-		resource := e.bundle.Dynamic.Resource(gvr)
-		var patchErr error
-		if resolved.Namespaced {
-			_, patchErr = resource.Namespace(object.GetNamespace()).Patch(ctx, object.GetName(), types.ApplyPatchType, patch, metav1.PatchOptions{
-				FieldManager: e.fieldManager,
-				DryRun:       []string{metav1.DryRunAll},
-			})
-		} else {
-			_, patchErr = resource.Patch(ctx, object.GetName(), types.ApplyPatchType, patch, metav1.PatchOptions{
-				FieldManager: e.fieldManager,
-				DryRun:       []string{metav1.DryRunAll},
-			})
+		operationObject := operationApplyObject{
+			Name:      object.GetName(),
+			Namespace: object.GetNamespace(),
+			Resolved:  resolved,
+			Patch:     patch,
 		}
-		if patchErr != nil {
-			return DryRunApplyResult{}, resourceOperationError(patchErr)
+		executor := OperationExecutorTyped
+		handled, err := typedExecutor.Apply(ctx, operationObject, mode)
+		if err != nil {
+			return ResourceOperationResult{}, resourceOperationError(err)
+		}
+		if !handled {
+			executor = OperationExecutorDynamic
+			if err := dynamicExecutor.Apply(ctx, operationObject, mode); err != nil {
+				return ResourceOperationResult{}, resourceOperationError(err)
+			}
 		}
 		result.Objects = append(result.Objects, OperationObject{
 			APIVersion: resolved.APIVersion,
@@ -159,9 +199,57 @@ func (e ResourceOperationEngine) DryRunApply(ctx context.Context, req DryRunAppl
 			Namespace:  object.GetNamespace(),
 			Name:       object.GetName(),
 			Resolved:   resolved,
+			Executor:   executor,
 		})
 	}
 	return result, nil
+}
+
+func (e ResourceOperationEngine) Delete(ctx context.Context, req DeleteRequest) (ResourceOperationResult, error) {
+	mode, err := normalizeDeleteMode(req.Mode)
+	if err != nil {
+		return ResourceOperationResult{}, err
+	}
+	identity := normalizeOperationObject(req.Identity)
+	if identity.APIVersion == "" || identity.Kind == "" || identity.Name == "" {
+		return ResourceOperationResult{}, ErrResourceOperationInvalid
+	}
+	resolved, err := NewResourceVersionResolver(e.snapshot).Resolve(ResourceVersionRequest{APIVersion: identity.APIVersion, Kind: identity.Kind})
+	if err != nil {
+		return ResourceOperationResult{}, err
+	}
+	if resolved.Namespaced && identity.Namespace == "" {
+		return ResourceOperationResult{}, ErrResourceOperationInvalid
+	}
+	operationObject := operationDeleteObject{
+		Name:      identity.Name,
+		Namespace: identity.Namespace,
+		Resolved:  resolved,
+	}
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	executor := OperationExecutorTyped
+	handled, err := typedExecutor.Delete(ctx, operationObject, mode)
+	if err != nil {
+		return ResourceOperationResult{}, resourceOperationError(err)
+	}
+	if !handled {
+		executor = OperationExecutorDynamic
+		if err := dynamicExecutor.Delete(ctx, operationObject, mode); err != nil {
+			return ResourceOperationResult{}, resourceOperationError(err)
+		}
+	}
+	return ResourceOperationResult{
+		Objects: []OperationObject{{
+			APIVersion: resolved.APIVersion,
+			Kind:       resolved.Kind,
+			Namespace:  identity.Namespace,
+			Name:       identity.Name,
+			Resolved:   resolved,
+			Executor:   executor,
+		}},
+		Warnings: append([]string{}, e.snapshot.Warnings...),
+	}, nil
 }
 
 func decodeOperationObjects(yamlContent string) ([]*unstructured.Unstructured, error) {
@@ -193,6 +281,41 @@ func decodeOperationObjects(yamlContent string) ([]*unstructured.Unstructured, e
 		return nil, ErrResourceOperationInvalid
 	}
 	return objects, nil
+}
+
+type operationApplyObject struct {
+	Name      string
+	Namespace string
+	Resolved  ResolvedResourceVersion
+	Patch     []byte
+}
+
+type operationDeleteObject struct {
+	Name      string
+	Namespace string
+	Resolved  ResolvedResourceVersion
+}
+
+func normalizeApplyMode(mode OperationMode) (OperationMode, error) {
+	if mode == OperationModeApply || mode == OperationModeDryRun {
+		return mode, nil
+	}
+	return "", ErrResourceOperationInvalid
+}
+
+func normalizeDeleteMode(mode OperationMode) (OperationMode, error) {
+	if mode == OperationModeDelete || mode == OperationModeDryRun {
+		return mode, nil
+	}
+	return "", ErrResourceOperationInvalid
+}
+
+func normalizeOperationObject(object OperationObject) OperationObject {
+	object.APIVersion = strings.TrimSpace(object.APIVersion)
+	object.Kind = strings.TrimSpace(object.Kind)
+	object.Namespace = strings.TrimSpace(object.Namespace)
+	object.Name = strings.TrimSpace(object.Name)
+	return object
 }
 
 func resourceOperationError(err error) error {
