@@ -23,6 +23,7 @@ var (
 	ErrInvalidRequest   = errors.New("invalid_certificate_request")
 	ErrNotFound         = errors.New("certificate_not_found")
 	ErrAlreadyExists    = errors.New("certificate_already_exists")
+	ErrWriteUnavailable = errors.New("certificate_write_unavailable")
 )
 
 type Repository interface {
@@ -41,6 +42,10 @@ type Auditor interface {
 
 type SecretService interface {
 	Create(ctx context.Context, req secret.CreateRequest) (secret.Secret, error)
+}
+
+type writeUnavailableRepository interface {
+	WritesUnavailable() bool
 }
 
 type Service struct {
@@ -82,6 +87,9 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 	}
 	if !s.allowed(subject, "create", req.ClusterID, req.Namespace) {
 		return Certificate{}, audit.Event{}, ErrPermissionDenied
+	}
+	if guard, ok := s.repo.(writeUnavailableRepository); ok && guard.WritesUnavailable() {
+		return Certificate{}, audit.Event{}, ErrWriteUnavailable
 	}
 	notAfter, err := parseNotAfter(req.NotAfter)
 	if err != nil {

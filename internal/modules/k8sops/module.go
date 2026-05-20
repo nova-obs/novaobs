@@ -54,6 +54,9 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	}, []k8srbac.BindingResource{
 		{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
 	}))
+	certificateRepo := certificate.Repository(certificate.NewMemoryRepository([]certificate.Certificate{
+		{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
+	}))
 	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
 		{
 			Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
@@ -88,6 +91,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				resourceReader = resource.NewKubernetesReader(value, authorizer)
 				serviceAccountRepo = serviceaccount.NewKubernetesRepository(value, authorizer)
 				rbacRepo = k8srbac.NewKubernetesRepository(value, authorizer)
+				certificateRepo = certificate.NewKubernetesRepository(value, authorizer)
 			}
 		case terminal.Executor:
 			if value != nil {
@@ -108,9 +112,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}, []deployment.AuditEvent{
 			{ID: "audit-orders-1", ClusterID: "prod", Namespace: "orders", ResourceKind: "Deployment", ResourceName: "orders-api", Action: "rollout.pause", Actor: "platform-admin", Status: "warning", TraceID: "trace-k8s-1842"},
 		}), authorizer, auditor),
-		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
-			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
-		}), authorizer, auditor, secrets),
+		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),
 		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor),

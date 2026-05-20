@@ -34,6 +34,7 @@ func TestEnsureK8sOpsDefaultsCoversK8sWritePermissions(t *testing.T) {
 		{Resource: "k8s.rbac", Action: "delete", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
 		{Resource: "k8s.kubeconfig", Action: "export", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
 		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
+		{Resource: "k8s.certificate", Action: "read", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
 		{Resource: "k8s.certificate", Action: "create", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
 		{Resource: "k8s.template", Action: "update", Scope: Scope{Global: true}},
 	} {
@@ -69,6 +70,7 @@ func TestEnsureK8sOpsDefaultsAllowsGlobalK8sReadOnly(t *testing.T) {
 		{Resource: "k8s.resource", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.service-account", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.rbac", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.certificate", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.cluster-credential", Action: "read", Scope: Scope{ClusterID: "stage"}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)

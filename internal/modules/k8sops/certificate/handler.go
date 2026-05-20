@@ -25,7 +25,7 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_certificate_list_failed", "证书列表查询失败")
+			writeCertificateError(ctx, err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -77,6 +77,8 @@ func writeCertificateError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusNotFound, "not_found", "证书不存在")
 	case errors.Is(err, ErrAlreadyExists):
 		response.Error(ctx, http.StatusConflict, "already_exists", "证书已存在")
+	case errors.Is(err, ErrWriteUnavailable):
+		response.Error(ctx, http.StatusConflict, "k8s_certificate_write_unavailable", "真实集群证书写操作尚未启用")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_certificate_operation_failed", "证书操作失败")
 	}
