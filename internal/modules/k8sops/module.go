@@ -44,6 +44,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
 		{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},
 	}))
+	dashboardReader := dashboard.Reader(dashboard.NewStaticReader())
 	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
 	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
 		{
@@ -74,6 +75,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			}
 		case kubeclient.ClientsetProvider:
 			if value != nil {
+				dashboardReader = dashboard.NewKubernetesReader(value, authorizer)
 				namespaceRepo = namespace.NewKubernetesRepository(value, authorizer)
 				resourceReader = resource.NewKubernetesReader(value, authorizer)
 			}
@@ -86,7 +88,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}
 	}
 	return Module{
-		Dashboard:   dashboard.NewService(dashboard.NewStaticReader()),
+		Dashboard:   dashboard.NewService(dashboardReader),
 		Cluster:     cluster.NewService(clusterRepo),
 		ClusterCred: clusterCredentialService,
 		Namespace:   namespace.NewService(namespaceRepo),

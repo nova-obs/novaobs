@@ -5,7 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"novaobs/internal/platform/authctx"
+	platformrbac "novaobs/internal/platform/rbac"
+
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 type staticReader struct {
@@ -57,4 +65,76 @@ func TestStaticReaderDefaultsUnknownClusterHealth(t *testing.T) {
 	require.Equal(t, HealthUnknown, snapshot.Stats.Health)
 	require.Equal(t, SyncUnknown, snapshot.Sync.Status)
 	require.Equal(t, "最近 15 分钟", snapshot.Sync.TimeWindow)
+}
+
+func TestKubernetesReaderBuildsRealClusterSnapshot(t *testing.T) {
+	replicas := int32(1)
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "logplatform", UID: "uid-logplatform"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "monitoring", UID: "uid-monitoring"}},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "prometheus", Namespace: "logplatform"},
+			Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+			Status:     appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "prometheus-0", Namespace: "logplatform"},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent-0", Namespace: "monitoring"},
+			Status:     corev1.PodStatus{Phase: corev1.PodPending},
+		},
+	)
+	reader := NewKubernetesReader(staticDashboardClientsetProvider{client: client}, allowDashboardReadAuthorizer{})
+	ctx := authctx.WithSubject(context.Background(), platformrbac.Subject{ID: "dev-admin", Type: "user"})
+
+	snapshot, err := reader.Read(ctx, Query{ClusterID: "test03-02"})
+
+	require.NoError(t, err)
+	require.Equal(t, "test03-02", snapshot.Stats.ClusterID)
+	require.Equal(t, 2, snapshot.Stats.Namespaces)
+	require.Equal(t, 1, snapshot.Stats.Workloads)
+	require.Equal(t, 2, snapshot.Stats.Pods.Total)
+	require.Equal(t, 1, snapshot.Stats.Pods.Ready)
+	require.Equal(t, 1, snapshot.Stats.Pods.Warning)
+	require.Equal(t, HealthWarning, snapshot.Stats.Health)
+	require.Equal(t, SyncApplied, snapshot.Sync.Status)
+	require.Equal(t, "Kubernetes API", snapshot.Sync.Source)
+	require.NotEmpty(t, snapshot.Signals)
+}
+
+func TestKubernetesReaderRequiresNamespaceReadPermission(t *testing.T) {
+	reader := NewKubernetesReader(staticDashboardClientsetProvider{client: fake.NewSimpleClientset()}, denyDashboardReadAuthorizer{})
+	ctx := authctx.WithSubject(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"})
+
+	_, err := reader.Read(ctx, Query{ClusterID: "prod"})
+
+	require.ErrorIs(t, err, ErrReadPermissionDenied)
+}
+
+type staticDashboardClientsetProvider struct {
+	client kubernetes.Interface
+}
+
+func (p staticDashboardClientsetProvider) Clientset(_ context.Context, _ string) (kubernetes.Interface, error) {
+	return p.client, nil
+}
+
+type allowDashboardReadAuthorizer struct{}
+
+func (allowDashboardReadAuthorizer) Authorize(_ platformrbac.Subject, _ platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: true}
+}
+
+type denyDashboardReadAuthorizer struct{}
+
+func (denyDashboardReadAuthorizer) Authorize(_ platformrbac.Subject, _ platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: false, Reason: "permission_denied"}
 }
