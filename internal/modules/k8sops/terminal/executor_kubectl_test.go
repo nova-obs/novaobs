@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	platformrbac "novaobs/internal/platform/rbac"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +29,7 @@ cat "$KUBECONFIG"
 		TempDir:    t.TempDir(),
 	})
 
-	result, err := executor.Exec(context.Background(), ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods", "-n", "orders"}})
+	result, err := executor.Exec(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods", "-n", "orders"}})
 
 	require.NoError(t, err)
 	require.Equal(t, 0, result.ExitCode)
@@ -51,7 +53,7 @@ exit 7
 		TempDir:    t.TempDir(),
 	})
 
-	result, err := executor.Exec(context.Background(), ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
+	result, err := executor.Exec(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
 
 	require.NoError(t, err)
 	require.Equal(t, 7, result.ExitCode)
@@ -72,7 +74,7 @@ echo "late"
 		TempDir:    t.TempDir(),
 	})
 
-	result, err := executor.Exec(context.Background(), ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
+	result, err := executor.Exec(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, ExecRequest{ClusterID: "prod", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
 
 	require.NoError(t, err)
 	require.Equal(t, 124, result.ExitCode)
@@ -82,7 +84,7 @@ echo "late"
 func TestKubectlExecutorRejectsMissingKubeconfig(t *testing.T) {
 	executor := NewKubectlExecutor(staticKubeconfigProvider{}, KubectlExecutorConfig{BinaryPath: "kubectl", Timeout: time.Second, TempDir: t.TempDir()})
 
-	_, err := executor.Exec(context.Background(), ExecRequest{ClusterID: "missing", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
+	_, err := executor.Exec(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, ExecRequest{ClusterID: "missing", Namespace: "orders"}, ParsedCommand{Verb: "get", Args: []string{"pods"}})
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "kubeconfig")
@@ -97,7 +99,7 @@ func writeFakeKubectl(t *testing.T, content string) string {
 
 type staticKubeconfigProvider map[string][]byte
 
-func (p staticKubeconfigProvider) Kubeconfig(ctx context.Context, clusterID string) ([]byte, error) {
+func (p staticKubeconfigProvider) Kubeconfig(ctx context.Context, subject platformrbac.Subject, clusterID string) ([]byte, error) {
 	value, ok := p[clusterID]
 	if !ok {
 		return nil, os.ErrNotExist

@@ -132,6 +132,15 @@ func (r *testSecretRepo) Get(ctx context.Context, id string) (secret.Secret, err
 	return item, nil
 }
 
+func (r *testSecretRepo) FindByTypeAndScope(ctx context.Context, typ string, scope secret.Scope) (secret.Secret, error) {
+	for _, item := range r.items {
+		if item.Type == typ && item.Scope.ClusterID == scope.ClusterID && item.Scope.Namespace == scope.Namespace && item.Scope.ServiceID == scope.ServiceID {
+			return item, nil
+		}
+	}
+	return secret.Secret{}, errors.New("secret not found")
+}
+
 func kubeconfigExporterRepo() testRBACRepo {
 	return testRBACRepo{
 		roles: map[string]platformrbac.Role{

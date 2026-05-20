@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	platformrbac "novaobs/internal/platform/rbac"
 )
 
 const (
@@ -17,7 +19,7 @@ const (
 )
 
 type KubeconfigProvider interface {
-	Kubeconfig(ctx context.Context, clusterID string) ([]byte, error)
+	Kubeconfig(ctx context.Context, subject platformrbac.Subject, clusterID string) ([]byte, error)
 }
 
 type KubectlExecutorConfig struct {
@@ -44,11 +46,11 @@ func NewKubectlExecutor(provider KubeconfigProvider, config KubectlExecutorConfi
 	return KubectlExecutor{provider: provider, config: config}
 }
 
-func (e KubectlExecutor) Exec(ctx context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
+func (e KubectlExecutor) Exec(ctx context.Context, subject platformrbac.Subject, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
 	if e.provider == nil {
 		return ExecResult{}, errors.New("kubeconfig provider is required")
 	}
-	kubeconfig, err := e.provider.Kubeconfig(ctx, req.ClusterID)
+	kubeconfig, err := e.provider.Kubeconfig(ctx, subject, req.ClusterID)
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("load kubeconfig for cluster %s: %w", req.ClusterID, err)
 	}

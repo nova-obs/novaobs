@@ -31,3 +31,18 @@ func (r *MemoryRepository) Get(ctx context.Context, id string) (Secret, error) {
 	}
 	return item, nil
 }
+
+func (r *MemoryRepository) FindByTypeAndScope(ctx context.Context, typ string, scope Scope) (Secret, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.items {
+		if item.Type == typ && scopeMatches(item.Scope, scope) {
+			return item, nil
+		}
+	}
+	return Secret{}, errors.New("secret not found")
+}
+
+func scopeMatches(left Scope, right Scope) bool {
+	return left.ClusterID == right.ClusterID && left.Namespace == right.Namespace && left.ServiceID == right.ServiceID
+}

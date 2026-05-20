@@ -112,3 +112,16 @@ func (s Service) Plaintext(ctx context.Context, id string) ([]byte, Secret, erro
 	item.Ciphertext = ""
 	return plaintext, item, nil
 }
+
+func (s Service) PlaintextByTypeAndScope(ctx context.Context, typ string, scope Scope) ([]byte, Secret, error) {
+	item, err := s.repo.FindByTypeAndScope(ctx, typ, scope)
+	if err != nil {
+		return nil, Secret{}, err
+	}
+	plaintext, err := s.encryptor.Decrypt(item.Ciphertext)
+	if err != nil {
+		return nil, Secret{}, err
+	}
+	item.Ciphertext = ""
+	return plaintext, item, nil
+}

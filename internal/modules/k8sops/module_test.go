@@ -45,6 +45,6 @@ func (allowAllAuthorizer) Authorize(subject rbac.Subject, req rbac.Request) rbac
 
 type moduleTerminalExecutor struct{}
 
-func (moduleTerminalExecutor) Exec(ctx context.Context, req terminal.ExecRequest, parsed terminal.ParsedCommand) (terminal.ExecResult, error) {
+func (moduleTerminalExecutor) Exec(ctx context.Context, subject rbac.Subject, req terminal.ExecRequest, parsed terminal.ParsedCommand) (terminal.ExecResult, error) {
 	return terminal.ExecResult{Output: "custom executor", Mode: "custom"}, nil
 }

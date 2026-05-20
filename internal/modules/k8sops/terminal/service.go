@@ -26,7 +26,7 @@ type Auditor interface {
 }
 
 type Executor interface {
-	Exec(ctx context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error)
+	Exec(ctx context.Context, subject platformrbac.Subject, req ExecRequest, parsed ParsedCommand) (ExecResult, error)
 }
 
 type Service struct {
@@ -94,7 +94,7 @@ func (s Service) Exec(ctx context.Context, subject platformrbac.Subject, req Exe
 			Mode:          "policy_guard",
 		}, ErrCommandBlocked
 	}
-	result, err := s.executor.Exec(ctx, req, parsed)
+	result, err := s.executor.Exec(ctx, subject, req, parsed)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -154,7 +154,7 @@ func (s Service) record(ctx context.Context, subject platformrbac.Subject, req E
 
 type dryRunExecutor struct{}
 
-func (dryRunExecutor) Exec(_ context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
+func (dryRunExecutor) Exec(_ context.Context, subject platformrbac.Subject, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
 	return ExecResult{
 		Status:   "accepted",
 		Verb:     parsed.Verb,

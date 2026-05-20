@@ -2,6 +2,7 @@ package memstore
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"novaobs/internal/database"
@@ -591,6 +592,50 @@ func (st *secretStore) FindByID(ctx context.Context, id string, result interface
 		return errNotFound
 	}
 	return copyValue(v, result)
+}
+
+func (st *secretStore) FindByTypeAndScope(ctx context.Context, typ string, scope interface{}, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	for _, value := range st.s.secs {
+		if secretMatchesTypeAndScope(value, typ, scope) {
+			return copyValue(value, result)
+		}
+	}
+	return errNotFound
+}
+
+func secretMatchesTypeAndScope(value interface{}, typ string, scope interface{}) bool {
+	var doc struct {
+		Type  string         `json:"type"`
+		Scope map[string]any `json:"scope"`
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	if doc.Type != typ {
+		return false
+	}
+	var wanted map[string]any
+	data, err = json.Marshal(scope)
+	if err != nil {
+		return false
+	}
+	if err := json.Unmarshal(data, &wanted); err != nil {
+		return false
+	}
+	return stringValue(doc.Scope["cluster_id"]) == stringValue(wanted["cluster_id"]) &&
+		stringValue(doc.Scope["namespace"]) == stringValue(wanted["namespace"]) &&
+		stringValue(doc.Scope["service_id"]) == stringValue(wanted["service_id"])
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 // ---------- Audit Events ----------

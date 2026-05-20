@@ -179,6 +179,6 @@ type fixedExecutor struct {
 	output string
 }
 
-func (e fixedExecutor) Exec(ctx context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
+func (e fixedExecutor) Exec(ctx context.Context, subject platformrbac.Subject, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
 	return ExecResult{Output: e.output, ExitCode: 0, Mode: "fixed"}, nil
 }

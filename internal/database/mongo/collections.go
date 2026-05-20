@@ -425,6 +425,22 @@ func (s *secretStore) FindByID(ctx context.Context, id string, result interface{
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
 }
 
+func (s *secretStore) FindByTypeAndScope(ctx context.Context, typ string, scope interface{}, result interface{}) error {
+	scopeDoc, err := toBSONMap(scope)
+	if err != nil {
+		return err
+	}
+	filter := bson.M{"type": typ}
+	for _, key := range []string{"cluster_id", "namespace", "service_id"} {
+		if value, ok := scopeDoc[key]; ok && value != "" {
+			filter["scope."+key] = value
+			continue
+		}
+		filter["scope."+key] = bson.M{"$in": []any{"", nil}}
+	}
+	return s.col.FindOne(ctx, filter).Decode(result)
+}
+
 // ---------- Audit Events ----------
 type auditEventStore struct{ col *mongo.Collection }
 

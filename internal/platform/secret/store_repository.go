@@ -23,3 +23,9 @@ func (r StoreRepository) Get(ctx context.Context, id string) (Secret, error) {
 	err := r.store.FindByID(ctx, id, &item)
 	return item, err
 }
+
+func (r StoreRepository) FindByTypeAndScope(ctx context.Context, typ string, scope Scope) (Secret, error) {
+	var item Secret
+	err := r.store.FindByTypeAndScope(ctx, typ, scope, &item)
+	return item, err
+}
