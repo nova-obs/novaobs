@@ -24,6 +24,7 @@ import (
 	k8sopsresource "novaobs/internal/modules/k8sops/resource"
 	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
 	k8sopstemplate "novaobs/internal/modules/k8sops/template"
+	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/servicecatalog"
@@ -156,6 +157,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.PUT("/k8s/templates", k8sopstemplate.UpdateHandler(deps.K8sOpsModule.Template))
 	api.DELETE("/k8s/templates/:id", k8sopstemplate.DeleteHandler(deps.K8sOpsModule.Template))
 	api.POST("/k8s/templates/render", k8sopstemplate.RenderHandler(deps.K8sOpsModule.Template))
+	api.POST("/k8s/terminal/exec", k8sopsterminal.ExecHandler(deps.K8sOpsModule.Terminal))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))

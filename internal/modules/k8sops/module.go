@@ -11,6 +11,7 @@ import (
 	"novaobs/internal/modules/k8sops/resource"
 	"novaobs/internal/modules/k8sops/serviceaccount"
 	k8stemplate "novaobs/internal/modules/k8sops/template"
+	"novaobs/internal/modules/k8sops/terminal"
 	"novaobs/internal/platform/secret"
 )
 
@@ -25,6 +26,7 @@ type Module struct {
 	RBAC           k8srbac.Service
 	Kubeconfig     kubeconfig.Service
 	Template       k8stemplate.Service
+	Terminal       terminal.Service
 }
 
 func NewModule() Module {
@@ -95,5 +97,6 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				Source:      "startorch",
 			},
 		}), authorizer, auditor),
+		Terminal: terminal.NewService(authorizer, auditor),
 	}
 }
