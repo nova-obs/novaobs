@@ -1,9 +1,11 @@
 package resource
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +26,14 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
+				return
+			}
+			if errors.Is(err, ErrNamespaceRequired) {
+				response.Error(ctx, http.StatusBadRequest, "invalid_request", "资源列表必须指定命名空间")
+				return
+			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_resource_list_failed", "资源列表查询失败")
 			return
 		}
@@ -35,6 +45,10 @@ func DetailHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		detail, err := service.GetDetail(ctx.Request.Context(), DetailQuery{Identity: identityFromQuery(ctx)})
 		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
+				return
+			}
 			response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
 			return
 		}
@@ -46,6 +60,10 @@ func YAMLHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		yaml, err := service.GetYAML(ctx.Request.Context(), DetailQuery{Identity: identityFromQuery(ctx)})
 		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
+				return
+			}
 			response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
 			return
 		}
@@ -62,6 +80,10 @@ func PodLogsHandler(service Service) gin.HandlerFunc {
 			Container: ctx.Query("container"),
 		})
 		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Pod 日志")
+				return
+			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_pod_logs_failed", "Pod 日志查询失败")
 			return
 		}

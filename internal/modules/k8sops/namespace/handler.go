@@ -1,9 +1,11 @@
 package namespace
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +23,10 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 命名空间")
+				return
+			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_namespace_list_failed", "命名空间列表查询失败")
 			return
 		}

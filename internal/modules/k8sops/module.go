@@ -5,6 +5,7 @@ import (
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/dashboard"
 	"novaobs/internal/modules/k8sops/deployment"
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/modules/k8sops/kubeconfig"
 	"novaobs/internal/modules/k8sops/namespace"
 	k8srbac "novaobs/internal/modules/k8sops/rbac"
@@ -52,6 +53,19 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
 		{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},
 	}))
+	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
+	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
+		{
+			Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
+			Status:   "warning",
+			Labels:   map[string]string{"app": "orders-api"},
+		},
+		{
+			Identity: resource.Identity{ClusterID: "prod", Namespace: "payment", APIVersion: "apps/v1", Kind: "Deployment", Name: "payment-gateway", UID: "uid-payment-gateway"},
+			Status:   "healthy",
+			Labels:   map[string]string{"app": "payment-gateway"},
+		},
+	}))
 	terminalDependencies := []any{authorizer, auditor}
 	for _, dependency := range dependencies {
 		switch value := dependency.(type) {
@@ -62,6 +76,15 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		case namespace.Repository:
 			if value != nil {
 				namespaceRepo = value
+			}
+		case resource.Reader:
+			if value != nil {
+				resourceReader = value
+			}
+		case kubeclient.ClientsetProvider:
+			if value != nil {
+				namespaceRepo = namespace.NewKubernetesRepository(value, authorizer)
+				resourceReader = resource.NewKubernetesReader(value, authorizer)
 			}
 		case terminal.Executor:
 			if value != nil {
@@ -74,20 +97,9 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	return Module{
 		Dashboard:   dashboard.NewService(dashboard.NewStaticReader()),
 		Cluster:     cluster.NewService(clusterRepo),
-		ClusterCred: cluster.NewCredentialService(secrets, authorizer, auditor),
+		ClusterCred: clusterCredentialService,
 		Namespace:   namespace.NewService(namespaceRepo),
-		Resource: resource.NewService(resource.NewMemoryReader([]resource.ResourceSummary{
-			{
-				Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
-				Status:   "warning",
-				Labels:   map[string]string{"app": "orders-api"},
-			},
-			{
-				Identity: resource.Identity{ClusterID: "prod", Namespace: "payment", APIVersion: "apps/v1", Kind: "Deployment", Name: "payment-gateway", UID: "uid-payment-gateway"},
-				Status:   "healthy",
-				Labels:   map[string]string{"app": "payment-gateway"},
-			},
-		})),
+		Resource:    resource.NewService(resourceReader),
 		Deploy: deployment.NewService(deployment.NewMemoryReader([]deployment.HistoryRecord{
 			{ID: "deploy-orders-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "rollout.pause", Status: "warning", Revision: "rev-1842", Actor: "platform-admin"},
 		}, []deployment.AuditEvent{

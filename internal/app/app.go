@@ -13,7 +13,7 @@ import (
 	"novaobs/internal/logquery"
 	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/modules/k8sops/namespace"
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -57,12 +57,14 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	rbacSvc := rbac.NewService(rbacRepo)
 	auditSvc := audit.NewService(audit.NewStoreRepository(store.AuditEvents()))
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
+	clusterCredentialSvc := cluster.NewCredentialService(secretSvc, rbacSvc, auditSvc)
+	k8sClientProvider := kubeclient.NewProvider(clusterCredentialSvc)
 	k8sOpsModule := k8sops.NewModuleWithSecurity(
 		rbacSvc,
 		auditSvc,
 		secretSvc,
 		cluster.NewStoreRepository(store.K8sClusters()),
-		namespace.NewStoreRepository(store.K8sNamespaces()),
+		k8sClientProvider,
 	)
 	opampMgr := opamp.NewManager()
 
