@@ -27,6 +27,8 @@ import (
 	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
+	"novaobs/internal/platform/authctx"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
 	"novaobs/pkg/response"
@@ -50,11 +52,15 @@ type Dependencies struct {
 	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
 	CollectorTemplate      string
+	DefaultSubject         platformrbac.Subject
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
+	if deps.DefaultSubject.ID != "" && deps.DefaultSubject.Type != "" {
+		router.Use(defaultSubjectMiddleware(deps.DefaultSubject))
+	}
 	if deps.OpAMPManager != nil {
 		deps.OpAMPManager.SetStateSink(func(ctx context.Context, state opamp.AgentState) {
 			_, _ = deps.CollectorService.UpsertInstance(ctx, state.InstanceUID, state.CollectorGroupID, collectormanagement.InstanceStatus{
@@ -175,6 +181,15 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	return router
+}
+
+func defaultSubjectMiddleware(subject platformrbac.Subject) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if _, ok := authctx.SubjectFrom(ctx.Request.Context()); !ok {
+			ctx.Request = ctx.Request.WithContext(authctx.WithSubject(ctx.Request.Context(), subject))
+		}
+		ctx.Next()
+	}
 }
 
 func getK8sOpsDashboardHandler(service k8sopsdashboard.Service) gin.HandlerFunc {

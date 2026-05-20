@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
+	"novaobs/internal/platform/audit"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 
 	"github.com/gin-gonic/gin"
@@ -81,6 +84,30 @@ func newTestRouter(t *testing.T) testEnv {
 		OpAMPManager:           manager,
 	})
 	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
+}
+
+func TestRouterInjectsDefaultSubjectForK8sOpsWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := memstore.NewStore()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsureK8sOpsDefaults(rbacRepo, platformrbac.DevAdminSubject(), platformrbac.DevK8sOpsScope()))
+	rbacSvc := platformrbac.NewService(rbacRepo)
+	auditSvc := audit.NewService(audit.NewMemoryStore())
+	router := NewRouter(Dependencies{
+		Store:          store,
+		K8sOpsModule:   k8sops.NewModuleWithSecurity(rbacSvc, auditSvc, nil),
+		DefaultSubject: platformrbac.DevAdminSubject(),
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/terminal/exec", strings.NewReader(`{"cluster_id":"prod","namespace":"orders","command":"get pods -n orders"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"accepted"`)
+	require.Contains(t, recorder.Body.String(), `"audit_id"`)
 }
 
 func TestRouterServesCoreAPIs(t *testing.T) {

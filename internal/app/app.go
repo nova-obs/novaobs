@@ -46,13 +46,19 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	)
 	alertSvc := alerting.NewService(store.AlertRules())
 	logQuerySvc := logquery.NewService()
-	rbacSvc := rbac.NewService(rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()))
+	rbacRepo := rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	if cfg.Server.Mode != gin.ReleaseMode {
+		if err := rbac.EnsureK8sOpsDefaults(rbacRepo, rbac.DevAdminSubject(), rbac.DevK8sOpsScope()); err != nil {
+			return nil, fmt.Errorf("初始化 K8s 运维 RBAC 失败: %w", err)
+		}
+	}
+	rbacSvc := rbac.NewService(rbacRepo)
 	auditSvc := audit.NewService(audit.NewMemoryStore())
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
 	k8sOpsModule := k8sops.NewModuleWithSecurity(rbacSvc, auditSvc, secretSvc)
 	opampMgr := opamp.NewManager()
 
-	return httpapi.NewRouter(httpapi.Dependencies{
+	deps := httpapi.Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
 		ServiceTargetRepo:      targetRepo,
@@ -64,5 +70,9 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		K8sOpsModule:           k8sOpsModule,
 		OpAMPManager:           opampMgr,
 		CollectorTemplate:      cfg.CollectorTemplate,
-	}), nil
+	}
+	if cfg.Server.Mode != gin.ReleaseMode {
+		deps.DefaultSubject = rbac.DevAdminSubject()
+	}
+	return httpapi.NewRouter(deps), nil
 }
