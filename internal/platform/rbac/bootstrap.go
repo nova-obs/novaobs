@@ -3,10 +3,11 @@ package rbac
 import "time"
 
 const (
-	K8sOpsAdminRoleID        = "role-k8s-ops-admin"
-	K8sOpsGlobalAdminRoleID  = "role-k8s-ops-global-admin"
-	K8sOpsGlobalReaderRoleID = "role-k8s-ops-global-reader"
-	k8sOpsAdminBindingPrefix = "binding-k8s-ops-admin-"
+	K8sOpsAdminRoleID                   = "role-k8s-ops-admin"
+	K8sOpsGlobalAdminRoleID             = "role-k8s-ops-global-admin"
+	K8sOpsGlobalReaderRoleID            = "role-k8s-ops-global-reader"
+	K8sOpsGlobalCredentialManagerRoleID = "role-k8s-ops-global-credential-manager"
+	k8sOpsAdminBindingPrefix            = "binding-k8s-ops-admin-"
 )
 
 func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
@@ -62,6 +63,17 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	globalCredentialManagerRole := Role{
+		ID:          K8sOpsGlobalCredentialManagerRoleID,
+		Name:        "K8s 运维全局凭据托管",
+		Description: "NovaObs K8s 运维开发态真实集群 kubeconfig 托管默认角色",
+		Permissions: []Permission{
+			{Resource: "k8s.cluster-credential", Action: "create", ScopeMode: "cluster"},
+			{Resource: "k8s.cluster-credential", Action: "rotate", ScopeMode: "cluster"},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	if err := repo.SaveRole(namespaceRole); err != nil {
 		return err
 	}
@@ -69,6 +81,9 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		return err
 	}
 	if err := repo.SaveRole(globalReaderRole); err != nil {
+		return err
+	}
+	if err := repo.SaveRole(globalCredentialManagerRole); err != nil {
 		return err
 	}
 	if subject.ID == "" || subject.Type == "" {
@@ -107,7 +122,19 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	return repo.SaveBinding(globalReaderBinding)
+	if err := repo.SaveBinding(globalReaderBinding); err != nil {
+		return err
+	}
+	globalCredentialManagerBinding := Binding{
+		ID:          k8sOpsAdminBindingPrefix + "global-credential-manager-" + subject.Type + "-" + subject.ID,
+		SubjectID:   subject.ID,
+		SubjectType: subject.Type,
+		RoleID:      K8sOpsGlobalCredentialManagerRoleID,
+		Scope:       Scope{Global: true},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	return repo.SaveBinding(globalCredentialManagerBinding)
 }
 
 func DevAdminSubject() Subject {

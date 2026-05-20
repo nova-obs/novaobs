@@ -73,7 +73,23 @@ func TestEnsureK8sOpsDefaultsAllowsGlobalK8sReadOnly(t *testing.T) {
 	}
 }
 
-func TestEnsureK8sOpsDefaultsDoesNotExpandWriteScopeWithGlobalReads(t *testing.T) {
+func TestEnsureK8sOpsDefaultsAllowsGlobalClusterCredentialManagement(t *testing.T) {
+	repo := NewMemoryRepository()
+
+	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), DevK8sOpsScope())
+
+	require.NoError(t, err)
+	svc := NewService(repo)
+	for _, req := range []Request{
+		{Resource: "k8s.cluster-credential", Action: "create", Scope: Scope{ClusterID: "stage"}},
+		{Resource: "k8s.cluster-credential", Action: "rotate", Scope: Scope{ClusterID: "stage"}},
+	} {
+		decision := svc.Authorize(DevAdminSubject(), req)
+		require.True(t, decision.Allowed, "%s:%s", req.Resource, req.Action)
+	}
+}
+
+func TestEnsureK8sOpsDefaultsDoesNotExpandClusterWriteScopeWithGlobalCredentialManagement(t *testing.T) {
 	repo := NewMemoryRepository()
 
 	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), DevK8sOpsScope())
@@ -83,7 +99,7 @@ func TestEnsureK8sOpsDefaultsDoesNotExpandWriteScopeWithGlobalReads(t *testing.T
 	for _, req := range []Request{
 		{Resource: "k8s.terminal", Action: "exec", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
-		{Resource: "k8s.cluster-credential", Action: "create", Scope: Scope{ClusterID: "stage"}},
+		{Resource: "k8s.rbac", Action: "delete", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)
 		require.False(t, decision.Allowed, "%s:%s", req.Resource, req.Action)
