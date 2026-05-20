@@ -32,6 +32,7 @@ type Store struct {
 	rrCol  *mongo.Collection
 	rbCol  *mongo.Collection
 	secCol *mongo.Collection
+	aeCol  *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -64,6 +65,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		rrCol:  db.Collection("rbac_roles"),
 		rbCol:  db.Collection("rbac_bindings"),
 		secCol: db.Collection("secrets"),
+		aeCol:  db.Collection("audit_events"),
 	}, nil
 }
 
@@ -101,6 +103,7 @@ func (s *Store) AlertRules() database.AlertRuleStore                  { return &
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
 func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s.secCol} }
+func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s.aeCol} }
 
 // ---------- helpers ----------
 

@@ -20,6 +20,7 @@ type Store interface {
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
 	Secrets() SecretStore
+	AuditEvents() AuditEventStore
 	Close(ctx context.Context) error
 }
 
@@ -130,4 +131,9 @@ type RBACBindingStore interface {
 type SecretStore interface {
 	Upsert(ctx context.Context, id string, secret interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
+}
+
+type AuditEventStore interface {
+	Insert(ctx context.Context, event interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 }

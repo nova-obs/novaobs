@@ -28,6 +28,7 @@ type Store struct {
 	rrs  map[string]interface{}
 	rbs  map[string]interface{}
 	secs map[string]interface{}
+	aes  map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -49,6 +50,7 @@ func NewStore() *Store {
 		rrs:  map[string]interface{}{},
 		rbs:  map[string]interface{}{},
 		secs: map[string]interface{}{},
+		aes:  map[string]interface{}{},
 	}
 }
 
@@ -84,6 +86,7 @@ func (s *Store) AlertRules() database.AlertRuleStore                  { return &
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
 func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s} }
+func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s} }
 
 // ---------- Services ----------
 
@@ -588,4 +591,25 @@ func (st *secretStore) FindByID(ctx context.Context, id string, result interface
 		return errNotFound
 	}
 	return copyValue(v, result)
+}
+
+// ---------- Audit Events ----------
+
+type auditEventStore struct{ s *Store }
+
+func (st *auditEventStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	st.s.aes[id] = v
+	return nil
+}
+
+func (st *auditEventStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.aes, results)
 }

@@ -26,9 +26,10 @@ type Reader interface {
 }
 
 type Service struct {
-	reader     Reader
-	authorizer Authorizer
-	auditor    Auditor
+	reader      Reader
+	authorizer  Authorizer
+	auditor     Auditor
+	auditReader AuditEventReader
 }
 
 type Authorizer interface {
@@ -39,18 +40,21 @@ type Auditor interface {
 	Record(ctx context.Context, event audit.Event) (audit.Event, error)
 }
 
+type AuditEventReader interface {
+	List(ctx context.Context) ([]audit.Event, error)
+}
+
 func NewService(reader Reader, security ...any) Service {
 	service := Service{reader: reader, authorizer: denyAuthorizer{}, auditor: noopAuditor{}}
 	for _, item := range security {
-		switch value := item.(type) {
-		case Authorizer:
-			if value != nil {
-				service.authorizer = value
-			}
-		case Auditor:
-			if value != nil {
-				service.auditor = value
-			}
+		if value, ok := item.(Authorizer); ok && value != nil {
+			service.authorizer = value
+		}
+		if value, ok := item.(Auditor); ok && value != nil {
+			service.auditor = value
+		}
+		if value, ok := item.(AuditEventReader); ok && value != nil {
+			service.auditReader = value
 		}
 	}
 	return service
@@ -61,7 +65,27 @@ func (s Service) ListHistory(ctx context.Context, filter ListFilter) ([]HistoryR
 }
 
 func (s Service) ListAuditEvents(ctx context.Context, filter ListFilter) ([]AuditEvent, error) {
-	return s.reader.ListAuditEvents(ctx, filter)
+	unpaged := filter
+	unpaged.Page = 0
+	unpaged.PageSize = 0
+	items, err := s.reader.ListAuditEvents(ctx, unpaged)
+	if err != nil {
+		return nil, err
+	}
+	if s.auditReader != nil {
+		events, err := s.auditReader.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range events {
+			item, ok := platformAuditToK8sEvent(event, filter)
+			if ok {
+				items = append(items, item)
+			}
+		}
+	}
+	sortAuditEvents(items, filter.Order)
+	return paginateAudit(items, filter.Page, filter.PageSize), nil
 }
 
 func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req OperationRequest) (OperationResult, error) {
@@ -197,14 +221,134 @@ func (r MemoryReader) ListAuditEvents(_ context.Context, filter ListFilter) ([]A
 		}
 		out = append(out, item)
 	}
-	sort.SliceStable(out, func(left, right int) bool {
-		less := out[left].CreatedAt.Before(out[right].CreatedAt)
-		if strings.EqualFold(filter.Order, "asc") {
+	sortAuditEvents(out, filter.Order)
+	return paginateAudit(out, filter.Page, filter.PageSize), nil
+}
+
+func sortAuditEvents(items []AuditEvent, order string) {
+	sort.SliceStable(items, func(left, right int) bool {
+		less := items[left].CreatedAt.Before(items[right].CreatedAt)
+		if strings.EqualFold(order, "asc") {
 			return less
 		}
 		return !less
 	})
-	return paginateAudit(out, filter.Page, filter.PageSize), nil
+}
+
+func platformAuditToK8sEvent(event audit.Event, filter ListFilter) (AuditEvent, bool) {
+	resourceType := event.ResourceType
+	if resourceType == "" {
+		resourceType = event.Resource.Type
+	}
+	if !strings.HasPrefix(resourceType, "k8s.") {
+		return AuditEvent{}, false
+	}
+	clusterID := summaryString(event.RequestSummary, "cluster_id")
+	if clusterID == "" {
+		clusterID = scopeValue(event.Scope, "cluster")
+	}
+	namespace := summaryString(event.RequestSummary, "namespace")
+	if namespace == "" {
+		namespace = scopeValue(event.Scope, "namespace")
+	}
+	if filter.ClusterID != "" && clusterID != filter.ClusterID {
+		return AuditEvent{}, false
+	}
+	if filter.Namespace != "" && namespace != filter.Namespace {
+		return AuditEvent{}, false
+	}
+
+	resourceKind := strings.TrimPrefix(resourceType, "k8s.")
+	resourceName := event.ResourceName
+	if resourceName == "" {
+		resourceName = event.Resource.Name
+	}
+	if resourceKind == "deployment" {
+		resourceKind = summaryResourceString(event.RequestSummary, "kind", resourceKind)
+		resourceName = summaryResourceString(event.RequestSummary, "name", resourceName)
+	}
+	actor := event.Actor.Name
+	if actor == "" {
+		actor = event.ActorName
+	}
+	if actor == "" {
+		actor = event.Actor.ID
+	}
+	status := event.Result
+	if status == "" {
+		status = "success"
+	}
+	traceID := event.TraceID
+	if traceID == "" {
+		traceID = event.Trace
+	}
+	item := AuditEvent{
+		ID:           event.ID,
+		ClusterID:    clusterID,
+		Namespace:    namespace,
+		ResourceKind: resourceKind,
+		ResourceName: resourceName,
+		Action:       event.Action,
+		Actor:        actor,
+		Status:       status,
+		TraceID:      traceID,
+		CreatedAt:    event.CreatedAt,
+	}
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	if query != "" && !strings.Contains(strings.ToLower(item.ResourceName), query) &&
+		!strings.Contains(strings.ToLower(item.ResourceKind), query) &&
+		!strings.Contains(strings.ToLower(item.Action), query) &&
+		!strings.Contains(strings.ToLower(item.Actor), query) {
+		return AuditEvent{}, false
+	}
+	return item, true
+}
+
+func summaryString(summary map[string]any, key string) string {
+	if summary == nil {
+		return ""
+	}
+	value, _ := summary[key].(string)
+	return value
+}
+
+func summaryResourceString(summary map[string]any, key string, fallback string) string {
+	if summary == nil {
+		return fallback
+	}
+	if resource, ok := summary["resource"].(map[string]string); ok {
+		if value := resource[key]; value != "" {
+			return value
+		}
+	}
+	if resource, ok := summary["resource"].(map[string]any); ok {
+		if value, _ := resource[key].(string); value != "" {
+			return value
+		}
+	}
+	if resources, ok := summary["resources"].([]map[string]string); ok && len(resources) > 0 {
+		if value := resources[0][key]; value != "" {
+			return value
+		}
+	}
+	if resources, ok := summary["resources"].([]any); ok && len(resources) > 0 {
+		if resource, ok := resources[0].(map[string]any); ok {
+			if value, _ := resource[key].(string); value != "" {
+				return value
+			}
+		}
+	}
+	return fallback
+}
+
+func scopeValue(scope string, key string) string {
+	for _, field := range strings.Fields(scope) {
+		name, value, ok := strings.Cut(field, "=")
+		if ok && name == key {
+			return value
+		}
+	}
+	return ""
 }
 
 func paginateHistory(items []HistoryRecord, page int, pageSize int) []HistoryRecord {

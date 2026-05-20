@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"novaobs/internal/database/memstore"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,4 +69,30 @@ func TestServiceSanitizesNestedSensitiveFields(t *testing.T) {
 	containers := event.RequestSummary["containers"].([]any)
 	container := containers[0].(map[string]any)
 	require.Equal(t, "[redacted]", container["private_key"])
+}
+
+func TestStoreRepositoryPersistsRecordedEvents(t *testing.T) {
+	store := memstore.NewStore()
+	svc := NewService(NewStoreRepository(store.AuditEvents()))
+
+	recorded, err := svc.Record(context.Background(), Event{
+		Actor:    Actor{ID: "user-1", Name: "alice"},
+		Resource: Resource{Type: "k8s.terminal", Name: "orders"},
+		Action:   "exec",
+		Scope:    "cluster=prod namespace=orders",
+		RequestSummary: map[string]any{
+			"cluster_id": "prod",
+			"namespace":  "orders",
+			"command":    "get pods",
+		},
+		Result: "success",
+	})
+	require.NoError(t, err)
+
+	events, err := svc.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, recorded.ID, events[0].ID)
+	require.Equal(t, "k8s.terminal", events[0].ResourceType)
+	require.Equal(t, "orders", events[0].RequestSummary["namespace"])
 }

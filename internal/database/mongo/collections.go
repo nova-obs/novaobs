@@ -424,3 +424,19 @@ func (s *secretStore) Upsert(ctx context.Context, id string, secret interface{})
 func (s *secretStore) FindByID(ctx context.Context, id string, result interface{}) error {
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
 }
+
+// ---------- Audit Events ----------
+type auditEventStore struct{ col *mongo.Collection }
+
+func (s *auditEventStore) Insert(ctx context.Context, event interface{}) error {
+	_, err := s.col.InsertOne(ctx, event)
+	return err
+}
+
+func (s *auditEventStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"created_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}

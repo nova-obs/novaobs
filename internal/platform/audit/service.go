@@ -37,6 +37,10 @@ func (s Service) Record(ctx context.Context, event Event) (Event, error) {
 	return event, nil
 }
 
+func (s Service) List(ctx context.Context) ([]Event, error) {
+	return s.store.List(ctx)
+}
+
 func normalizeEvent(event Event) Event {
 	if event.Actor.ID == "" {
 		event.Actor.ID = event.ActorID

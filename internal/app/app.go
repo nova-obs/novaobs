@@ -53,7 +53,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		}
 	}
 	rbacSvc := rbac.NewService(rbacRepo)
-	auditSvc := audit.NewService(audit.NewMemoryStore())
+	auditSvc := audit.NewService(audit.NewStoreRepository(store.AuditEvents()))
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
 	k8sOpsModule := k8sops.NewModuleWithSecurity(rbacSvc, auditSvc, secretSvc)
 	opampMgr := opamp.NewManager()
