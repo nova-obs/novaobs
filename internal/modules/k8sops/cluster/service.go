@@ -2,12 +2,22 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 )
 
+var (
+	ErrInvalidClusterRequest  = errors.New("invalid_cluster_request")
+	ErrClusterRepositoryWrite = errors.New("cluster_repository_write_unavailable")
+)
+
 type Repository interface {
 	List(ctx context.Context, filter ListFilter) ([]Cluster, error)
+}
+
+type UpsertRepository interface {
+	Upsert(ctx context.Context, item Cluster) (Cluster, error)
 }
 
 type Service struct {
@@ -20,6 +30,28 @@ func NewService(repo Repository) Service {
 
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Cluster, error) {
 	return s.repo.List(ctx, filter)
+}
+
+func (s Service) Create(ctx context.Context, req UpsertRequest) (Cluster, error) {
+	item := Cluster{
+		ID:          strings.TrimSpace(req.ID),
+		Name:        strings.TrimSpace(req.Name),
+		Version:     strings.TrimSpace(req.Version),
+		Region:      strings.TrimSpace(req.Region),
+		Description: strings.TrimSpace(req.Description),
+		Status:      strings.TrimSpace(req.Status),
+	}
+	if item.ID == "" || item.Name == "" {
+		return Cluster{}, ErrInvalidClusterRequest
+	}
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	repo, ok := s.repo.(UpsertRepository)
+	if !ok {
+		return Cluster{}, ErrClusterRepositoryWrite
+	}
+	return repo.Upsert(ctx, item)
 }
 
 type MemoryRepository struct {
@@ -42,6 +74,20 @@ func (r MemoryRepository) List(_ context.Context, filter ListFilter) ([]Cluster,
 	}
 	sortClusters(out, filter.Sort, filter.Order)
 	return paginate(out, filter.Page, filter.PageSize), nil
+}
+
+func (r *MemoryRepository) Upsert(_ context.Context, item Cluster) (Cluster, error) {
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	for index, current := range r.items {
+		if current.ID == item.ID {
+			r.items[index] = item
+			return item, nil
+		}
+	}
+	r.items = append(r.items, item)
+	return item, nil
 }
 
 func sortClusters(items []Cluster, field string, order string) {

@@ -30,6 +30,8 @@ type Store struct {
 	rbs  map[string]interface{}
 	secs map[string]interface{}
 	aes  map[string]interface{}
+	kcls map[string]interface{}
+	knss map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -52,6 +54,8 @@ func NewStore() *Store {
 		rbs:  map[string]interface{}{},
 		secs: map[string]interface{}{},
 		aes:  map[string]interface{}{},
+		kcls: map[string]interface{}{},
+		knss: map[string]interface{}{},
 	}
 }
 
@@ -88,6 +92,8 @@ func (s *Store) RBACRoles() database.RBACRoleStore                    { return &
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
 func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s} }
 func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s} }
+func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s} }
 
 // ---------- Services ----------
 
@@ -669,4 +675,48 @@ func (st *auditEventStore) FindAll(ctx context.Context, results interface{}) err
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
 	return copyAll(st.s.aes, results)
+}
+
+// ---------- K8s Ops Stores ----------
+
+type k8sClusterStore struct{ s *Store }
+
+func (st *k8sClusterStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.kcls[id] = v
+	return nil
+}
+
+func (st *k8sClusterStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.kcls, results)
+}
+
+type k8sNamespaceStore struct{ s *Store }
+
+func (st *k8sNamespaceStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.knss[id] = v
+	return nil
+}
+
+func (st *k8sNamespaceStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.knss, results)
+}
+
+func (st *k8sNamespaceStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.knss {
+		if extractStringField(value, "ClusterID") == clusterID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
 }

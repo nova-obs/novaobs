@@ -132,6 +132,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
+	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))
 	api.GET("/k8s/cluster-credentials", k8sopscluster.ListCredentialHandler(deps.K8sOpsModule.ClusterCred))
 	api.POST("/k8s/cluster-credentials", k8sopscluster.CreateCredentialHandler(deps.K8sOpsModule.ClusterCred))
 	api.POST("/k8s/cluster-credentials/rotate", k8sopscluster.RotateCredentialHandler(deps.K8sOpsModule.ClusterCred))

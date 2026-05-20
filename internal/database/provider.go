@@ -21,6 +21,8 @@ type Store interface {
 	RBACBindings() RBACBindingStore
 	Secrets() SecretStore
 	AuditEvents() AuditEventStore
+	K8sClusters() K8sClusterStore
+	K8sNamespaces() K8sNamespaceStore
 	Close(ctx context.Context) error
 }
 
@@ -138,4 +140,15 @@ type SecretStore interface {
 type AuditEventStore interface {
 	Insert(ctx context.Context, event interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
+}
+
+type K8sClusterStore interface {
+	Upsert(ctx context.Context, id string, cluster interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+}
+
+type K8sNamespaceStore interface {
+	Upsert(ctx context.Context, id string, namespace interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByCluster(ctx context.Context, clusterID string, results interface{}) error
 }

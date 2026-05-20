@@ -33,6 +33,8 @@ type Store struct {
 	rbCol  *mongo.Collection
 	secCol *mongo.Collection
 	aeCol  *mongo.Collection
+	kclCol *mongo.Collection
+	knsCol *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -66,6 +68,8 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		rbCol:  db.Collection("rbac_bindings"),
 		secCol: db.Collection("secrets"),
 		aeCol:  db.Collection("audit_events"),
+		kclCol: db.Collection("k8s_clusters"),
+		knsCol: db.Collection("k8s_namespaces"),
 	}, nil
 }
 
@@ -104,6 +108,8 @@ func (s *Store) RBACRoles() database.RBACRoleStore                    { return &
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
 func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s.secCol} }
 func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s.aeCol} }
+func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s.kclCol} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s.knsCol} }
 
 // ---------- helpers ----------
 

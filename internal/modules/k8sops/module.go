@@ -38,9 +38,31 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	if secrets == nil {
 		secrets = secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
 	}
+	clusterRepo := cluster.Repository(cluster.NewMemoryRepository([]cluster.Cluster{
+		{
+			ID:          "prod",
+			Name:        "prod-core",
+			Version:     "v1.29.4",
+			Region:      "cn-shanghai",
+			Description: "生产核心集群，来自 startorch 集群清单基线",
+			Status:      "active",
+		},
+	}))
+	namespaceRepo := namespace.Repository(namespace.NewMemoryRepository([]namespace.Namespace{
+		{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
+		{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},
+	}))
 	terminalDependencies := []any{authorizer, auditor}
 	for _, dependency := range dependencies {
 		switch value := dependency.(type) {
+		case cluster.Repository:
+			if value != nil {
+				clusterRepo = value
+			}
+		case namespace.Repository:
+			if value != nil {
+				namespaceRepo = value
+			}
 		case terminal.Executor:
 			if value != nil {
 				terminalDependencies = append(terminalDependencies, value)
@@ -50,22 +72,10 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}
 	}
 	return Module{
-		Dashboard: dashboard.NewService(dashboard.NewStaticReader()),
-		Cluster: cluster.NewService(cluster.NewMemoryRepository([]cluster.Cluster{
-			{
-				ID:          "prod",
-				Name:        "prod-core",
-				Version:     "v1.29.4",
-				Region:      "cn-shanghai",
-				Description: "生产核心集群，来自 startorch 集群清单基线",
-				Status:      "active",
-			},
-		})),
+		Dashboard:   dashboard.NewService(dashboard.NewStaticReader()),
+		Cluster:     cluster.NewService(clusterRepo),
 		ClusterCred: cluster.NewCredentialService(secrets, authorizer, auditor),
-		Namespace: namespace.NewService(namespace.NewMemoryRepository([]namespace.Namespace{
-			{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
-			{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},
-		})),
+		Namespace:   namespace.NewService(namespaceRepo),
 		Resource: resource.NewService(resource.NewMemoryReader([]resource.ResourceSummary{
 			{
 				Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},

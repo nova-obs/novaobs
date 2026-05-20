@@ -464,3 +464,54 @@ func (s *auditEventStore) FindAll(ctx context.Context, results interface{}) erro
 	}
 	return cursor.All(ctx, results)
 }
+
+// ---------- K8s Ops Stores ----------
+type k8sClusterStore struct{ col *mongo.Collection }
+
+func (s *k8sClusterStore) Upsert(ctx context.Context, id string, cluster interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, cluster, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *k8sClusterStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}, {Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return err
+	}
+	return decodeBSONDocuments(docs, results)
+}
+
+type k8sNamespaceStore struct{ col *mongo.Collection }
+
+func (s *k8sNamespaceStore) Upsert(ctx context.Context, id string, namespace interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, namespace, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *k8sNamespaceStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "cluster_id", Value: 1}, {Key: "name", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return err
+	}
+	return decodeBSONDocuments(docs, results)
+}
+
+func (s *k8sNamespaceStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"cluster_id": clusterID}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return err
+	}
+	return decodeBSONDocuments(docs, results)
+}

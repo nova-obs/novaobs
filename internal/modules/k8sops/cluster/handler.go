@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -23,10 +24,38 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
+			slog.Warn("K8s 集群列表查询失败", "error", err)
 			response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_list_failed", "集群列表查询失败")
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
+	}
+}
+
+func CreateHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body UpsertRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		item, err := service.Create(ctx.Request.Context(), body)
+		if err != nil {
+			writeClusterError(ctx, err)
+			return
+		}
+		response.Created(ctx, item)
+	}
+}
+
+func writeClusterError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidClusterRequest):
+		response.Error(ctx, http.StatusBadRequest, "invalid_request", "集群 ID 和名称不能为空")
+	case errors.Is(err, ErrClusterRepositoryWrite):
+		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_write_unavailable", "集群仓储暂不支持写入")
+	default:
+		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_operation_failed", "集群操作失败")
 	}
 }
 
