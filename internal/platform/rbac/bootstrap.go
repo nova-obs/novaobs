@@ -64,6 +64,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			{Resource: "k8s.service-account", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.rbac", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.certificate", Action: "read", ScopeMode: "namespace"},
+			{Resource: "k8s.terminal", Action: "exec", ScopeMode: "namespace"},
 			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
 		},
 		CreatedAt: now,
