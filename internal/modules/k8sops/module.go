@@ -70,7 +70,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}), authorizer, auditor),
 		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
 			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
-		})),
+		}), authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
 			{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
 		}), authorizer, auditor),
