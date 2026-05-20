@@ -116,21 +116,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),
 		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor),
-		Template: k8stemplate.NewService(k8stemplate.NewMemoryRepository([]k8stemplate.Template{
-			{
-				ID:          "tpl-deployment-baseline",
-				Name:        "deployment-baseline",
-				Type:        "Deployment",
-				YAMLContent: "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: <<name>>\n  namespace: <<namespace>>\nspec:\n  replicas: <<replicas>>\n",
-				Variables: []k8stemplate.Variable{
-					{Name: "name", Required: true},
-					{Name: "namespace", Required: true},
-					{Name: "replicas", DefaultValue: "2"},
-				},
-				Description: "来自 startorch deployment 基线的 NovaObs 通用模板",
-				Source:      "startorch",
-			},
-		}), authorizer, auditor),
-		Terminal: terminal.NewService(terminalDependencies...),
+		Template:       k8stemplate.NewService(k8stemplate.NewMemoryRepository(nil), authorizer, auditor),
+		Terminal:       terminal.NewService(terminalDependencies...),
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"novaobs/internal/database/memstore"
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/namespace"
+	k8stemplate "novaobs/internal/modules/k8sops/template"
 
 	"github.com/stretchr/testify/require"
 )
@@ -38,4 +39,12 @@ func TestModuleUsesInjectedClusterAndNamespaceRepositories(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, namespaces, 1)
 	require.Equal(t, "platform", namespaces[0].Name)
+}
+
+func TestModuleDoesNotSeedDemoK8sTemplates(t *testing.T) {
+	module := NewModuleWithSecurity(nil, nil, nil)
+
+	templates, err := module.Template.List(context.Background(), k8stemplate.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, templates)
 }
