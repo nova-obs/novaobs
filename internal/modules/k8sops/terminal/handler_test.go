@@ -85,15 +85,37 @@ func TestExecBlocksShellMetaCharacters(t *testing.T) {
 	require.Equal(t, "blocked", events[0].Result)
 }
 
-func newTerminalTestRouter(t *testing.T, rbacRepo testRBACRepo, subjects ...platformrbac.Subject) (*gin.Engine, *audit.MemoryStore) {
+func TestExecTruncatesExecutorOutput(t *testing.T) {
+	router, _ := newTerminalTestRouter(t, terminalWriterRepo(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"}, CommandPolicy{MaxOutputBytes: 10}, fixedExecutor{output: "0123456789abcdef"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/terminal/exec", strings.NewReader(execBody("get pods")))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"output_truncated":true`)
+	require.Contains(t, recorder.Body.String(), "0123456789")
+	require.NotContains(t, recorder.Body.String(), "abcdef")
+}
+
+func newTerminalTestRouter(t *testing.T, rbacRepo testRBACRepo, dependencies ...any) (*gin.Engine, *audit.MemoryStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	subject := platformrbac.Subject{}
-	if len(subjects) > 0 {
-		subject = subjects[0]
+	serviceDependencies := []any{platformrbac.NewService(rbacRepo)}
+	for _, dependency := range dependencies {
+		switch value := dependency.(type) {
+		case platformrbac.Subject:
+			subject = value
+		default:
+			serviceDependencies = append(serviceDependencies, value)
+		}
 	}
 	auditStore := audit.NewMemoryStore()
-	service := NewService(platformrbac.NewService(rbacRepo), audit.NewService(auditStore))
+	serviceDependencies = append(serviceDependencies, audit.NewService(auditStore))
+	service := NewService(serviceDependencies...)
 	router := gin.New()
 	if subject.ID != "" {
 		router.Use(func(ctx *gin.Context) {
@@ -151,4 +173,12 @@ func (r testRBACRepo) ListBindingsBySubject(subjectID string, subjectType string
 
 func execBody(command string) string {
 	return `{"cluster_id":"prod","namespace":"orders","command":"` + command + `"}`
+}
+
+type fixedExecutor struct {
+	output string
+}
+
+func (e fixedExecutor) Exec(ctx context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error) {
+	return ExecResult{Output: e.output, ExitCode: 0, Mode: "fixed"}, nil
 }

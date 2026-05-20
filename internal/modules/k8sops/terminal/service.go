@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -30,19 +29,15 @@ type Executor interface {
 	Exec(ctx context.Context, req ExecRequest, parsed ParsedCommand) (ExecResult, error)
 }
 
-type ParsedCommand struct {
-	Verb string
-	Args []string
-}
-
 type Service struct {
 	authorizer Authorizer
 	auditor    Auditor
 	executor   Executor
+	policy     CommandPolicy
 }
 
 func NewService(security ...any) Service {
-	service := Service{authorizer: denyAuthorizer{}, auditor: noopAuditor{}, executor: dryRunExecutor{}}
+	service := Service{authorizer: denyAuthorizer{}, auditor: noopAuditor{}, executor: dryRunExecutor{}, policy: DefaultCommandPolicy()}
 	for _, item := range security {
 		switch value := item.(type) {
 		case Authorizer:
@@ -57,6 +52,8 @@ func NewService(security ...any) Service {
 			if value != nil {
 				service.executor = value
 			}
+		case CommandPolicy:
+			service.policy = value
 		}
 	}
 	return service
@@ -75,7 +72,7 @@ func (s Service) Exec(ctx context.Context, subject platformrbac.Subject, req Exe
 	if !decision.Allowed {
 		return ExecResult{}, ErrPermissionDenied
 	}
-	parsed, blockReason, err := parseReadOnlyCommand(req.Command)
+	parsed, blockReason, err := s.policy.Parse(req.Command)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -101,6 +98,7 @@ func (s Service) Exec(ctx context.Context, subject platformrbac.Subject, req Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
+	result.Output, result.OutputTruncated = s.policy.TrimOutput(result.Output)
 	event, err := s.record(ctx, subject, req, parsed, "accepted", "")
 	if err != nil {
 		return ExecResult{}, err
@@ -113,65 +111,6 @@ func (s Service) Exec(ctx context.Context, subject platformrbac.Subject, req Exe
 	result.Args = append([]string{}, parsed.Args...)
 	result.AuditID = event.ID
 	return result, nil
-}
-
-func parseReadOnlyCommand(command string) (ParsedCommand, string, error) {
-	if containsShellMeta(command) {
-		return ParsedCommand{}, "命令包含 shell 元字符，NovaObs 终端第一版只接受结构化 kubectl 参数", nil
-	}
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return ParsedCommand{}, "", ErrInvalidRequest
-	}
-	if fields[0] == "kubectl" {
-		fields = fields[1:]
-	}
-	if len(fields) == 0 {
-		return ParsedCommand{}, "", ErrInvalidRequest
-	}
-	verb := strings.ToLower(fields[0])
-	if !allowedReadOnlyVerb(verb) {
-		return ParsedCommand{}, fmt.Sprintf("动词 %q 不在只读允许列表中", verb), nil
-	}
-	args := append([]string{}, fields[1:]...)
-	for _, arg := range args {
-		if blockedArg(arg) {
-			return ParsedCommand{}, fmt.Sprintf("参数 %q 属于高风险终端能力，已阻断", arg), nil
-		}
-	}
-	return ParsedCommand{Verb: verb, Args: args}, "", nil
-}
-
-func allowedReadOnlyVerb(verb string) bool {
-	switch verb {
-	case "get", "describe", "logs", "top", "explain", "api-resources", "api-versions":
-		return true
-	default:
-		return false
-	}
-}
-
-func blockedArg(arg string) bool {
-	lower := strings.ToLower(strings.TrimSpace(arg))
-	switch lower {
-	case "exec", "cp", "attach", "port-forward", "proxy", "delete", "apply", "replace", "patch", "scale", "rollout", "cordon", "uncordon", "drain", "taint", "label", "annotate", "create":
-		return true
-	default:
-		return strings.HasPrefix(lower, "--kubeconfig") || strings.HasPrefix(lower, "--token") || strings.HasPrefix(lower, "--as=")
-	}
-}
-
-func containsShellMeta(command string) bool {
-	for _, value := range command {
-		switch value {
-		case '|', '&', ';', '`', '$', '>', '<', '\n', '\r':
-			return true
-		}
-		if unicode.IsControl(value) && value != '\t' {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeRequest(req ExecRequest) ExecRequest {
