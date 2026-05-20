@@ -30,6 +30,10 @@ func ListHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
 				return
 			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+				return
+			}
 			if errors.Is(err, ErrNamespaceRequired) {
 				response.Error(ctx, http.StatusBadRequest, "invalid_request", "资源列表必须指定命名空间")
 				return
@@ -49,6 +53,10 @@ func DetailHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
 				return
 			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+				return
+			}
 			response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
 			return
 		}
@@ -62,6 +70,10 @@ func YAMLHandler(service Service) gin.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
 				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 资源")
+				return
+			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
 				return
 			}
 			response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
@@ -82,6 +94,10 @@ func PodLogsHandler(service Service) gin.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
 				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Pod 日志")
+				return
+			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
 				return
 			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_pod_logs_failed", "Pod 日志查询失败")

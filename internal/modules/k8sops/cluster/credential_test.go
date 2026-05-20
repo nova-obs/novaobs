@@ -19,7 +19,7 @@ func TestCredentialServiceReadsClusterKubeconfigWithRBACAndAudit(t *testing.T) {
 		Name:      "prod-readonly",
 		Type:      ClusterCredentialSecretType,
 		Scope:     secret.Scope{ClusterID: "prod"},
-		Plaintext: []byte("apiVersion: v1\nclusters: []"),
+		Plaintext: []byte("apiVersion: v1\nkind: Config\nclusters: []"),
 		CreatedBy: "platform",
 	})
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestCredentialServiceReadsClusterKubeconfigWithRBACAndAudit(t *testing.T) {
 	plaintext, err := svc.Kubeconfig(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"}, "prod")
 
 	require.NoError(t, err)
-	require.Equal(t, []byte("apiVersion: v1\nclusters: []"), plaintext)
+	require.Equal(t, []byte("apiVersion: v1\nkind: Config\nclusters: []"), plaintext)
 	events, err := auditStore.List(context.Background())
 	require.NoError(t, err)
 	require.Len(t, events, 1)
@@ -46,6 +46,32 @@ func TestCredentialServiceRequiresClusterCredentialPermission(t *testing.T) {
 	_, err := svc.Kubeconfig(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, "prod")
 
 	require.ErrorIs(t, err, ErrCredentialPermissionDenied)
+}
+
+func TestCredentialServiceReportsMissingClusterCredential(t *testing.T) {
+	secretSvc := secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	svc := NewCredentialService(secretSvc, platformrbac.NewService(clusterCredentialRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	_, err := svc.Kubeconfig(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, "prod")
+
+	require.ErrorIs(t, err, ErrCredentialNotFound)
+}
+
+func TestCredentialServiceReportsInvalidStoredCredential(t *testing.T) {
+	secretSvc := secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	_, err := secretSvc.Create(context.Background(), secret.CreateRequest{
+		Name:      "prod-broken",
+		Type:      ClusterCredentialSecretType,
+		Scope:     secret.Scope{ClusterID: "prod"},
+		Plaintext: []byte("not a kubeconfig"),
+		CreatedBy: "platform",
+	})
+	require.NoError(t, err)
+	svc := NewCredentialService(secretSvc, platformrbac.NewService(clusterCredentialRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	_, err = svc.Kubeconfig(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, "prod")
+
+	require.ErrorIs(t, err, ErrInvalidCredentialRequest)
 }
 
 func TestCredentialServiceCreatesAndRotatesClusterCredentialMetadata(t *testing.T) {

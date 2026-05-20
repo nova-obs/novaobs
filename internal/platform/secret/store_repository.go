@@ -2,8 +2,11 @@ package secret
 
 import (
 	"context"
+	"errors"
 
 	"novaobs/internal/database"
+
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type StoreRepository struct {
@@ -21,12 +24,18 @@ func (r StoreRepository) Save(ctx context.Context, item Secret) error {
 func (r StoreRepository) Get(ctx context.Context, id string) (Secret, error) {
 	var item Secret
 	err := r.store.FindByID(ctx, id, &item)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		err = ErrNotFound
+	}
 	return item, err
 }
 
 func (r StoreRepository) FindByTypeAndScope(ctx context.Context, typ string, scope Scope) (Secret, error) {
 	var item Secret
 	err := r.store.FindByTypeAndScope(ctx, typ, scope, &item)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		err = ErrNotFound
+	}
 	return item, err
 }
 

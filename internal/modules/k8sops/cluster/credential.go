@@ -16,6 +16,7 @@ const ClusterCredentialSecretType = "k8s.cluster-credential"
 
 var (
 	ErrCredentialPermissionDenied = errors.New("permission_denied")
+	ErrCredentialNotFound         = errors.New("cluster_credential_not_found")
 	ErrInvalidCredentialRequest   = errors.New("invalid_cluster_credential_request")
 )
 
@@ -115,7 +116,13 @@ func (s CredentialService) Kubeconfig(ctx context.Context, subject platformrbac.
 	}
 	plaintext, metadata, err := s.secrets.PlaintextByTypeAndScope(ctx, ClusterCredentialSecretType, secret.Scope{ClusterID: clusterID})
 	if err != nil {
+		if errors.Is(err, secret.ErrNotFound) {
+			return nil, ErrCredentialNotFound
+		}
 		return nil, err
+	}
+	if !looksLikeKubeconfig(string(plaintext)) {
+		return nil, ErrInvalidCredentialRequest
 	}
 	_, err = s.auditor.Record(ctx, audit.Event{
 		Actor:        audit.Actor{ID: subject.ID, Name: subject.DisplayName},

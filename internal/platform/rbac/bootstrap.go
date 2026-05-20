@@ -5,6 +5,7 @@ import "time"
 const (
 	K8sOpsAdminRoleID        = "role-k8s-ops-admin"
 	K8sOpsGlobalAdminRoleID  = "role-k8s-ops-global-admin"
+	K8sOpsGlobalReaderRoleID = "role-k8s-ops-global-reader"
 	k8sOpsAdminBindingPrefix = "binding-k8s-ops-admin-"
 )
 
@@ -49,10 +50,25 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	globalReaderRole := Role{
+		ID:          K8sOpsGlobalReaderRoleID,
+		Name:        "K8s 运维全局只读",
+		Description: "NovaObs K8s 运维开发态真实集群只读接入默认角色",
+		Permissions: []Permission{
+			{Resource: "k8s.namespace", Action: "read", ScopeMode: "cluster"},
+			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
+			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	if err := repo.SaveRole(namespaceRole); err != nil {
 		return err
 	}
 	if err := repo.SaveRole(globalRole); err != nil {
+		return err
+	}
+	if err := repo.SaveRole(globalReaderRole); err != nil {
 		return err
 	}
 	if subject.ID == "" || subject.Type == "" {
@@ -79,7 +95,19 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	return repo.SaveBinding(globalBinding)
+	if err := repo.SaveBinding(globalBinding); err != nil {
+		return err
+	}
+	globalReaderBinding := Binding{
+		ID:          k8sOpsAdminBindingPrefix + "global-reader-" + subject.Type + "-" + subject.ID,
+		SubjectID:   subject.ID,
+		SubjectType: subject.Type,
+		RoleID:      K8sOpsGlobalReaderRoleID,
+		Scope:       Scope{Global: true},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	return repo.SaveBinding(globalReaderBinding)
 }
 
 func DevAdminSubject() Subject {

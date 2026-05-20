@@ -2,7 +2,6 @@ package secret
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
@@ -27,7 +26,7 @@ func (r *MemoryRepository) Get(ctx context.Context, id string) (Secret, error) {
 	defer r.mu.Unlock()
 	item, ok := r.items[id]
 	if !ok {
-		return Secret{}, errors.New("secret not found")
+		return Secret{}, ErrNotFound
 	}
 	return item, nil
 }
@@ -40,7 +39,7 @@ func (r *MemoryRepository) FindByTypeAndScope(ctx context.Context, typ string, s
 			return item, nil
 		}
 	}
-	return Secret{}, errors.New("secret not found")
+	return Secret{}, ErrNotFound
 }
 
 func (r *MemoryRepository) ListByType(ctx context.Context, typ string) ([]Secret, error) {

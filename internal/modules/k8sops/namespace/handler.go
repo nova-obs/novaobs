@@ -27,6 +27,10 @@ func ListHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 命名空间")
 				return
 			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+				return
+			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_namespace_list_failed", "命名空间列表查询失败")
 			return
 		}
