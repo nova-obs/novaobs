@@ -6,8 +6,14 @@ import (
 	"time"
 
 	"novaobs/internal/database/memstore"
+	"novaobs/internal/modules/k8sops/certificate"
 	"novaobs/internal/modules/k8sops/cluster"
+	"novaobs/internal/modules/k8sops/dashboard"
+	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/namespace"
+	k8srbac "novaobs/internal/modules/k8sops/rbac"
+	"novaobs/internal/modules/k8sops/resource"
+	"novaobs/internal/modules/k8sops/serviceaccount"
 	k8stemplate "novaobs/internal/modules/k8sops/template"
 
 	"github.com/stretchr/testify/require"
@@ -47,4 +53,46 @@ func TestModuleDoesNotSeedDemoK8sTemplates(t *testing.T) {
 	templates, err := module.Template.List(context.Background(), k8stemplate.ListFilter{})
 	require.NoError(t, err)
 	require.Empty(t, templates)
+}
+
+func TestModuleDoesNotSeedDemoK8sOpsData(t *testing.T) {
+	module := NewModuleWithSecurity(nil, nil, nil)
+	ctx := context.Background()
+
+	namespaces, err := module.Namespace.List(ctx, namespace.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, namespaces)
+
+	resources, err := module.Resource.List(ctx, resource.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, resources)
+
+	serviceAccounts, err := module.ServiceAccount.List(ctx, serviceaccount.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, serviceAccounts)
+
+	roles, err := module.RBAC.ListRoles(ctx, k8srbac.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, roles)
+
+	bindings, err := module.RBAC.ListBindings(ctx, k8srbac.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, bindings)
+
+	certificates, err := module.Cert.List(ctx, certificate.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, certificates)
+
+	history, err := module.Deploy.ListHistory(ctx, deployment.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, history)
+
+	auditEvents, err := module.Deploy.ListAuditEvents(ctx, deployment.ListFilter{})
+	require.NoError(t, err)
+	require.Empty(t, auditEvents)
+
+	snapshot, err := module.Dashboard.Get(ctx, dashboard.Query{})
+	require.NoError(t, err)
+	require.Empty(t, snapshot.Signals)
+	require.NotEqual(t, "startorch", snapshot.Sync.Source)
 }

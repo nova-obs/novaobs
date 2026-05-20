@@ -77,3 +77,11 @@ func TestServiceRequiresUIDForDetailAndYAMLIdentity(t *testing.T) {
 	_, err = svc.GetYAML(context.Background(), wrongUID)
 	require.Error(t, err)
 }
+
+func TestServiceDoesNotReturnPodLogsForMissingPod(t *testing.T) {
+	svc := NewService(NewMemoryReader(nil))
+
+	_, err := svc.GetPodLogs(context.Background(), PodLogQuery{ClusterID: "prod", Namespace: "orders", Pod: "orders-api-6f7d", Container: "app"})
+
+	require.Error(t, err)
+}

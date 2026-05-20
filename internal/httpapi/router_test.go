@@ -124,9 +124,6 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8s/clusters?q=prod",
 		"/api/v1/k8s/namespaces?cluster_id=prod",
 		"/api/v1/k8s/resources?cluster_id=prod&namespace=orders",
-		"/api/v1/k8s/resources/detail?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
-		"/api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
-		"/api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-6f7d&container=app",
 		"/api/v1/k8s/deployment-history?cluster_id=prod",
 		"/api/v1/k8s/audit-events?cluster_id=prod",
 		"/api/v1/k8s/certificates?cluster_id=prod",
@@ -142,6 +139,19 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 
 		require.Equal(t, http.StatusOK, recorder.Code, path)
 		require.Contains(t, recorder.Body.String(), `"success":true`, path)
+	}
+
+	for _, path := range []string{
+		"/api/v1/k8s/resources/detail?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-6f7d&container=app",
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		env.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusNotFound, recorder.Code, path)
+		require.Contains(t, recorder.Body.String(), `"success":false`, path)
 	}
 }
 

@@ -64,7 +64,9 @@ func TestStaticReaderDefaultsUnknownClusterHealth(t *testing.T) {
 	require.Equal(t, "prod", snapshot.Stats.ClusterID)
 	require.Equal(t, HealthUnknown, snapshot.Stats.Health)
 	require.Equal(t, SyncUnknown, snapshot.Sync.Status)
-	require.Equal(t, "最近 15 分钟", snapshot.Sync.TimeWindow)
+	require.Equal(t, "NovaObs", snapshot.Sync.Source)
+	require.Equal(t, "等待真实集群接入", snapshot.Sync.TimeWindow)
+	require.Empty(t, snapshot.Signals)
 }
 
 func TestKubernetesReaderBuildsRealClusterSnapshot(t *testing.T) {

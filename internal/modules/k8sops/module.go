@@ -40,35 +40,13 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		secrets = secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
 	}
 	clusterRepo := cluster.Repository(cluster.NewMemoryRepository(nil))
-	namespaceRepo := namespace.Repository(namespace.NewMemoryRepository([]namespace.Namespace{
-		{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
-		{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},
-	}))
+	namespaceRepo := namespace.Repository(namespace.NewMemoryRepository(nil))
 	dashboardReader := dashboard.Reader(dashboard.NewStaticReader())
 	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
-	serviceAccountRepo := serviceaccount.Repository(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
-		{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
-	}))
-	rbacRepo := k8srbac.Repository(k8srbac.NewMemoryRepository([]k8srbac.RoleResource{
-		{ID: "role-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-role-orders-reader", Rules: []k8srbac.Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}}}, Source: "startorch"},
-	}, []k8srbac.BindingResource{
-		{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
-	}))
-	certificateRepo := certificate.Repository(certificate.NewMemoryRepository([]certificate.Certificate{
-		{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
-	}))
-	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
-		{
-			Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
-			Status:   "warning",
-			Labels:   map[string]string{"app": "orders-api"},
-		},
-		{
-			Identity: resource.Identity{ClusterID: "prod", Namespace: "payment", APIVersion: "apps/v1", Kind: "Deployment", Name: "payment-gateway", UID: "uid-payment-gateway"},
-			Status:   "healthy",
-			Labels:   map[string]string{"app": "payment-gateway"},
-		},
-	}))
+	serviceAccountRepo := serviceaccount.Repository(serviceaccount.NewMemoryRepository(nil))
+	rbacRepo := k8srbac.Repository(k8srbac.NewMemoryRepository(nil, nil))
+	certificateRepo := certificate.Repository(certificate.NewMemoryRepository(nil))
+	resourceReader := resource.Reader(resource.NewMemoryReader(nil))
 	terminalDependencies := []any{authorizer, auditor}
 	for _, dependency := range dependencies {
 		switch value := dependency.(type) {
@@ -102,16 +80,12 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		}
 	}
 	return Module{
-		Dashboard:   dashboard.NewService(dashboardReader),
-		Cluster:     cluster.NewService(clusterRepo),
-		ClusterCred: clusterCredentialService,
-		Namespace:   namespace.NewService(namespaceRepo),
-		Resource:    resource.NewService(resourceReader),
-		Deploy: deployment.NewService(deployment.NewMemoryReader([]deployment.HistoryRecord{
-			{ID: "deploy-orders-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "rollout.pause", Status: "warning", Revision: "rev-1842", Actor: "platform-admin"},
-		}, []deployment.AuditEvent{
-			{ID: "audit-orders-1", ClusterID: "prod", Namespace: "orders", ResourceKind: "Deployment", ResourceName: "orders-api", Action: "rollout.pause", Actor: "platform-admin", Status: "warning", TraceID: "trace-k8s-1842"},
-		}), authorizer, auditor),
+		Dashboard:      dashboard.NewService(dashboardReader),
+		Cluster:        cluster.NewService(clusterRepo),
+		ClusterCred:    clusterCredentialService,
+		Namespace:      namespace.NewService(namespaceRepo),
+		Resource:       resource.NewService(resourceReader),
+		Deploy:         deployment.NewService(deployment.NewMemoryReader(nil), authorizer, auditor),
 		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),

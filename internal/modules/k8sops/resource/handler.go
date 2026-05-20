@@ -9,6 +9,7 @@ import (
 	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func ListHandler(service Service) gin.HandlerFunc {
@@ -98,6 +99,10 @@ func PodLogsHandler(service Service) gin.HandlerFunc {
 			}
 			if errors.Is(err, cluster.ErrCredentialNotFound) {
 				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+				return
+			}
+			if errors.Is(err, ErrResourceNotFound) || k8serrors.IsNotFound(err) {
+				response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
 				return
 			}
 			response.Error(ctx, http.StatusInternalServerError, "k8s_pod_logs_failed", "Pod 日志查询失败")

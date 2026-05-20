@@ -96,17 +96,19 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 	if subject.ID == "" || subject.Type == "" {
 		return nil
 	}
-	namespaceBinding := Binding{
-		ID:          k8sOpsAdminBindingPrefix + subject.Type + "-" + subject.ID,
-		SubjectID:   subject.ID,
-		SubjectType: subject.Type,
-		RoleID:      K8sOpsAdminRoleID,
-		Scope:       scope,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if err := repo.SaveBinding(namespaceBinding); err != nil {
-		return err
+	if shouldBindNamespaceRole(scope) {
+		namespaceBinding := Binding{
+			ID:          k8sOpsAdminBindingPrefix + subject.Type + "-" + subject.ID,
+			SubjectID:   subject.ID,
+			SubjectType: subject.Type,
+			RoleID:      K8sOpsAdminRoleID,
+			Scope:       scope,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := repo.SaveBinding(namespaceBinding); err != nil {
+			return err
+		}
 	}
 	globalBinding := Binding{
 		ID:          k8sOpsAdminBindingPrefix + "global-" + subject.Type + "-" + subject.ID,
@@ -149,5 +151,9 @@ func DevAdminSubject() Subject {
 }
 
 func DevK8sOpsScope() Scope {
-	return Scope{ClusterID: "prod", Namespace: "orders"}
+	return Scope{}
+}
+
+func shouldBindNamespaceRole(scope Scope) bool {
+	return scope.Global || (scope.ClusterID != "" && scope.Namespace != "")
 }

@@ -43,6 +43,8 @@ type MemoryReader struct {
 	items []ResourceSummary
 }
 
+var ErrResourceNotFound = errors.New("k8s_resource_not_found")
+
 func NewMemoryReader(items []ResourceSummary) MemoryReader {
 	copied := make([]ResourceSummary, len(items))
 	copy(copied, items)
@@ -68,7 +70,7 @@ func (r MemoryReader) List(_ context.Context, filter ListFilter) ([]ResourceSumm
 func (r MemoryReader) GetDetail(_ context.Context, query DetailQuery) (ResourceDetail, error) {
 	item, ok := r.find(query.Identity)
 	if !ok {
-		return ResourceDetail{}, errors.New("resource not found")
+		return ResourceDetail{}, ErrResourceNotFound
 	}
 	return ResourceDetail{Identity: item.Identity, Status: item.Status, Labels: item.Labels, Spec: map[string]any{"managed_by": "novaobs"}, UpdatedAt: item.UpdatedAt}, nil
 }
@@ -76,7 +78,7 @@ func (r MemoryReader) GetDetail(_ context.Context, query DetailQuery) (ResourceD
 func (r MemoryReader) GetYAML(_ context.Context, query DetailQuery) (ResourceYAML, error) {
 	item, ok := r.find(query.Identity)
 	if !ok {
-		return ResourceYAML{}, errors.New("resource not found")
+		return ResourceYAML{}, ErrResourceNotFound
 	}
 	yaml := fmt.Sprintf("apiVersion: %s\nkind: %s\nmetadata:\n  name: %s\n  namespace: %s\n  uid: %s\n", item.Identity.APIVersion, item.Identity.Kind, item.Identity.Name, item.Identity.Namespace, item.Identity.UID)
 	return ResourceYAML{Identity: item.Identity, YAML: yaml}, nil
@@ -84,6 +86,9 @@ func (r MemoryReader) GetYAML(_ context.Context, query DetailQuery) (ResourceYAM
 
 func (r MemoryReader) GetPodLogs(_ context.Context, query PodLogQuery) (PodLogResult, error) {
 	identity := Identity{ClusterID: query.ClusterID, Namespace: query.Namespace, APIVersion: "v1", Kind: "Pod", Name: query.Pod}
+	if _, ok := r.findPod(identity); !ok {
+		return PodLogResult{}, ErrResourceNotFound
+	}
 	return PodLogResult{Identity: identity, Container: query.Container, Lines: []string{}}, nil
 }
 
@@ -95,6 +100,19 @@ func (r MemoryReader) find(identity Identity) (ResourceSummary, bool) {
 			item.Identity.Kind == identity.Kind &&
 			item.Identity.Name == identity.Name &&
 			item.Identity.UID == identity.UID {
+			return item, true
+		}
+	}
+	return ResourceSummary{}, false
+}
+
+func (r MemoryReader) findPod(identity Identity) (ResourceSummary, bool) {
+	for _, item := range r.items {
+		if item.Identity.ClusterID == identity.ClusterID &&
+			item.Identity.Namespace == identity.Namespace &&
+			item.Identity.APIVersion == identity.APIVersion &&
+			item.Identity.Kind == identity.Kind &&
+			item.Identity.Name == identity.Name {
 			return item, true
 		}
 	}

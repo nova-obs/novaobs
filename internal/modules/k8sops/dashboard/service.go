@@ -52,14 +52,11 @@ func (r StaticReader) Read(_ context.Context, query Query) (Snapshot, error) {
 			Workloads:  0,
 			Pods:       PodStats{},
 		},
-		Signals: []Signal{
-			{Key: "api-server", Label: "API Server", Status: HealthUnknown, Source: "startorch", CheckedAt: now},
-			{Key: "collector", Label: "Collector", Status: HealthUnknown, Source: "NovaObs", CheckedAt: now},
-		},
+		Signals: []Signal{},
 		Sync: SyncState{
 			Status:       SyncUnknown,
-			Source:       "startorch",
-			TimeWindow:   "最近 15 分钟",
+			Source:       "NovaObs",
+			TimeWindow:   "等待真实集群接入",
 			LastSyncedAt: now,
 		},
 	}, nil

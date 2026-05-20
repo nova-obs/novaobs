@@ -21,21 +21,29 @@ func TestEnsureK8sOpsDefaultsAllowsDevAdminTerminal(t *testing.T) {
 	require.True(t, decision.Allowed)
 }
 
+func TestDevK8sOpsScopeDoesNotSeedDemoClusterNamespace(t *testing.T) {
+	scope := DevK8sOpsScope()
+
+	require.False(t, scope.Global)
+	require.Empty(t, scope.ClusterID)
+	require.Empty(t, scope.Namespace)
+}
+
 func TestEnsureK8sOpsDefaultsCoversK8sWritePermissions(t *testing.T) {
 	repo := NewMemoryRepository()
 
-	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), DevK8sOpsScope())
+	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), Scope{ClusterID: "stage", Namespace: "default"})
 
 	require.NoError(t, err)
 	svc := NewService(repo)
 	for _, req := range []Request{
-		{Resource: "k8s.service-account", Action: "create", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.rbac", Action: "read", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.rbac", Action: "delete", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.kubeconfig", Action: "export", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.certificate", Action: "read", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
-		{Resource: "k8s.certificate", Action: "create", Scope: Scope{ClusterID: "prod", Namespace: "orders"}},
+		{Resource: "k8s.service-account", Action: "create", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.rbac", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.rbac", Action: "delete", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.kubeconfig", Action: "export", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.certificate", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.certificate", Action: "create", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.template", Action: "update", Scope: Scope{Global: true}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)
@@ -46,14 +54,14 @@ func TestEnsureK8sOpsDefaultsCoversK8sWritePermissions(t *testing.T) {
 func TestEnsureK8sOpsDefaultsDoesNotExpandNamespaceWriteScope(t *testing.T) {
 	repo := NewMemoryRepository()
 
-	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), DevK8sOpsScope())
+	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), Scope{ClusterID: "stage", Namespace: "default"})
 
 	require.NoError(t, err)
 	svc := NewService(repo)
 	decision := svc.Authorize(DevAdminSubject(), Request{
 		Resource: "k8s.deployment",
 		Action:   "rollback",
-		Scope:    Scope{ClusterID: "prod", Namespace: "billing"},
+		Scope:    Scope{ClusterID: "stage", Namespace: "billing"},
 	})
 	require.False(t, decision.Allowed)
 }
