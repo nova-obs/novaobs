@@ -71,3 +71,31 @@ func TestServiceDecryptsStoredSecretByTypeAndScope(t *testing.T) {
 	require.Equal(t, "prod-readonly", metadata.Name)
 	require.Empty(t, metadata.Ciphertext)
 }
+
+func TestServiceListsSecretMetadataByType(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	_, err := svc.Create(context.Background(), CreateRequest{
+		Name:      "prod-readonly",
+		Type:      "k8s.cluster-credential",
+		Scope:     Scope{ClusterID: "prod"},
+		Plaintext: []byte("apiVersion: v1\nclusters: []"),
+		CreatedBy: "platform",
+	})
+	require.NoError(t, err)
+	_, err = svc.Create(context.Background(), CreateRequest{
+		Name:      "orders-reader",
+		Type:      "kubeconfig",
+		Scope:     Scope{ClusterID: "prod", Namespace: "orders"},
+		Plaintext: []byte("apiVersion: v1\nusers: []"),
+		CreatedBy: "platform",
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListByType(context.Background(), "k8s.cluster-credential")
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "prod-readonly", items[0].Name)
+	require.Empty(t, items[0].Ciphertext)
+}

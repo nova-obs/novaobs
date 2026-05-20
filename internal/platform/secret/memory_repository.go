@@ -43,6 +43,18 @@ func (r *MemoryRepository) FindByTypeAndScope(ctx context.Context, typ string, s
 	return Secret{}, errors.New("secret not found")
 }
 
+func (r *MemoryRepository) ListByType(ctx context.Context, typ string) ([]Secret, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Secret, 0, len(r.items))
+	for _, item := range r.items {
+		if item.Type == typ {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
 func scopeMatches(left Scope, right Scope) bool {
 	return left.ClusterID == right.ClusterID && left.Namespace == right.Namespace && left.ServiceID == right.ServiceID
 }

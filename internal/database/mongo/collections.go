@@ -441,6 +441,14 @@ func (s *secretStore) FindByTypeAndScope(ctx context.Context, typ string, scope 
 	return s.col.FindOne(ctx, filter).Decode(result)
 }
 
+func (s *secretStore) FindByType(ctx context.Context, typ string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"type": typ}, options.Find().SetSort(bson.M{"created_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 // ---------- Audit Events ----------
 type auditEventStore struct{ col *mongo.Collection }
 

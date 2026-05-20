@@ -125,3 +125,16 @@ func (s Service) PlaintextByTypeAndScope(ctx context.Context, typ string, scope 
 	item.Ciphertext = ""
 	return plaintext, item, nil
 }
+
+func (s Service) ListByType(ctx context.Context, typ string) ([]Secret, error) {
+	items, err := s.repo.ListByType(ctx, typ)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Secret, len(items))
+	for index, item := range items {
+		item.Ciphertext = ""
+		out[index] = item
+	}
+	return out, nil
+}

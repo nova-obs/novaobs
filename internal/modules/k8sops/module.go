@@ -18,6 +18,7 @@ import (
 type Module struct {
 	Dashboard      dashboard.Service
 	Cluster        cluster.Service
+	ClusterCred    cluster.CredentialService
 	Namespace      namespace.Service
 	Resource       resource.Service
 	Deploy         deployment.Service
@@ -60,6 +61,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				Status:      "active",
 			},
 		})),
+		ClusterCred: cluster.NewCredentialService(secrets, authorizer, auditor),
 		Namespace: namespace.NewService(namespace.NewMemoryRepository([]namespace.Namespace{
 			{ID: "orders", ClusterID: "prod", Name: "orders", Status: "active", Owner: "orders-team", Phase: "Active"},
 			{ID: "payment", ClusterID: "prod", Name: "payment", Status: "active", Owner: "payment-team", Phase: "Active"},

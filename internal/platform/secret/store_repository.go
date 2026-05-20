@@ -29,3 +29,11 @@ func (r StoreRepository) FindByTypeAndScope(ctx context.Context, typ string, sco
 	err := r.store.FindByTypeAndScope(ctx, typ, scope, &item)
 	return item, err
 }
+
+func (r StoreRepository) ListByType(ctx context.Context, typ string) ([]Secret, error) {
+	var items []Secret
+	if err := r.store.FindByType(ctx, typ, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

@@ -29,6 +29,8 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			{Resource: "k8s.certificate", Action: "delete", ScopeMode: "namespace"},
 			{Resource: "k8s.terminal", Action: "exec", ScopeMode: "namespace"},
 			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
+			{Resource: "k8s.cluster-credential", Action: "create", ScopeMode: "cluster"},
+			{Resource: "k8s.cluster-credential", Action: "rotate", ScopeMode: "cluster"},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,

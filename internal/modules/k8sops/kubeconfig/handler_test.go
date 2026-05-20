@@ -141,6 +141,16 @@ func (r *testSecretRepo) FindByTypeAndScope(ctx context.Context, typ string, sco
 	return secret.Secret{}, errors.New("secret not found")
 }
 
+func (r *testSecretRepo) ListByType(ctx context.Context, typ string) ([]secret.Secret, error) {
+	out := make([]secret.Secret, 0, len(r.items))
+	for _, item := range r.items {
+		if item.Type == typ {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
 func kubeconfigExporterRepo() testRBACRepo {
 	return testRBACRepo{
 		roles: map[string]platformrbac.Role{

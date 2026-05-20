@@ -605,6 +605,18 @@ func (st *secretStore) FindByTypeAndScope(ctx context.Context, typ string, scope
 	return errNotFound
 }
 
+func (st *secretStore) FindByType(ctx context.Context, typ string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.secs {
+		if extractStringField(value, "Type") == typ {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
 func secretMatchesTypeAndScope(value interface{}, typ string, scope interface{}) bool {
 	var doc struct {
 		Type  string         `json:"type"`

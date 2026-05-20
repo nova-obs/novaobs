@@ -20,6 +20,8 @@ var (
 type SecretService interface {
 	Create(ctx context.Context, req secret.CreateRequest) (secret.Secret, error)
 	Plaintext(ctx context.Context, id string) ([]byte, secret.Secret, error)
+	ListByType(ctx context.Context, typ string) ([]secret.Secret, error)
+	PlaintextByTypeAndScope(ctx context.Context, typ string, scope secret.Scope) ([]byte, secret.Secret, error)
 }
 
 type Authorizer interface {

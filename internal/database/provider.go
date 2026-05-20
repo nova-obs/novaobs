@@ -132,6 +132,7 @@ type SecretStore interface {
 	Upsert(ctx context.Context, id string, secret interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	FindByTypeAndScope(ctx context.Context, typ string, scope interface{}, result interface{}) error
+	FindByType(ctx context.Context, typ string, results interface{}) error
 }
 
 type AuditEventStore interface {
