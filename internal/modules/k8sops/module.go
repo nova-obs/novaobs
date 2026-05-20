@@ -33,9 +33,20 @@ func NewModule() Module {
 	return NewModuleWithSecurity(nil, nil, nil)
 }
 
-func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor serviceaccount.Auditor, secrets kubeconfig.SecretService) Module {
+func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor serviceaccount.Auditor, secrets kubeconfig.SecretService, dependencies ...any) Module {
 	if secrets == nil {
 		secrets = secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	}
+	terminalDependencies := []any{authorizer, auditor}
+	for _, dependency := range dependencies {
+		switch value := dependency.(type) {
+		case terminal.Executor:
+			if value != nil {
+				terminalDependencies = append(terminalDependencies, value)
+			}
+		case terminal.CommandPolicy:
+			terminalDependencies = append(terminalDependencies, value)
+		}
 	}
 	return Module{
 		Dashboard: dashboard.NewService(dashboard.NewStaticReader()),
@@ -97,6 +108,6 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				Source:      "startorch",
 			},
 		}), authorizer, auditor),
-		Terminal: terminal.NewService(authorizer, auditor),
+		Terminal: terminal.NewService(terminalDependencies...),
 	}
 }
