@@ -50,6 +50,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	certificateRepo := certificate.Repository(certificate.NewMemoryRepository(nil))
 	resourceReader := resource.Reader(resource.NewMemoryReader(nil))
 	terminalDependencies := []any{authorizer, auditor}
+	deploymentDependencies := []any{authorizer, auditor}
 	for _, dependency := range dependencies {
 		switch value := dependency.(type) {
 		case cluster.Repository:
@@ -74,6 +75,10 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				certificateRepo = certificate.NewKubernetesRepository(value, authorizer)
 				if provider, ok := value.(cluster.CapabilityProvider); ok {
 					clusterCapabilityProvider = provider
+					deploymentDependencies = append(deploymentDependencies, provider)
+				}
+				if provider, ok := value.(kubeclient.BundleProvider); ok {
+					deploymentDependencies = append(deploymentDependencies, kubeclient.NewProviderBackedResourceOperationEngine(provider))
 				}
 			}
 		case terminal.Executor:
@@ -91,7 +96,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		ClusterCred:    clusterCredentialService,
 		Namespace:      namespace.NewService(namespaceRepo),
 		Resource:       resource.NewService(resourceReader),
-		Deploy:         deployment.NewService(deployment.NewMemoryReader(nil), authorizer, auditor, clusterCapabilityProvider),
+		Deploy:         deployment.NewService(deployment.NewMemoryReader(nil), deploymentDependencies...),
 		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),

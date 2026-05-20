@@ -32,6 +32,7 @@ type Service struct {
 	auditor      Auditor
 	auditReader  AuditEventReader
 	capabilities CapabilityProvider
+	dryRunner    OperationDryRunner
 }
 
 type Authorizer interface {
@@ -50,6 +51,10 @@ type CapabilityProvider interface {
 	Capabilities(ctx context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error)
 }
 
+type OperationDryRunner interface {
+	DryRunApply(ctx context.Context, req kubeclient.ClusterDryRunApplyRequest) (kubeclient.DryRunApplyResult, error)
+}
+
 func NewService(reader Reader, security ...any) Service {
 	service := Service{reader: reader, authorizer: denyAuthorizer{}, auditor: noopAuditor{}}
 	for _, item := range security {
@@ -64,6 +69,9 @@ func NewService(reader Reader, security ...any) Service {
 		}
 		if value, ok := item.(CapabilityProvider); ok && value != nil {
 			service.capabilities = value
+		}
+		if value, ok := item.(OperationDryRunner); ok && value != nil {
+			service.dryRunner = value
 		}
 	}
 	return service
@@ -106,9 +114,20 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	if !s.allowedAll(subject, "preview", identities) {
 		return OperationResult{}, ErrPermissionDenied
 	}
-	identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
-	if err != nil {
-		return OperationResult{}, err
+	if s.dryRunner != nil {
+		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent})
+		if err != nil {
+			return OperationResult{}, deploymentOperationError(err)
+		}
+		identities = dryRunObjectsToIdentities(req.ClusterID, dryRun.Objects)
+		if !s.allowedAll(subject, "preview", identities) {
+			return OperationResult{}, ErrPermissionDenied
+		}
+	} else {
+		identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
+		if err != nil {
+			return OperationResult{}, err
+		}
 	}
 	event, err := s.record(ctx, subject, "preview", req.ClusterID, identities, map[string]any{
 		"cluster_id": req.ClusterID,
@@ -475,6 +494,32 @@ func (s Service) resolveResourceVersions(ctx context.Context, clusterID string, 
 		out = append(out, identity)
 	}
 	return out, nil
+}
+
+func dryRunObjectsToIdentities(clusterID string, objects []kubeclient.OperationObject) []ResourceIdentity {
+	out := make([]ResourceIdentity, 0, len(objects))
+	for _, object := range objects {
+		out = append(out, normalizeIdentity(ResourceIdentity{
+			ClusterID:  clusterID,
+			Namespace:  object.Namespace,
+			APIVersion: object.APIVersion,
+			Kind:       object.Kind,
+			Name:       object.Name,
+		}))
+	}
+	return out
+}
+
+func deploymentOperationError(err error) error {
+	switch {
+	case errors.Is(err, kubeclient.ErrClusterRequired),
+		errors.Is(err, kubeclient.ErrResourceOperationInvalid),
+		errors.Is(err, kubeclient.ErrResourceVersionRequestInvalid),
+		errors.Is(err, kubeclient.ErrResourceVersionUnsupported):
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	default:
+		return err
+	}
 }
 
 func (s Service) allowedAll(subject platformrbac.Subject, action string, identities []ResourceIdentity) bool {

@@ -3,11 +3,13 @@ package deployment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -83,6 +85,17 @@ func TestApplyDeploymentUsesDeployPermission(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, "deploy", events[0].Action)
+}
+
+func TestInvalidDeploymentRequestMessageIncludesAPIServerValidationDetail(t *testing.T) {
+	err := fmt.Errorf("%w: %w", ErrInvalidRequest, fmt.Errorf("%w: Deployment.apps \"orders-api\" is invalid: spec.selector: Required value", kubeclient.ErrResourceOperationInvalid))
+
+	message := invalidDeploymentRequestMessage(err)
+
+	require.Contains(t, message, "资源清单未通过 Kubernetes API Server 校验")
+	require.Contains(t, message, "spec.selector")
+	require.NotContains(t, message, "invalid_k8s_deployment_request")
+	require.NotContains(t, message, "k8s_resource_operation_invalid")
 }
 
 func newDeploymentOperationRouter(t *testing.T, rbacRepo testRBACRepo, subjects ...platformrbac.Subject) (*gin.Engine, *audit.MemoryStore) {

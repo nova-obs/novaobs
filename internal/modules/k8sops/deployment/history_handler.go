@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
@@ -125,9 +127,29 @@ func writeDeploymentError(ctx *gin.Context, err error) {
 	case errors.Is(err, ErrPermissionDenied):
 		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权执行发布部署操作")
 	case errors.Is(err, ErrInvalidRequest):
-		response.Error(ctx, http.StatusBadRequest, "invalid_request", "发布部署请求参数不完整")
+		response.Error(ctx, http.StatusBadRequest, "invalid_request", invalidDeploymentRequestMessage(err))
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_deployment_operation_failed", "发布部署操作失败")
+	}
+}
+
+func invalidDeploymentRequestMessage(err error) string {
+	switch {
+	case errors.Is(err, kubeclient.ErrResourceOperationInvalid):
+		detail := strings.TrimSpace(err.Error())
+		for _, marker := range []string{"k8s_resource_operation_invalid:", "invalid_k8s_deployment_request:"} {
+			if index := strings.LastIndex(detail, marker); index >= 0 {
+				detail = strings.TrimSpace(detail[index+len(marker):])
+			}
+		}
+		if detail == "" {
+			return "资源清单未通过 Kubernetes API Server 校验"
+		}
+		return "资源清单未通过 Kubernetes API Server 校验：" + detail
+	case errors.Is(err, kubeclient.ErrResourceVersionUnsupported):
+		return "当前集群不支持资源清单中声明的 API 版本或资源类型"
+	default:
+		return "发布部署请求参数不完整"
 	}
 }
 

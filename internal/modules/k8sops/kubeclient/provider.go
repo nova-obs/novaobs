@@ -147,11 +147,22 @@ func (p Provider) Capabilities(ctx context.Context, clusterID string) (Capabilit
 	if err != nil {
 		return CapabilitySnapshot{}, err
 	}
-	serverVersion, err := bundle.Discovery.ServerVersion()
+	return DiscoverCapabilities(clusterID, bundle.Discovery)
+}
+
+func DiscoverCapabilities(clusterID string, discoveryClient discovery.DiscoveryInterface) (CapabilitySnapshot, error) {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return CapabilitySnapshot{}, ErrClusterRequired
+	}
+	if discoveryClient == nil {
+		return CapabilitySnapshot{}, errors.New("k8s_discovery_client_required")
+	}
+	serverVersion, err := discoveryClient.ServerVersion()
 	if err != nil {
 		return CapabilitySnapshot{}, err
 	}
-	_, resourceLists, discoveryErr := bundle.Discovery.ServerGroupsAndResources()
+	_, resourceLists, discoveryErr := discoveryClient.ServerGroupsAndResources()
 	warnings := discoveryWarnings(discoveryErr)
 	if discoveryErr != nil && len(warnings) == 0 {
 		return CapabilitySnapshot{}, discoveryErr

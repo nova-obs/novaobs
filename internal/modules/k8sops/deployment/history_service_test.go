@@ -90,6 +90,59 @@ metadata:
 	require.Equal(t, "Ingress", result.Resources[0].Kind)
 }
 
+func TestServicePreviewRunsServerSideDryRunAfterAuthorization(t *testing.T) {
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+		}},
+	}}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner)
+
+	result, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, dryRunner.calls)
+	require.Equal(t, "prod", dryRunner.request.ClusterID)
+	require.Len(t, result.Resources, 1)
+	require.Equal(t, "apps/v1", result.Resources[0].APIVersion)
+	require.Equal(t, "Deployment", result.Resources[0].Kind)
+	require.Equal(t, "orders", result.Resources[0].Namespace)
+}
+
+func TestServicePreviewRechecksPermissionForDryRunResultIdentities(t *testing.T) {
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "payments",
+			Name:       "orders-api",
+		}},
+	}}
+	svc := NewService(NewMemoryReader(nil), namespaceDeploymentAuthorizer{allowedNamespace: "orders"}, audit.NewService(audit.NewMemoryStore()), dryRunner)
+
+	_, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	})
+
+	require.ErrorIs(t, err, ErrPermissionDenied)
+	require.Equal(t, 1, dryRunner.calls)
+}
+
 func TestServicePreviewRejectsUnsupportedResourceVersion(t *testing.T) {
 	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), staticDeploymentCapabilityProvider{})
 
@@ -107,7 +160,8 @@ metadata:
 
 func TestServicePreviewChecksPermissionBeforeResolvingClusterCapabilities(t *testing.T) {
 	provider := &countingDeploymentCapabilityProvider{}
-	svc := NewService(NewMemoryReader(nil), denyDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), provider)
+	dryRunner := &recordingDeploymentDryRunner{}
+	svc := NewService(NewMemoryReader(nil), denyDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), provider, dryRunner)
 
 	_, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
 		ClusterID: "prod",
@@ -120,6 +174,7 @@ metadata:
 
 	require.ErrorIs(t, err, ErrPermissionDenied)
 	require.Equal(t, 0, provider.calls)
+	require.Equal(t, 0, dryRunner.calls)
 }
 
 type staticDeploymentCapabilityProvider struct {
@@ -143,6 +198,14 @@ func (denyDeploymentAuthorizer) Authorize(platformrbac.Subject, platformrbac.Req
 	return platformrbac.Decision{Allowed: false}
 }
 
+type namespaceDeploymentAuthorizer struct {
+	allowedNamespace string
+}
+
+func (a namespaceDeploymentAuthorizer) Authorize(_ platformrbac.Subject, req platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: req.Scope.Namespace == a.allowedNamespace}
+}
+
 type countingDeploymentCapabilityProvider struct {
 	calls int
 }
@@ -150,4 +213,16 @@ type countingDeploymentCapabilityProvider struct {
 func (p *countingDeploymentCapabilityProvider) Capabilities(context.Context, string) (kubeclient.CapabilitySnapshot, error) {
 	p.calls++
 	return kubeclient.CapabilitySnapshot{}, nil
+}
+
+type recordingDeploymentDryRunner struct {
+	result  kubeclient.DryRunApplyResult
+	request kubeclient.ClusterDryRunApplyRequest
+	calls   int
+}
+
+func (r *recordingDeploymentDryRunner) DryRunApply(_ context.Context, req kubeclient.ClusterDryRunApplyRequest) (kubeclient.DryRunApplyResult, error) {
+	r.calls++
+	r.request = req
+	return r.result, nil
 }
