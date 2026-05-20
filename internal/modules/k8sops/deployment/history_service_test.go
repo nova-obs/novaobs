@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
+	platformrbac "novaobs/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +64,90 @@ func TestServiceListsPlatformAuditEvents(t *testing.T) {
 	require.Equal(t, "blocked", items[0].Status)
 	require.Equal(t, "trace-terminal-1", items[0].TraceID)
 	require.Equal(t, "terminal", items[0].ResourceKind)
+}
+
+func TestServicePreviewResolvesResourceVersionFromClusterCapabilities(t *testing.T) {
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), staticDeploymentCapabilityProvider{
+		snapshot: kubeclient.CapabilitySnapshot{
+			Resources: []kubeclient.APIResource{
+				{Group: "extensions", Version: "v1beta1", GroupVersion: "extensions/v1beta1", Resource: "ingresses", Kind: "Ingress", Namespaced: true},
+			},
+		},
+	})
+
+	result, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orders-ingress
+  namespace: orders`,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Resources, 1)
+	require.Equal(t, "extensions/v1beta1", result.Resources[0].APIVersion)
+	require.Equal(t, "Ingress", result.Resources[0].Kind)
+}
+
+func TestServicePreviewRejectsUnsupportedResourceVersion(t *testing.T) {
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), staticDeploymentCapabilityProvider{})
+
+	_, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: orders-vs
+  namespace: orders`,
+	})
+
+	require.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestServicePreviewChecksPermissionBeforeResolvingClusterCapabilities(t *testing.T) {
+	provider := &countingDeploymentCapabilityProvider{}
+	svc := NewService(NewMemoryReader(nil), denyDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), provider)
+
+	_, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: orders-vs
+  namespace: orders`,
+	})
+
+	require.ErrorIs(t, err, ErrPermissionDenied)
+	require.Equal(t, 0, provider.calls)
+}
+
+type staticDeploymentCapabilityProvider struct {
+	snapshot kubeclient.CapabilitySnapshot
+}
+
+func (p staticDeploymentCapabilityProvider) Capabilities(_ context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error) {
+	p.snapshot.ClusterID = clusterID
+	return p.snapshot, nil
+}
+
+type allowDeploymentAuthorizer struct{}
+
+func (allowDeploymentAuthorizer) Authorize(platformrbac.Subject, platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: true}
+}
+
+type denyDeploymentAuthorizer struct{}
+
+func (denyDeploymentAuthorizer) Authorize(platformrbac.Subject, platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: false}
+}
+
+type countingDeploymentCapabilityProvider struct {
+	calls int
+}
+
+func (p *countingDeploymentCapabilityProvider) Capabilities(context.Context, string) (kubeclient.CapabilitySnapshot, error) {
+	p.calls++
+	return kubeclient.CapabilitySnapshot{}, nil
 }

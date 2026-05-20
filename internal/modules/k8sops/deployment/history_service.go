@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
 
@@ -26,10 +27,11 @@ type Reader interface {
 }
 
 type Service struct {
-	reader      Reader
-	authorizer  Authorizer
-	auditor     Auditor
-	auditReader AuditEventReader
+	reader       Reader
+	authorizer   Authorizer
+	auditor      Auditor
+	auditReader  AuditEventReader
+	capabilities CapabilityProvider
 }
 
 type Authorizer interface {
@@ -44,6 +46,10 @@ type AuditEventReader interface {
 	List(ctx context.Context) ([]audit.Event, error)
 }
 
+type CapabilityProvider interface {
+	Capabilities(ctx context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error)
+}
+
 func NewService(reader Reader, security ...any) Service {
 	service := Service{reader: reader, authorizer: denyAuthorizer{}, auditor: noopAuditor{}}
 	for _, item := range security {
@@ -55,6 +61,9 @@ func NewService(reader Reader, security ...any) Service {
 		}
 		if value, ok := item.(AuditEventReader); ok && value != nil {
 			service.auditReader = value
+		}
+		if value, ok := item.(CapabilityProvider); ok && value != nil {
+			service.capabilities = value
 		}
 	}
 	return service
@@ -97,6 +106,10 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	if !s.allowedAll(subject, "preview", identities) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
+	if err != nil {
+		return OperationResult{}, err
+	}
 	event, err := s.record(ctx, subject, "preview", req.ClusterID, identities, map[string]any{
 		"cluster_id": req.ClusterID,
 		"resources":  identitySummaries(identities),
@@ -116,6 +129,10 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 	}
 	if !s.allowedAll(subject, "deploy", identities) {
 		return OperationResult{}, ErrPermissionDenied
+	}
+	identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
+	if err != nil {
+		return OperationResult{}, err
 	}
 	event, err := s.record(ctx, subject, "deploy", req.ClusterID, identities, map[string]any{
 		"cluster_id": req.ClusterID,
@@ -436,6 +453,28 @@ func splitYAMLDocuments(value string) []string {
 		}
 	}
 	return out
+}
+
+func (s Service) resolveResourceVersions(ctx context.Context, clusterID string, identities []ResourceIdentity) ([]ResourceIdentity, error) {
+	if s.capabilities == nil || len(identities) == 0 {
+		return identities, nil
+	}
+	snapshot, err := s.capabilities.Capabilities(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	resolver := kubeclient.NewResourceVersionResolver(snapshot)
+	out := make([]ResourceIdentity, 0, len(identities))
+	for _, identity := range identities {
+		resolved, err := resolver.Resolve(kubeclient.ResourceVersionRequest{APIVersion: identity.APIVersion, Kind: identity.Kind})
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
+		identity.APIVersion = resolved.APIVersion
+		identity.Kind = resolved.Kind
+		out = append(out, identity)
+	}
+	return out, nil
 }
 
 func (s Service) allowedAll(subject platformrbac.Subject, action string, identities []ResourceIdentity) bool {

@@ -91,7 +91,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		ClusterCred:    clusterCredentialService,
 		Namespace:      namespace.NewService(namespaceRepo),
 		Resource:       resource.NewService(resourceReader),
-		Deploy:         deployment.NewService(deployment.NewMemoryReader(nil), authorizer, auditor),
+		Deploy:         deployment.NewService(deployment.NewMemoryReader(nil), authorizer, auditor, clusterCapabilityProvider),
 		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),
