@@ -66,6 +66,7 @@ func TestEnsureK8sOpsDefaultsAllowsGlobalK8sReadOnly(t *testing.T) {
 	for _, req := range []Request{
 		{Resource: "k8s.namespace", Action: "read", Scope: Scope{ClusterID: "stage"}},
 		{Resource: "k8s.resource", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.service-account", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.cluster-credential", Action: "read", Scope: Scope{ClusterID: "stage"}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)

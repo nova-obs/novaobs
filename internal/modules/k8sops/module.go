@@ -46,6 +46,9 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	}))
 	dashboardReader := dashboard.Reader(dashboard.NewStaticReader())
 	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
+	serviceAccountRepo := serviceaccount.Repository(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
+		{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
+	}))
 	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
 		{
 			Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
@@ -78,6 +81,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				dashboardReader = dashboard.NewKubernetesReader(value, authorizer)
 				namespaceRepo = namespace.NewKubernetesRepository(value, authorizer)
 				resourceReader = resource.NewKubernetesReader(value, authorizer)
+				serviceAccountRepo = serviceaccount.NewKubernetesRepository(value, authorizer)
 			}
 		case terminal.Executor:
 			if value != nil {
@@ -101,9 +105,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		Cert: certificate.NewService(certificate.NewMemoryRepository([]certificate.Certificate{
 			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
 		}), authorizer, auditor, secrets),
-		ServiceAccount: serviceaccount.NewService(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
-			{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
-		}), authorizer, auditor),
+		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
 		RBAC: k8srbac.NewService(k8srbac.NewMemoryRepository([]k8srbac.RoleResource{
 			{ID: "role-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-role-orders-reader", Rules: []k8srbac.Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}}}, Source: "startorch"},
 		}, []k8srbac.BindingResource{

@@ -19,6 +19,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		Permissions: []Permission{
 			{Resource: "k8s.service-account", Action: "create", ScopeMode: "namespace"},
 			{Resource: "k8s.service-account", Action: "delete", ScopeMode: "namespace"},
+			{Resource: "k8s.service-account", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.rbac", Action: "create", ScopeMode: "namespace"},
 			{Resource: "k8s.rbac", Action: "update", ScopeMode: "namespace"},
@@ -58,6 +59,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 		Permissions: []Permission{
 			{Resource: "k8s.namespace", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
+			{Resource: "k8s.service-account", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
 		},
 		CreatedAt: now,

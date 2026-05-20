@@ -19,6 +19,7 @@ var (
 	ErrPermissionDenied = errors.New("permission_denied")
 	ErrInvalidRequest   = errors.New("invalid_service_account_request")
 	ErrNotFound         = errors.New("service_account_not_found")
+	ErrWriteUnavailable = errors.New("service_account_write_unavailable")
 )
 
 type Repository interface {

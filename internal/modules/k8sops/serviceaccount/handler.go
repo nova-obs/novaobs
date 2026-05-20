@@ -70,6 +70,8 @@ func writeServiceAccountError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", "ServiceAccount 请求参数不完整")
 	case errors.Is(err, ErrNotFound):
 		response.Error(ctx, http.StatusNotFound, "not_found", "ServiceAccount 不存在")
+	case errors.Is(err, ErrWriteUnavailable):
+		response.Error(ctx, http.StatusConflict, "k8s_service_account_write_unavailable", "真实集群 ServiceAccount 写操作尚未启用")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_service_account_operation_failed", "ServiceAccount 操作失败")
 	}
