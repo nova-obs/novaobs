@@ -58,6 +58,17 @@ func DeleteHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func CapabilityHandler(service CapabilityService) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		snapshot, err := service.Get(ctx.Request.Context(), ctx.Param("id"))
+		if err != nil {
+			writeCapabilityError(ctx, err)
+			return
+		}
+		response.OK(ctx, snapshot, gin.H{"total": len(snapshot.Resources)})
+	}
+}
+
 func writeClusterError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidClusterRequest):
@@ -66,6 +77,22 @@ func writeClusterError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_write_unavailable", "集群仓储暂不支持写入")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_operation_failed", "集群操作失败")
+	}
+}
+
+func writeCapabilityError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidClusterRequest):
+		response.Error(ctx, http.StatusBadRequest, "invalid_request", "集群 ID 不能为空")
+	case errors.Is(err, ErrClusterCapabilityUnavailable):
+		response.Error(ctx, http.StatusServiceUnavailable, "k8s_cluster_capability_unavailable", "集群能力解析服务尚未接入")
+	case errors.Is(err, ErrCredentialPermissionDenied):
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取集群能力")
+	case errors.Is(err, ErrCredentialNotFound):
+		response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+	default:
+		slog.Warn("K8s 集群能力查询失败", "error", err)
+		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_capability_failed", "集群能力查询失败")
 	}
 }
 

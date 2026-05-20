@@ -1,10 +1,13 @@
 package cluster
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"novaobs/internal/modules/k8sops/kubeclient"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -60,6 +63,49 @@ func TestClusterCreateRejectsMissingIdentity(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "invalid_request")
+}
+
+func TestClusterCapabilityHandlerReturnsSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := NewCapabilityService(staticHandlerCapabilityProvider{snapshot: kubeclient.CapabilitySnapshot{
+		ServerVersion: "v1.30.2",
+		Resources: []kubeclient.APIResource{
+			{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler", Namespaced: true},
+		},
+	}})
+	router := gin.New()
+	router.GET("/api/v1/k8s/clusters/:id/capabilities", CapabilityHandler(service))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/k8s/clusters/prod/capabilities", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"cluster_id":"prod"`)
+	require.Contains(t, recorder.Body.String(), `"server_version":"v1.30.2"`)
+	require.Contains(t, recorder.Body.String(), `"horizontalpodautoscalers"`)
+}
+
+func TestClusterCapabilityHandlerReportsUnavailableProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/api/v1/k8s/clusters/:id/capabilities", CapabilityHandler(NewCapabilityService(nil)))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/k8s/clusters/prod/capabilities", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "k8s_cluster_capability_unavailable")
+}
+
+type staticHandlerCapabilityProvider struct {
+	snapshot kubeclient.CapabilitySnapshot
+}
+
+func (p staticHandlerCapabilityProvider) Capabilities(_ context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error) {
+	p.snapshot.ClusterID = clusterID
+	return p.snapshot, nil
 }
 
 func TestClusterDeleteRejectsMissingIdentity(t *testing.T) {

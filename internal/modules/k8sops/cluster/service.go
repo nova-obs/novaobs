@@ -5,11 +5,14 @@ import (
 	"errors"
 	"sort"
 	"strings"
+
+	"novaobs/internal/modules/k8sops/kubeclient"
 )
 
 var (
-	ErrInvalidClusterRequest  = errors.New("invalid_cluster_request")
-	ErrClusterRepositoryWrite = errors.New("cluster_repository_write_unavailable")
+	ErrInvalidClusterRequest        = errors.New("invalid_cluster_request")
+	ErrClusterRepositoryWrite       = errors.New("cluster_repository_write_unavailable")
+	ErrClusterCapabilityUnavailable = errors.New("cluster_capability_unavailable")
 )
 
 type Repository interface {
@@ -28,12 +31,35 @@ type Service struct {
 	repo Repository
 }
 
+type CapabilityProvider interface {
+	Capabilities(ctx context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error)
+}
+
+type CapabilityService struct {
+	provider CapabilityProvider
+}
+
 func NewService(repo Repository) Service {
 	return Service{repo: repo}
 }
 
+func NewCapabilityService(provider CapabilityProvider) CapabilityService {
+	return CapabilityService{provider: provider}
+}
+
 func (s Service) List(ctx context.Context, filter ListFilter) ([]Cluster, error) {
 	return s.repo.List(ctx, filter)
+}
+
+func (s CapabilityService) Get(ctx context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error) {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return kubeclient.CapabilitySnapshot{}, ErrInvalidClusterRequest
+	}
+	if s.provider == nil {
+		return kubeclient.CapabilitySnapshot{}, ErrClusterCapabilityUnavailable
+	}
+	return s.provider.Capabilities(ctx, clusterID)
 }
 
 func (s Service) Create(ctx context.Context, req UpsertRequest) (Cluster, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +50,40 @@ func TestMemoryRepositorySortsAndPaginatesClusters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "prod-b", items[0].ID)
+}
+
+func TestCapabilityServiceReturnsProviderSnapshot(t *testing.T) {
+	svc := NewCapabilityService(staticCapabilityProvider{snapshot: kubeclient.CapabilitySnapshot{
+		ClusterID:     "prod",
+		ServerVersion: "v1.30.2",
+		Resources: []kubeclient.APIResource{
+			{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices", Kind: "VirtualService", Namespaced: true},
+		},
+	}})
+
+	snapshot, err := svc.Get(context.Background(), " prod ")
+
+	require.NoError(t, err)
+	require.Equal(t, "prod", snapshot.ClusterID)
+	require.Equal(t, "v1.30.2", snapshot.ServerVersion)
+	require.True(t, snapshot.Supports("networking.istio.io", "v1", "virtualservices"))
+}
+
+func TestCapabilityServiceRejectsMissingProviderAndClusterID(t *testing.T) {
+	svc := NewCapabilityService(nil)
+
+	_, err := svc.Get(context.Background(), "")
+	require.ErrorIs(t, err, ErrInvalidClusterRequest)
+
+	_, err = svc.Get(context.Background(), "prod")
+	require.ErrorIs(t, err, ErrClusterCapabilityUnavailable)
+}
+
+type staticCapabilityProvider struct {
+	snapshot kubeclient.CapabilitySnapshot
+}
+
+func (p staticCapabilityProvider) Capabilities(_ context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error) {
+	p.snapshot.ClusterID = clusterID
+	return p.snapshot, nil
 }

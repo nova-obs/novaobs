@@ -19,6 +19,7 @@ import (
 type Module struct {
 	Dashboard      dashboard.Service
 	Cluster        cluster.Service
+	ClusterCaps    cluster.CapabilityService
 	ClusterCred    cluster.CredentialService
 	Namespace      namespace.Service
 	Resource       resource.Service
@@ -40,6 +41,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		secrets = secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
 	}
 	clusterRepo := cluster.Repository(cluster.NewMemoryRepository(nil))
+	clusterCapabilityProvider := cluster.CapabilityProvider(nil)
 	namespaceRepo := namespace.Repository(namespace.NewMemoryRepository(nil))
 	dashboardReader := dashboard.Reader(dashboard.NewStaticReader())
 	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
@@ -70,6 +72,9 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				serviceAccountRepo = serviceaccount.NewKubernetesRepository(value, authorizer)
 				rbacRepo = k8srbac.NewKubernetesRepository(value, authorizer)
 				certificateRepo = certificate.NewKubernetesRepository(value, authorizer)
+				if provider, ok := value.(cluster.CapabilityProvider); ok {
+					clusterCapabilityProvider = provider
+				}
 			}
 		case terminal.Executor:
 			if value != nil {
@@ -82,6 +87,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	return Module{
 		Dashboard:      dashboard.NewService(dashboardReader),
 		Cluster:        cluster.NewService(clusterRepo),
+		ClusterCaps:    cluster.NewCapabilityService(clusterCapabilityProvider),
 		ClusterCred:    clusterCredentialService,
 		Namespace:      namespace.NewService(namespaceRepo),
 		Resource:       resource.NewService(resourceReader),
