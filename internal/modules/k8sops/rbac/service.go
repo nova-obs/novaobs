@@ -20,6 +20,7 @@ var (
 	ErrInvalidRequest   = errors.New("invalid_k8s_rbac_request")
 	ErrNotFound         = errors.New("k8s_rbac_resource_not_found")
 	ErrAlreadyExists    = errors.New("k8s_rbac_resource_already_exists")
+	ErrWriteUnavailable = errors.New("k8s_rbac_write_unavailable")
 )
 
 type Repository interface {

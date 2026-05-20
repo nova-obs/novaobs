@@ -49,6 +49,11 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	serviceAccountRepo := serviceaccount.Repository(serviceaccount.NewMemoryRepository([]serviceaccount.ServiceAccount{
 		{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
 	}))
+	rbacRepo := k8srbac.Repository(k8srbac.NewMemoryRepository([]k8srbac.RoleResource{
+		{ID: "role-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-role-orders-reader", Rules: []k8srbac.Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}}}, Source: "startorch"},
+	}, []k8srbac.BindingResource{
+		{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
+	}))
 	resourceReader := resource.Reader(resource.NewMemoryReader([]resource.ResourceSummary{
 		{
 			Identity: resource.Identity{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders-api"},
@@ -82,6 +87,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				namespaceRepo = namespace.NewKubernetesRepository(value, authorizer)
 				resourceReader = resource.NewKubernetesReader(value, authorizer)
 				serviceAccountRepo = serviceaccount.NewKubernetesRepository(value, authorizer)
+				rbacRepo = k8srbac.NewKubernetesRepository(value, authorizer)
 			}
 		case terminal.Executor:
 			if value != nil {
@@ -106,12 +112,8 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			{ID: "cert-prod-1", ClusterID: "prod", Namespace: "ingress", Name: "wildcard-prod", CommonName: "*.prod.example.com", Fingerprint: "sha256:6f7d8e", Status: "valid", Source: "startorch"},
 		}), authorizer, auditor, secrets),
 		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
-		RBAC: k8srbac.NewService(k8srbac.NewMemoryRepository([]k8srbac.RoleResource{
-			{ID: "role-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-role-orders-reader", Rules: []k8srbac.Rule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}}}, Source: "startorch"},
-		}, []k8srbac.BindingResource{
-			{ID: "binding-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "RoleBinding", Name: "orders-reader-binding", UID: "uid-binding-orders-reader", RoleRef: k8srbac.RoleRef{Kind: "Role", Name: "orders-reader"}, Subjects: []k8srbac.Subject{{Kind: "ServiceAccount", Name: "orders-reader", Namespace: "orders"}}, Source: "startorch"},
-		}), authorizer, auditor),
-		Kubeconfig: kubeconfig.NewService(secrets, authorizer, auditor),
+		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),
+		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor),
 		Template: k8stemplate.NewService(k8stemplate.NewMemoryRepository([]k8stemplate.Template{
 			{
 				ID:          "tpl-orders-deployment",

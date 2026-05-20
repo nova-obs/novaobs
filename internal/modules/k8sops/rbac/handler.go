@@ -17,7 +17,7 @@ func ListRolesHandler(service Service) gin.HandlerFunc {
 		filter := listFilterFromQuery(ctx)
 		items, err := service.ListRoles(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_roles_list_failed", "Role 列表查询失败")
+			writeRBACError(ctx, err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -72,7 +72,7 @@ func ListBindingsHandler(service Service) gin.HandlerFunc {
 		filter := listFilterFromQuery(ctx)
 		items, err := service.ListBindings(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_bindings_list_failed", "Binding 列表查询失败")
+			writeRBACError(ctx, err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -116,6 +116,8 @@ func writeRBACError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusNotFound, "not_found", "K8s RBAC 资源不存在")
 	case errors.Is(err, ErrAlreadyExists):
 		response.Error(ctx, http.StatusConflict, "already_exists", "K8s RBAC 资源已存在")
+	case errors.Is(err, ErrWriteUnavailable):
+		response.Error(ctx, http.StatusConflict, "k8s_rbac_write_unavailable", "真实集群 K8s RBAC 写操作尚未启用")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_operation_failed", "K8s RBAC 操作失败")
 	}
