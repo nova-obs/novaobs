@@ -48,6 +48,16 @@ func CreateHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func DeleteHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if err := service.Delete(ctx.Request.Context(), ctx.Param("id")); err != nil {
+			writeClusterError(ctx, err)
+			return
+		}
+		response.OK(ctx, gin.H{"deleted": true}, gin.H{})
+	}
+}
+
 func writeClusterError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidClusterRequest):

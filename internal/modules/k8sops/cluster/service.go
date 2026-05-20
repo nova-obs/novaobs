@@ -20,6 +20,10 @@ type UpsertRepository interface {
 	Upsert(ctx context.Context, item Cluster) (Cluster, error)
 }
 
+type DeleteRepository interface {
+	Delete(ctx context.Context, id string) error
+}
+
 type Service struct {
 	repo Repository
 }
@@ -52,6 +56,18 @@ func (s Service) Create(ctx context.Context, req UpsertRequest) (Cluster, error)
 		return Cluster{}, ErrClusterRepositoryWrite
 	}
 	return repo.Upsert(ctx, item)
+}
+
+func (s Service) Delete(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrInvalidClusterRequest
+	}
+	repo, ok := s.repo.(DeleteRepository)
+	if !ok {
+		return ErrClusterRepositoryWrite
+	}
+	return repo.Delete(ctx, id)
 }
 
 type MemoryRepository struct {
@@ -88,6 +104,18 @@ func (r *MemoryRepository) Upsert(_ context.Context, item Cluster) (Cluster, err
 	}
 	r.items = append(r.items, item)
 	return item, nil
+}
+
+func (r *MemoryRepository) Delete(_ context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	next := make([]Cluster, 0, len(r.items))
+	for _, item := range r.items {
+		if item.ID != id {
+			next = append(next, item)
+		}
+	}
+	r.items = next
+	return nil
 }
 
 func sortClusters(items []Cluster, field string, order string) {

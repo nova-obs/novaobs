@@ -485,6 +485,11 @@ func (s *k8sClusterStore) FindAll(ctx context.Context, results interface{}) erro
 	return decodeBSONDocuments(docs, results)
 }
 
+func (s *k8sClusterStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
 type k8sNamespaceStore struct{ col *mongo.Collection }
 
 func (s *k8sNamespaceStore) Upsert(ctx context.Context, id string, namespace interface{}) error {

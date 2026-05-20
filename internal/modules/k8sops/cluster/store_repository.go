@@ -31,3 +31,7 @@ func (r *StoreRepository) Upsert(ctx context.Context, item Cluster) (Cluster, er
 	}
 	return item, nil
 }
+
+func (r *StoreRepository) Delete(ctx context.Context, id string) error {
+	return r.store.Delete(ctx, id)
+}

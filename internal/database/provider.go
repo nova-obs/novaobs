@@ -145,6 +145,7 @@ type AuditEventStore interface {
 type K8sClusterStore interface {
 	Upsert(ctx context.Context, id string, cluster interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type K8sNamespaceStore interface {

@@ -694,6 +694,13 @@ func (st *k8sClusterStore) FindAll(ctx context.Context, results interface{}) err
 	return copyAll(st.s.kcls, results)
 }
 
+func (st *k8sClusterStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.kcls, id)
+	return nil
+}
+
 type k8sNamespaceStore struct{ s *Store }
 
 func (st *k8sNamespaceStore) Upsert(ctx context.Context, id string, v interface{}) error {
