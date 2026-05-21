@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -87,6 +88,27 @@ func TestApplyDeploymentUsesDeployPermission(t *testing.T) {
 	require.Equal(t, "deploy", events[0].Action)
 }
 
+func TestApplyDeploymentConfirmationMismatchReturnsSpecificErrorCode(t *testing.T) {
+	router, _ := newDeploymentOperationRouter(t, deploymentWriterRepo(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"}, &recordingDeploymentApplier{})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/deployments", strings.NewReader(`{"cluster_id":"prod","yaml_content":"`+escapeJSON(deploymentYAML)+`","preview_id":"wrong","confirmation_token":"wrong"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "confirmation_mismatch", body.Error.Code)
+	require.Contains(t, body.Error.Message, "重新预览")
+}
+
 func TestInvalidDeploymentRequestMessageIncludesAPIServerValidationDetail(t *testing.T) {
 	err := fmt.Errorf("%w: %w", ErrInvalidRequest, fmt.Errorf("%w: Deployment.apps \"orders-api\" is invalid: spec.selector: Required value", kubeclient.ErrResourceOperationInvalid))
 
@@ -98,15 +120,25 @@ func TestInvalidDeploymentRequestMessageIncludesAPIServerValidationDetail(t *tes
 	require.NotContains(t, message, "k8s_resource_operation_invalid")
 }
 
-func newDeploymentOperationRouter(t *testing.T, rbacRepo testRBACRepo, subjects ...platformrbac.Subject) (*gin.Engine, *audit.MemoryStore) {
+func newDeploymentOperationRouter(t *testing.T, rbacRepo testRBACRepo, subjectsAndDependencies ...any) (*gin.Engine, *audit.MemoryStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	auditStore := audit.NewMemoryStore()
-	service := NewService(NewMemoryReader(nil), platformrbac.NewService(rbacRepo), audit.NewService(auditStore))
+	subject := platformrbac.Subject{}
+	dependencies := []any{platformrbac.NewService(rbacRepo), audit.NewService(auditStore)}
+	for _, item := range subjectsAndDependencies {
+		switch value := item.(type) {
+		case platformrbac.Subject:
+			subject = value
+		default:
+			dependencies = append(dependencies, item)
+		}
+	}
+	service := NewService(NewMemoryReader(nil), dependencies...)
 	router := gin.New()
-	if len(subjects) > 0 {
+	if subject.ID != "" {
 		router.Use(func(ctx *gin.Context) {
-			ctx.Request = ctx.Request.WithContext(authctx.WithSubject(ctx.Request.Context(), subjects[0]))
+			ctx.Request = ctx.Request.WithContext(authctx.WithSubject(ctx.Request.Context(), subject))
 			ctx.Next()
 		})
 	}

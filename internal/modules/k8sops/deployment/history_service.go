@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	ErrPermissionDenied = errors.New("permission_denied")
-	ErrInvalidRequest   = errors.New("invalid_k8s_deployment_request")
+	ErrPermissionDenied     = errors.New("permission_denied")
+	ErrInvalidRequest       = errors.New("invalid_k8s_deployment_request")
+	ErrConfirmationMismatch = errors.New("confirmation_mismatch")
 )
 
 type Reader interface {
@@ -189,7 +190,7 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 			return OperationResult{}, err
 		}
 		if !matchingConfirmation(req, plan) {
-			return OperationResult{}, fmt.Errorf("%w: confirmation_mismatch", ErrInvalidRequest)
+			return OperationResult{}, fmt.Errorf("%w: %w", ErrInvalidRequest, ErrConfirmationMismatch)
 		}
 		applied, err := s.applier.Apply(ctx, kubeclient.ClusterApplyRequest{
 			ClusterID:   req.ClusterID,
@@ -249,7 +250,7 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 	if s.deleter != nil {
 		plan := buildDeletePlan(identity)
 		if !matchingDeleteConfirmation(req, plan) {
-			return OperationResult{}, fmt.Errorf("%w: confirmation_mismatch", ErrInvalidRequest)
+			return OperationResult{}, fmt.Errorf("%w: %w", ErrInvalidRequest, ErrConfirmationMismatch)
 		}
 		deleted, err := s.deleter.Delete(ctx, kubeclient.ClusterDeleteRequest{
 			ClusterID: identity.ClusterID,
@@ -270,6 +271,9 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 		}
 		if !s.allowedAll(subject, "delete", deletedIdentities) {
 			return OperationResult{}, ErrPermissionDenied
+		}
+		if err := s.removeInventory(ctx, deletedIdentities); err != nil {
+			return OperationResult{}, err
 		}
 		event, err := s.record(ctx, subject, "delete", identity.ClusterID, deletedIdentities, map[string]any{
 			"cluster_id": identity.ClusterID,
@@ -663,6 +667,19 @@ func (s Service) upsertInventory(ctx context.Context, plan PreviewPlan) error {
 			UpdatedAt:     now,
 		})
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Service) removeInventory(ctx context.Context, identities []ResourceIdentity) error {
+	if s.inventory == nil {
+		return nil
+	}
+	for _, identity := range identities {
+		err := s.inventory.Remove(ctx, identity)
+		if err != nil && !errors.Is(err, ErrInventoryRecordNotFound) {
 			return err
 		}
 	}

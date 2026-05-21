@@ -81,6 +81,22 @@ func TestMemoryInventoryRepositoryUpsertsFindsAndListsRecords(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "hash-v2", foundAgain.LastApplyHash)
+
+	require.NoError(t, repo.Remove(ctx, ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+	}))
+	_, err = repo.Find(ctx, ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+	})
+	require.ErrorIs(t, err, ErrInventoryRecordNotFound)
 }
 
 func TestMemoryInventoryRepositoryRejectsIncompleteRecords(t *testing.T) {

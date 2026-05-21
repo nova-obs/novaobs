@@ -14,6 +14,7 @@ type InventoryRepository interface {
 	Upsert(ctx context.Context, record InventoryRecord) (InventoryRecord, error)
 	Find(ctx context.Context, identity ResourceIdentity) (InventoryRecord, error)
 	List(ctx context.Context, filter InventoryFilter) ([]InventoryRecord, error)
+	Remove(ctx context.Context, identity ResourceIdentity) error
 }
 
 type MemoryInventoryRepository struct {
@@ -91,6 +92,21 @@ func (r *MemoryInventoryRepository) List(_ context.Context, filter InventoryFilt
 		return inventoryRecordKey(out[left]) < inventoryRecordKey(out[right])
 	})
 	return out, nil
+}
+
+func (r *MemoryInventoryRepository) Remove(_ context.Context, identity ResourceIdentity) error {
+	record := inventoryRecordFromIdentity(identity)
+	if !completeInventoryRecord(record) {
+		return ErrInvalidInventoryRecord
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := inventoryRecordKey(record)
+	if _, ok := r.records[key]; !ok {
+		return ErrInventoryRecordNotFound
+	}
+	delete(r.records, key)
+	return nil
 }
 
 func normalizeInventoryRecord(record InventoryRecord) InventoryRecord {

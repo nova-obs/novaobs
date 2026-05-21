@@ -126,6 +126,8 @@ func writeDeploymentError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrPermissionDenied):
 		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权执行发布部署操作")
+	case errors.Is(err, ErrConfirmationMismatch):
+		response.Error(ctx, http.StatusBadRequest, "confirmation_mismatch", "预览确认已失效，请重新预览后再执行")
 	case errors.Is(err, ErrInvalidRequest):
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", invalidDeploymentRequestMessage(err))
 	default:
