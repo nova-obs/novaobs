@@ -305,6 +305,33 @@ func TestServiceDeleteRequiresMatchingConfirmationBeforeExecution(t *testing.T) 
 	require.NotContains(t, events[0].RequestSummary, "confirmation_token")
 }
 
+func TestServicePreviewDeleteReturnsConfirmationPlan(t *testing.T) {
+	auditStore := audit.NewMemoryStore()
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(auditStore))
+	identity := ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+		UID:        "uid-orders-api",
+	}
+
+	result, err := svc.PreviewDelete(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, DeleteRequest{Identity: identity})
+
+	require.NoError(t, err)
+	require.Equal(t, "preview", result.Status)
+	require.NotEmpty(t, result.PreviewID)
+	require.NotEmpty(t, result.ConfirmationToken)
+	require.Len(t, result.Diffs, 1)
+	require.Equal(t, "delete", result.Diffs[0].Operation)
+	events, err := auditStore.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "delete_preview", events[0].Action)
+	require.NotContains(t, events[0].RequestSummary, "confirmation_token")
+}
+
 func TestServicePreviewRechecksPermissionForDryRunResultIdentities(t *testing.T) {
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
 		Objects: []kubeclient.OperationObject{{

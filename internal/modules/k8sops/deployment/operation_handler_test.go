@@ -109,6 +109,20 @@ func TestApplyDeploymentConfirmationMismatchReturnsSpecificErrorCode(t *testing.
 	require.Contains(t, body.Error.Message, "重新预览")
 }
 
+func TestPreviewDeleteDeploymentReturnsConfirmationPlan(t *testing.T) {
+	router, _ := newDeploymentOperationRouter(t, deploymentWriterRepo(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/deployments/delete-preview", strings.NewReader(`{"identity":{"cluster_id":"prod","namespace":"orders","api_version":"apps/v1","kind":"Deployment","name":"orders-api","uid":"uid-orders-api"}}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "confirmation_token")
+	require.Contains(t, recorder.Body.String(), "delete")
+}
+
 func TestInvalidDeploymentRequestMessageIncludesAPIServerValidationDetail(t *testing.T) {
 	err := fmt.Errorf("%w: %w", ErrInvalidRequest, fmt.Errorf("%w: Deployment.apps \"orders-api\" is invalid: spec.selector: Required value", kubeclient.ErrResourceOperationInvalid))
 
@@ -144,6 +158,7 @@ func newDeploymentOperationRouter(t *testing.T, rbacRepo testRBACRepo, subjectsA
 	}
 	api := router.Group("/api/v1")
 	api.POST("/k8s/deployments/preview", PreviewHandler(service))
+	api.POST("/k8s/deployments/delete-preview", PreviewDeleteHandler(service))
 	api.POST("/k8s/deployments", ApplyHandler(service))
 	api.DELETE("/k8s/deployments", DeleteHandler(service))
 	api.POST("/k8s/deployments/rollback", RollbackHandler(service))

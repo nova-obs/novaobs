@@ -54,6 +54,22 @@ func PreviewHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func PreviewDeleteHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body DeleteRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.PreviewDelete(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeDeploymentError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func ApplyHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body OperationRequest

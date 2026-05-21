@@ -175,6 +175,35 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	}, nil
 }
 
+func (s Service) PreviewDelete(ctx context.Context, subject platformrbac.Subject, req DeleteRequest) (OperationResult, error) {
+	identity := normalizeIdentity(req.Identity)
+	if !completeDestructiveIdentity(identity) {
+		return OperationResult{}, ErrInvalidRequest
+	}
+	if !s.allowedAll(subject, "delete", []ResourceIdentity{identity}) {
+		return OperationResult{}, ErrPermissionDenied
+	}
+	plan := buildDeletePlan(identity)
+	event, err := s.record(ctx, subject, "delete_preview", identity.ClusterID, []ResourceIdentity{identity}, map[string]any{
+		"cluster_id": identity.ClusterID,
+		"preview_id": plan.ID,
+		"resource":   identitySummary(identity),
+		"diff_count": len(plan.Diffs),
+	})
+	if err != nil {
+		return OperationResult{}, err
+	}
+	return OperationResult{
+		Status:            "preview",
+		Message:           "删除预览已生成",
+		AuditID:           event.ID,
+		Resources:         plan.Resources,
+		PreviewID:         plan.ID,
+		ConfirmationToken: plan.ConfirmationToken,
+		Diffs:             plan.Diffs,
+	}, nil
+}
+
 func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req OperationRequest) (OperationResult, error) {
 	req = normalizeOperationRequest(req)
 	identities, err := parseResourceIdentities(req)

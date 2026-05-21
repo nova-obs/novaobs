@@ -146,6 +146,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/k8s/deployment-history", k8sopsdeployment.HistoryHandler(deps.K8sOpsModule.Deploy))
 	api.GET("/k8s/audit-events", k8sopsdeployment.AuditEventsHandler(deps.K8sOpsModule.Deploy))
 	api.POST("/k8s/deployments/preview", k8sopsdeployment.PreviewHandler(deps.K8sOpsModule.Deploy))
+	api.POST("/k8s/deployments/delete-preview", k8sopsdeployment.PreviewDeleteHandler(deps.K8sOpsModule.Deploy))
 	api.POST("/k8s/deployments", k8sopsdeployment.ApplyHandler(deps.K8sOpsModule.Deploy))
 	api.DELETE("/k8s/deployments", k8sopsdeployment.DeleteHandler(deps.K8sOpsModule.Deploy))
 	api.POST("/k8s/deployments/rollback", k8sopsdeployment.RollbackHandler(deps.K8sOpsModule.Deploy))
