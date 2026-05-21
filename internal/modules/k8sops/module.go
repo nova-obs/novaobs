@@ -50,7 +50,8 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	certificateRepo := certificate.Repository(certificate.NewMemoryRepository(nil))
 	resourceReader := resource.Reader(resource.NewMemoryReader(nil))
 	terminalDependencies := []any{authorizer, auditor}
-	deploymentDependencies := []any{authorizer, auditor}
+	deploymentInventoryRepo := deployment.InventoryRepository(deployment.NewMemoryInventoryRepository(nil))
+	deploymentDependencies := []any{authorizer, auditor, deploymentInventoryRepo}
 	for _, dependency := range dependencies {
 		switch value := dependency.(type) {
 		case cluster.Repository:
@@ -64,6 +65,11 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		case resource.Reader:
 			if value != nil {
 				resourceReader = value
+			}
+		case deployment.InventoryRepository:
+			if value != nil {
+				deploymentInventoryRepo = value
+				deploymentDependencies = append(deploymentDependencies, value)
 			}
 		case kubeclient.ClientsetProvider:
 			if value != nil {

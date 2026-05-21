@@ -53,6 +53,26 @@ func buildPreviewPlan(clusterID string, identities []ResourceIdentity, warnings 
 	}
 }
 
+func buildDeletePlan(identity ResourceIdentity) PreviewPlan {
+	identity = normalizeIdentity(identity)
+	diff := ResourceDiff{
+		ClusterID:  identity.ClusterID,
+		Namespace:  identity.Namespace,
+		APIVersion: identity.APIVersion,
+		Kind:       identity.Kind,
+		Name:       identity.Name,
+		Operation:  "delete",
+		BeforeHash: digest("before:" + identitySortKey(identity) + "/" + identity.UID),
+	}
+	source := previewPlanSource([]ResourceDiff{diff})
+	return PreviewPlan{
+		ID:                shortDigest("delete-preview:" + source),
+		ConfirmationToken: digest("delete-confirm:" + source),
+		Resources:         []ResourceIdentity{identity},
+		Diffs:             []ResourceDiff{diff},
+	}
+}
+
 func cloneAndSortIdentities(clusterID string, identities []ResourceIdentity) []ResourceIdentity {
 	out := make([]ResourceIdentity, 0, len(identities))
 	for _, identity := range identities {

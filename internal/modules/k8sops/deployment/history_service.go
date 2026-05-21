@@ -33,6 +33,9 @@ type Service struct {
 	auditReader  AuditEventReader
 	capabilities CapabilityProvider
 	dryRunner    OperationDryRunner
+	applier      OperationApplier
+	deleter      OperationDeleter
+	inventory    InventoryRepository
 }
 
 type Authorizer interface {
@@ -55,6 +58,14 @@ type OperationDryRunner interface {
 	DryRunApply(ctx context.Context, req kubeclient.ClusterDryRunApplyRequest) (kubeclient.DryRunApplyResult, error)
 }
 
+type OperationApplier interface {
+	Apply(ctx context.Context, req kubeclient.ClusterApplyRequest) (kubeclient.ResourceOperationResult, error)
+}
+
+type OperationDeleter interface {
+	Delete(ctx context.Context, req kubeclient.ClusterDeleteRequest) (kubeclient.ResourceOperationResult, error)
+}
+
 func NewService(reader Reader, security ...any) Service {
 	service := Service{reader: reader, authorizer: denyAuthorizer{}, auditor: noopAuditor{}}
 	for _, item := range security {
@@ -72,6 +83,15 @@ func NewService(reader Reader, security ...any) Service {
 		}
 		if value, ok := item.(OperationDryRunner); ok && value != nil {
 			service.dryRunner = value
+		}
+		if value, ok := item.(OperationApplier); ok && value != nil {
+			service.applier = value
+		}
+		if value, ok := item.(OperationDeleter); ok && value != nil {
+			service.deleter = value
+		}
+		if value, ok := item.(InventoryRepository); ok && value != nil {
+			service.inventory = value
 		}
 	}
 	return service
@@ -163,6 +183,45 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 	if !s.allowedAll(subject, "deploy", identities) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	if s.applier != nil {
+		plan, err := s.previewPlanForRequest(ctx, subject, req, "deploy", identities)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		if !matchingConfirmation(req, plan) {
+			return OperationResult{}, fmt.Errorf("%w: confirmation_mismatch", ErrInvalidRequest)
+		}
+		applied, err := s.applier.Apply(ctx, kubeclient.ClusterApplyRequest{
+			ClusterID:   req.ClusterID,
+			Mode:        kubeclient.OperationModeApply,
+			YAMLContent: req.YAMLContent,
+		})
+		if err != nil {
+			return OperationResult{}, deploymentOperationError(err)
+		}
+		appliedIdentities := dryRunObjectsToIdentities(req.ClusterID, applied.Objects)
+		if len(appliedIdentities) == 0 {
+			appliedIdentities = plan.Resources
+		}
+		if !s.allowedAll(subject, "deploy", appliedIdentities) {
+			return OperationResult{}, ErrPermissionDenied
+		}
+		if err := s.upsertInventory(ctx, plan); err != nil {
+			return OperationResult{}, err
+		}
+		event, err := s.record(ctx, subject, "deploy", req.ClusterID, appliedIdentities, map[string]any{
+			"cluster_id": req.ClusterID,
+			"preview_id": plan.ID,
+			"resources":  identitySummaries(appliedIdentities),
+			"diff_count": len(plan.Diffs),
+			"yaml_bytes": len(req.YAMLContent),
+			"revision":   primitive.NewObjectID().Hex(),
+		})
+		if err != nil {
+			return OperationResult{}, err
+		}
+		return OperationResult{Status: "applied", Message: "部署已应用到 Kubernetes API", AuditID: event.ID, Resources: appliedIdentities, PreviewID: plan.ID, Diffs: plan.Diffs, Warnings: plan.Warnings}, nil
+	}
 	identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
 	if err != nil {
 		return OperationResult{}, err
@@ -186,6 +245,42 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 	}
 	if !s.allowedAll(subject, "delete", []ResourceIdentity{identity}) {
 		return OperationResult{}, ErrPermissionDenied
+	}
+	if s.deleter != nil {
+		plan := buildDeletePlan(identity)
+		if !matchingDeleteConfirmation(req, plan) {
+			return OperationResult{}, fmt.Errorf("%w: confirmation_mismatch", ErrInvalidRequest)
+		}
+		deleted, err := s.deleter.Delete(ctx, kubeclient.ClusterDeleteRequest{
+			ClusterID: identity.ClusterID,
+			Mode:      kubeclient.OperationModeDelete,
+			Identity: kubeclient.OperationObject{
+				APIVersion: identity.APIVersion,
+				Kind:       identity.Kind,
+				Namespace:  identity.Namespace,
+				Name:       identity.Name,
+			},
+		})
+		if err != nil {
+			return OperationResult{}, deploymentOperationError(err)
+		}
+		deletedIdentities := dryRunObjectsToIdentities(identity.ClusterID, deleted.Objects)
+		if len(deletedIdentities) == 0 {
+			deletedIdentities = []ResourceIdentity{identity}
+		}
+		if !s.allowedAll(subject, "delete", deletedIdentities) {
+			return OperationResult{}, ErrPermissionDenied
+		}
+		event, err := s.record(ctx, subject, "delete", identity.ClusterID, deletedIdentities, map[string]any{
+			"cluster_id": identity.ClusterID,
+			"preview_id": plan.ID,
+			"resource":   identitySummary(identity),
+			"diff_count": len(plan.Diffs),
+		})
+		if err != nil {
+			return OperationResult{}, err
+		}
+		return OperationResult{Status: "deleted", Message: "资源已从 Kubernetes API 删除", AuditID: event.ID, Resources: deletedIdentities, PreviewID: plan.ID, Diffs: plan.Diffs}, nil
 	}
 	event, err := s.record(ctx, subject, "delete", identity.ClusterID, []ResourceIdentity{identity}, map[string]any{
 		"resource": identitySummary(identity),
@@ -508,6 +603,78 @@ func (s Service) resolveResourceVersions(ctx context.Context, clusterID string, 
 		out = append(out, identity)
 	}
 	return out, nil
+}
+
+func (s Service) previewPlanForRequest(ctx context.Context, subject platformrbac.Subject, req OperationRequest, action string, identities []ResourceIdentity) (PreviewPlan, error) {
+	warnings := []string{}
+	if s.dryRunner != nil {
+		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent})
+		if err != nil {
+			return PreviewPlan{}, deploymentOperationError(err)
+		}
+		identities = dryRunObjectsToIdentities(req.ClusterID, dryRun.Objects)
+		warnings = append(warnings, dryRun.Warnings...)
+		if !s.allowedAll(subject, action, identities) {
+			return PreviewPlan{}, ErrPermissionDenied
+		}
+	} else {
+		var err error
+		identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
+		if err != nil {
+			return PreviewPlan{}, err
+		}
+	}
+	return buildPreviewPlan(req.ClusterID, identities, warnings), nil
+}
+
+func matchingConfirmation(req OperationRequest, plan PreviewPlan) bool {
+	return strings.TrimSpace(req.PreviewID) != "" &&
+		strings.TrimSpace(req.ConfirmationToken) != "" &&
+		strings.TrimSpace(req.PreviewID) == plan.ID &&
+		strings.TrimSpace(req.ConfirmationToken) == plan.ConfirmationToken
+}
+
+func matchingDeleteConfirmation(req DeleteRequest, plan PreviewPlan) bool {
+	return strings.TrimSpace(req.PreviewID) != "" &&
+		strings.TrimSpace(req.ConfirmationToken) != "" &&
+		strings.TrimSpace(req.PreviewID) == plan.ID &&
+		strings.TrimSpace(req.ConfirmationToken) == plan.ConfirmationToken
+}
+
+func (s Service) upsertInventory(ctx context.Context, plan PreviewPlan) error {
+	if s.inventory == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	hashes := map[string]string{}
+	for _, diff := range plan.Diffs {
+		hashes[diffIdentityKey(diff)] = diff.AfterHash
+	}
+	for _, resource := range plan.Resources {
+		_, err := s.inventory.Upsert(ctx, InventoryRecord{
+			ClusterID:     resource.ClusterID,
+			Namespace:     resource.Namespace,
+			APIVersion:    resource.APIVersion,
+			Kind:          resource.Kind,
+			Name:          resource.Name,
+			FieldManager:  kubeclient.DefaultFieldManager,
+			LastApplyHash: hashes[resourceIdentityKey(resource)],
+			LastPreviewID: plan.ID,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resourceIdentityKey(identity ResourceIdentity) string {
+	return strings.Join([]string{identity.ClusterID, identity.Namespace, identity.APIVersion, strings.ToLower(identity.Kind), identity.Name}, "\x00")
+}
+
+func diffIdentityKey(diff ResourceDiff) string {
+	return strings.Join([]string{diff.ClusterID, diff.Namespace, diff.APIVersion, strings.ToLower(diff.Kind), diff.Name}, "\x00")
 }
 
 func dryRunObjectsToIdentities(clusterID string, objects []kubeclient.OperationObject) []ResourceIdentity {

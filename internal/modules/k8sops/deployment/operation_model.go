@@ -17,7 +17,9 @@ type ResourceIdentity struct {
 }
 
 type DeleteRequest struct {
-	Identity ResourceIdentity `json:"identity"`
+	Identity          ResourceIdentity `json:"identity"`
+	PreviewID         string           `json:"preview_id,omitempty"`
+	ConfirmationToken string           `json:"confirmation_token,omitempty"`
 }
 
 type RollbackRequest struct {

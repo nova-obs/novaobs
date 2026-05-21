@@ -182,6 +182,129 @@ metadata:
 	require.Equal(t, 2, events[0].RequestSummary["diff_count"])
 }
 
+func TestServiceApplyRequiresMatchingPreviewConfirmation(t *testing.T) {
+	auditStore := audit.NewMemoryStore()
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+			AfterHash:  "after-hash",
+		}},
+	}}
+	applier := &recordingDeploymentApplier{result: kubeclient.ResourceOperationResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+		}},
+	}}
+	inventory := NewMemoryInventoryRepository(nil)
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(auditStore), dryRunner, applier, inventory)
+	req := OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	}
+
+	_, err := svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	require.Equal(t, 0, applier.calls)
+
+	_, err = svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID:         req.ClusterID,
+		YAMLContent:       req.YAMLContent,
+		PreviewID:         "wrong-preview",
+		ConfirmationToken: "wrong-token",
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	require.Equal(t, 0, applier.calls)
+
+	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.NoError(t, err)
+	applied, err := svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID:         req.ClusterID,
+		YAMLContent:       req.YAMLContent,
+		PreviewID:         preview.PreviewID,
+		ConfirmationToken: preview.ConfirmationToken,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "applied", applied.Status)
+	require.Equal(t, 1, applier.calls)
+	require.Equal(t, kubeclient.OperationModeApply, applier.request.Mode)
+	require.Equal(t, "prod", applier.request.ClusterID)
+	found, err := inventory.Find(context.Background(), ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+	})
+	require.NoError(t, err)
+	require.Equal(t, preview.PreviewID, found.LastPreviewID)
+	require.NotEmpty(t, found.LastApplyHash)
+
+	events, err := auditStore.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, "deploy", events[1].Action)
+	require.Equal(t, preview.PreviewID, events[1].RequestSummary["preview_id"])
+	require.NotContains(t, events[1].RequestSummary, "confirmation_token")
+	require.NotContains(t, events[1].RequestSummary, "yaml_content")
+}
+
+func TestServiceDeleteRequiresMatchingConfirmationBeforeExecution(t *testing.T) {
+	deleter := &recordingDeploymentDeleter{result: kubeclient.ResourceOperationResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+		}},
+	}}
+	auditStore := audit.NewMemoryStore()
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(auditStore), deleter)
+	identity := ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+		UID:        "uid-orders-api",
+	}
+
+	_, err := svc.Delete(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, DeleteRequest{Identity: identity})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	require.Equal(t, 0, deleter.calls)
+
+	plan := buildDeletePlan(identity)
+	result, err := svc.Delete(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, DeleteRequest{
+		Identity:          identity,
+		PreviewID:         plan.ID,
+		ConfirmationToken: plan.ConfirmationToken,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "deleted", result.Status)
+	require.Equal(t, plan.ID, result.PreviewID)
+	require.Equal(t, 1, deleter.calls)
+	require.Equal(t, kubeclient.OperationModeDelete, deleter.request.Mode)
+	require.Equal(t, "orders-api", deleter.request.Identity.Name)
+
+	events, err := auditStore.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, "delete", events[0].Action)
+	require.Equal(t, plan.ID, events[0].RequestSummary["preview_id"])
+	require.NotContains(t, events[0].RequestSummary, "confirmation_token")
+}
+
 func TestServicePreviewRechecksPermissionForDryRunResultIdentities(t *testing.T) {
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
 		Objects: []kubeclient.OperationObject{{
@@ -288,4 +411,28 @@ func (r *recordingDeploymentDryRunner) DryRunApply(_ context.Context, req kubecl
 	r.calls++
 	r.request = req
 	return r.result, nil
+}
+
+type recordingDeploymentApplier struct {
+	result  kubeclient.ResourceOperationResult
+	request kubeclient.ClusterApplyRequest
+	calls   int
+}
+
+func (a *recordingDeploymentApplier) Apply(_ context.Context, req kubeclient.ClusterApplyRequest) (kubeclient.ResourceOperationResult, error) {
+	a.calls++
+	a.request = req
+	return a.result, nil
+}
+
+type recordingDeploymentDeleter struct {
+	result  kubeclient.ResourceOperationResult
+	request kubeclient.ClusterDeleteRequest
+	calls   int
+}
+
+func (d *recordingDeploymentDeleter) Delete(_ context.Context, req kubeclient.ClusterDeleteRequest) (kubeclient.ResourceOperationResult, error) {
+	d.calls++
+	d.request = req
+	return d.result, nil
 }
