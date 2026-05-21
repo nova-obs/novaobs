@@ -114,12 +114,14 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	if !s.allowedAll(subject, "preview", identities) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	warnings := []string{}
 	if s.dryRunner != nil {
 		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent})
 		if err != nil {
 			return OperationResult{}, deploymentOperationError(err)
 		}
 		identities = dryRunObjectsToIdentities(req.ClusterID, dryRun.Objects)
+		warnings = append(warnings, dryRun.Warnings...)
 		if !s.allowedAll(subject, "preview", identities) {
 			return OperationResult{}, ErrPermissionDenied
 		}
@@ -129,15 +131,27 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 			return OperationResult{}, err
 		}
 	}
+	plan := buildPreviewPlan(req.ClusterID, identities, warnings)
 	event, err := s.record(ctx, subject, "preview", req.ClusterID, identities, map[string]any{
 		"cluster_id": req.ClusterID,
-		"resources":  identitySummaries(identities),
+		"preview_id": plan.ID,
+		"resources":  identitySummaries(plan.Resources),
+		"diff_count": len(plan.Diffs),
 		"yaml_bytes": len(req.YAMLContent),
 	})
 	if err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{Status: "previewed", Message: "部署预览已生成", AuditID: event.ID, Resources: identities}, nil
+	return OperationResult{
+		Status:            "previewed",
+		Message:           "部署预览已生成",
+		AuditID:           event.ID,
+		Resources:         plan.Resources,
+		PreviewID:         plan.ID,
+		ConfirmationToken: plan.ConfirmationToken,
+		Diffs:             plan.Diffs,
+		Warnings:          plan.Warnings,
+	}, nil
 }
 
 func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req OperationRequest) (OperationResult, error) {

@@ -119,6 +119,69 @@ metadata:
 	require.Equal(t, "orders", result.Resources[0].Namespace)
 }
 
+func TestServicePreviewReturnsConfirmationPlan(t *testing.T) {
+	auditStore := audit.NewMemoryStore()
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{
+			{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Namespace:  "orders",
+				Name:       "orders-api",
+			},
+			{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Namespace:  "orders",
+				Name:       "orders-config",
+			},
+		},
+		Warnings: []string{"partial discovery warning"},
+	}}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(auditStore), dryRunner)
+	req := OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-config
+  namespace: orders
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	}
+
+	first, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.NoError(t, err)
+	second, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, first.PreviewID)
+	require.Equal(t, first.PreviewID, second.PreviewID)
+	require.NotEmpty(t, first.ConfirmationToken)
+	require.Equal(t, first.ConfirmationToken, second.ConfirmationToken)
+	require.Equal(t, []string{"partial discovery warning"}, first.Warnings)
+	require.Len(t, first.Diffs, 2)
+	require.Equal(t, "apply", first.Diffs[0].Operation)
+	require.Equal(t, "ConfigMap", first.Diffs[0].Kind)
+	require.Equal(t, "orders-config", first.Diffs[0].Name)
+	require.NotEmpty(t, first.Diffs[0].AfterHash)
+	require.Equal(t, first.Diffs, second.Diffs)
+	require.NotContains(t, first.ConfirmationToken, "orders-api")
+	require.NotContains(t, first.ConfirmationToken, "apiVersion")
+
+	events, err := auditStore.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	require.Equal(t, first.PreviewID, events[0].RequestSummary["preview_id"])
+	require.NotContains(t, events[0].RequestSummary, "yaml_content")
+	require.NotContains(t, events[0].RequestSummary, "confirmation_token")
+	require.Equal(t, 2, events[0].RequestSummary["diff_count"])
+}
+
 func TestServicePreviewRechecksPermissionForDryRunResultIdentities(t *testing.T) {
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
 		Objects: []kubeclient.OperationObject{{

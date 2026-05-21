@@ -1,8 +1,10 @@
 package deployment
 
 type OperationRequest struct {
-	ClusterID   string `json:"cluster_id"`
-	YAMLContent string `json:"yaml_content"`
+	ClusterID         string `json:"cluster_id"`
+	YAMLContent       string `json:"yaml_content"`
+	PreviewID         string `json:"preview_id,omitempty"`
+	ConfirmationToken string `json:"confirmation_token,omitempty"`
 }
 
 type ResourceIdentity struct {
@@ -24,8 +26,12 @@ type RollbackRequest struct {
 }
 
 type OperationResult struct {
-	Status    string             `json:"status"`
-	Message   string             `json:"message"`
-	AuditID   string             `json:"audit_id"`
-	Resources []ResourceIdentity `json:"resources"`
+	Status            string             `json:"status"`
+	Message           string             `json:"message"`
+	AuditID           string             `json:"audit_id"`
+	Resources         []ResourceIdentity `json:"resources"`
+	PreviewID         string             `json:"preview_id,omitempty"`
+	ConfirmationToken string             `json:"confirmation_token,omitempty"`
+	Diffs             []ResourceDiff     `json:"diffs,omitempty"`
+	Warnings          []string           `json:"warnings,omitempty"`
 }
