@@ -66,6 +66,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		secretSvc,
 		cluster.NewStoreRepository(store.K8sClusters()),
 		deployment.NewStoreInventoryRepository(store.K8sDeploymentInventory()),
+		deployment.NewStoreHistoryRepository(store.K8sDeploymentHistory()),
 		k8sClientProvider,
 	)
 	opampMgr := opamp.NewManager()

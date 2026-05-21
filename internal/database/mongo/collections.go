@@ -565,3 +565,22 @@ func (s *k8sDeploymentInventoryStore) Delete(ctx context.Context, id string) err
 	}
 	return nil
 }
+
+type k8sDeploymentHistoryStore struct{ col *mongo.Collection }
+
+func (s *k8sDeploymentHistoryStore) Insert(ctx context.Context, record interface{}) error {
+	_, err := s.col.InsertOne(ctx, record)
+	return err
+}
+
+func (s *k8sDeploymentHistoryStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "started_at", Value: -1}, {Key: "_id", Value: -1}}))
+	if err != nil {
+		return err
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return err
+	}
+	return decodeBSONDocuments(docs, results)
+}

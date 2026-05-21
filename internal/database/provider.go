@@ -24,6 +24,7 @@ type Store interface {
 	K8sClusters() K8sClusterStore
 	K8sNamespaces() K8sNamespaceStore
 	K8sDeploymentInventory() K8sDeploymentInventoryStore
+	K8sDeploymentHistory() K8sDeploymentHistoryStore
 	Close(ctx context.Context) error
 }
 
@@ -160,4 +161,9 @@ type K8sDeploymentInventoryStore interface {
 	FindAll(ctx context.Context, results interface{}) error
 	FindByIdentity(ctx context.Context, clusterID string, namespace string, apiVersion string, kind string, name string, result interface{}) error
 	Delete(ctx context.Context, id string) error
+}
+
+type K8sDeploymentHistoryStore interface {
+	Insert(ctx context.Context, record interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 }

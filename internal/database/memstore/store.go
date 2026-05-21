@@ -34,6 +34,7 @@ type Store struct {
 	kcls map[string]interface{}
 	knss map[string]interface{}
 	kdis map[string]interface{}
+	kdhs map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -59,6 +60,7 @@ func NewStore() *Store {
 		kcls: map[string]interface{}{},
 		knss: map[string]interface{}{},
 		kdis: map[string]interface{}{},
+		kdhs: map[string]interface{}{},
 	}
 }
 
@@ -99,6 +101,9 @@ func (s *Store) K8sClusters() database.K8sClusterStore                { return &
 func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s}
+}
+func (s *Store) K8sDeploymentHistory() database.K8sDeploymentHistoryStore {
+	return &k8sDeploymentHistoryStore{s}
 }
 
 // ---------- Services ----------
@@ -772,4 +777,23 @@ func (st *k8sDeploymentInventoryStore) Delete(ctx context.Context, id string) er
 	}
 	delete(st.s.kdis, id)
 	return nil
+}
+
+type k8sDeploymentHistoryStore struct{ s *Store }
+
+func (st *k8sDeploymentHistoryStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	st.s.kdhs[id] = v
+	return nil
+}
+
+func (st *k8sDeploymentHistoryStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.kdhs, results)
 }

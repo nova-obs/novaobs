@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"novaobs/internal/database/memstore"
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -257,6 +258,56 @@ metadata:
 	require.Equal(t, preview.PreviewID, events[1].RequestSummary["preview_id"])
 	require.NotContains(t, events[1].RequestSummary, "confirmation_token")
 	require.NotContains(t, events[1].RequestSummary, "yaml_content")
+}
+
+func TestServiceApplyPersistsDeploymentHistorySnapshot(t *testing.T) {
+	store := memstore.NewStore()
+	historyRepo := NewStoreHistoryRepository(store.K8sDeploymentHistory())
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+			AfterHash:  "after-hash",
+		}},
+	}}
+	applier := &recordingDeploymentApplier{result: kubeclient.ResourceOperationResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Namespace:  "orders",
+			Name:       "orders-api",
+		}},
+	}}
+	svc := NewService(historyRepo, allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner, applier, historyRepo)
+	req := OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	}
+	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"}, req)
+	require.NoError(t, err)
+
+	applied, err := svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user", DisplayName: "alice"}, OperationRequest{
+		ClusterID:         req.ClusterID,
+		YAMLContent:       req.YAMLContent,
+		PreviewID:         preview.PreviewID,
+		ConfirmationToken: preview.ConfirmationToken,
+	})
+	require.NoError(t, err)
+
+	items, err := svc.ListHistory(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "orders-api", items[0].Workload)
+	require.Equal(t, "deploy", items[0].Action)
+	require.Equal(t, "applied", items[0].Status)
+	require.Equal(t, applied.AuditID, items[0].Revision)
+	require.Equal(t, "alice", items[0].Actor)
 }
 
 func TestServiceDeleteRequiresMatchingConfirmationBeforeExecution(t *testing.T) {

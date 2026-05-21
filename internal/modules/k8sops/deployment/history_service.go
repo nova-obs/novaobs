@@ -37,6 +37,7 @@ type Service struct {
 	applier      OperationApplier
 	deleter      OperationDeleter
 	inventory    InventoryRepository
+	history      HistoryWriter
 }
 
 type Authorizer interface {
@@ -93,6 +94,9 @@ func NewService(reader Reader, security ...any) Service {
 		}
 		if value, ok := item.(InventoryRepository); ok && value != nil {
 			service.inventory = value
+		}
+		if value, ok := item.(HistoryWriter); ok && value != nil {
+			service.history = value
 		}
 	}
 	return service
@@ -250,6 +254,9 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 		if err != nil {
 			return OperationResult{}, err
 		}
+		if err := s.recordHistory(ctx, subject, "deploy", "applied", event.ID, appliedIdentities); err != nil {
+			return OperationResult{}, err
+		}
 		return OperationResult{Status: "applied", Message: "部署已应用到 Kubernetes API", AuditID: event.ID, Resources: appliedIdentities, PreviewID: plan.ID, Diffs: plan.Diffs, Warnings: plan.Warnings}, nil
 	}
 	identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
@@ -263,6 +270,9 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 		"revision":   primitive.NewObjectID().Hex(),
 	})
 	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.recordHistory(ctx, subject, "deploy", "accepted", event.ID, identities); err != nil {
 		return OperationResult{}, err
 	}
 	return OperationResult{Status: "accepted", Message: "部署请求已通过 NovaObs 校验", AuditID: event.ID, Resources: identities}, nil
@@ -313,12 +323,18 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 		if err != nil {
 			return OperationResult{}, err
 		}
+		if err := s.recordHistory(ctx, subject, "delete", "deleted", event.ID, deletedIdentities); err != nil {
+			return OperationResult{}, err
+		}
 		return OperationResult{Status: "deleted", Message: "资源已从 Kubernetes API 删除", AuditID: event.ID, Resources: deletedIdentities, PreviewID: plan.ID, Diffs: plan.Diffs}, nil
 	}
 	event, err := s.record(ctx, subject, "delete", identity.ClusterID, []ResourceIdentity{identity}, map[string]any{
 		"resource": identitySummary(identity),
 	})
 	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.recordHistory(ctx, subject, "delete", "deleted", event.ID, []ResourceIdentity{identity}); err != nil {
 		return OperationResult{}, err
 	}
 	return OperationResult{Status: "deleted", Message: "删除请求已通过 NovaObs 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
@@ -338,6 +354,9 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, req
 		"resource":   identitySummary(identity),
 	})
 	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.recordHistory(ctx, subject, "rollback", "requested", event.ID, []ResourceIdentity{identity}); err != nil {
 		return OperationResult{}, err
 	}
 	return OperationResult{Status: "rollback_requested", Message: "回滚请求已通过 NovaObs 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
@@ -713,6 +732,30 @@ func (s Service) removeInventory(ctx context.Context, identities []ResourceIdent
 		}
 	}
 	return nil
+}
+
+func (s Service) recordHistory(ctx context.Context, subject platformrbac.Subject, action string, status string, revision string, identities []ResourceIdentity) error {
+	if s.history == nil || len(identities) == 0 {
+		return nil
+	}
+	first := identities[0]
+	now := time.Now().UTC()
+	actor := subject.DisplayName
+	if actor == "" {
+		actor = subject.ID
+	}
+	_, err := s.history.CreateHistory(ctx, HistoryRecord{
+		ClusterID:  first.ClusterID,
+		Namespace:  first.Namespace,
+		Workload:   first.Name,
+		Action:     action,
+		Status:     status,
+		Revision:   revision,
+		Actor:      actor,
+		StartedAt:  now,
+		FinishedAt: now,
+	})
+	return err
 }
 
 func resourceIdentityKey(identity ResourceIdentity) string {
