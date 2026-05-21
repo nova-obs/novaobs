@@ -13,6 +13,7 @@ import (
 	"novaobs/internal/logquery"
 	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/modules/k8sops/cluster"
+	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
@@ -64,6 +65,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		auditSvc,
 		secretSvc,
 		cluster.NewStoreRepository(store.K8sClusters()),
+		deployment.NewStoreInventoryRepository(store.K8sDeploymentInventory()),
 		k8sClientProvider,
 	)
 	opampMgr := opamp.NewManager()

@@ -35,6 +35,7 @@ type Store struct {
 	aeCol  *mongo.Collection
 	kclCol *mongo.Collection
 	knsCol *mongo.Collection
+	kdiCol *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -70,6 +71,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		aeCol:  db.Collection("audit_events"),
 		kclCol: db.Collection("k8s_clusters"),
 		knsCol: db.Collection("k8s_namespaces"),
+		kdiCol: db.Collection("k8s_deployment_inventory"),
 	}, nil
 }
 
@@ -110,6 +112,9 @@ func (s *Store) Secrets() database.SecretStore                        { return &
 func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s.aeCol} }
 func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s.kclCol} }
 func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s.knsCol} }
+func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
+	return &k8sDeploymentInventoryStore{s.kdiCol}
+}
 
 // ---------- helpers ----------
 

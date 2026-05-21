@@ -520,3 +520,48 @@ func (s *k8sNamespaceStore) FindByCluster(ctx context.Context, clusterID string,
 	}
 	return decodeBSONDocuments(docs, results)
 }
+
+type k8sDeploymentInventoryStore struct{ col *mongo.Collection }
+
+func (s *k8sDeploymentInventoryStore) Upsert(ctx context.Context, id string, record interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, record, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *k8sDeploymentInventoryStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "cluster_id", Value: 1}, {Key: "namespace", Value: 1}, {Key: "kind", Value: 1}, {Key: "name", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return err
+	}
+	return decodeBSONDocuments(docs, results)
+}
+
+func (s *k8sDeploymentInventoryStore) FindByIdentity(ctx context.Context, clusterID string, namespace string, apiVersion string, kind string, name string, result interface{}) error {
+	var doc bson.M
+	err := s.col.FindOne(ctx, bson.M{
+		"cluster_id":  clusterID,
+		"namespace":   namespace,
+		"api_version": apiVersion,
+		"kind":        kind,
+		"name":        name,
+	}).Decode(&doc)
+	if err != nil {
+		return err
+	}
+	return decodeBSONDocument(doc, result)
+}
+
+func (s *k8sDeploymentInventoryStore) Delete(ctx context.Context, id string) error {
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}

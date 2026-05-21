@@ -3,6 +3,7 @@ package memstore
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"novaobs/internal/database"
@@ -32,6 +33,7 @@ type Store struct {
 	aes  map[string]interface{}
 	kcls map[string]interface{}
 	knss map[string]interface{}
+	kdis map[string]interface{}
 }
 
 func NewStore() *Store {
@@ -56,6 +58,7 @@ func NewStore() *Store {
 		aes:  map[string]interface{}{},
 		kcls: map[string]interface{}{},
 		knss: map[string]interface{}{},
+		kdis: map[string]interface{}{},
 	}
 }
 
@@ -94,6 +97,9 @@ func (s *Store) Secrets() database.SecretStore                        { return &
 func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s} }
 func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s} }
 func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s} }
+func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
+	return &k8sDeploymentInventoryStore{s}
+}
 
 // ---------- Services ----------
 
@@ -726,4 +732,44 @@ func (st *k8sNamespaceStore) FindByCluster(ctx context.Context, clusterID string
 		}
 	}
 	return copyAll(filtered, results)
+}
+
+type k8sDeploymentInventoryStore struct{ s *Store }
+
+func (st *k8sDeploymentInventoryStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.kdis[id] = v
+	return nil
+}
+
+func (st *k8sDeploymentInventoryStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.kdis, results)
+}
+
+func (st *k8sDeploymentInventoryStore) FindByIdentity(ctx context.Context, clusterID string, namespace string, apiVersion string, kind string, name string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	for _, value := range st.s.kdis {
+		if extractStringField(value, "ClusterID") == clusterID &&
+			extractStringField(value, "Namespace") == namespace &&
+			extractStringField(value, "APIVersion") == apiVersion &&
+			strings.EqualFold(extractStringField(value, "Kind"), kind) &&
+			extractStringField(value, "Name") == name {
+			return copyValue(value, result)
+		}
+	}
+	return errNotFound
+}
+
+func (st *k8sDeploymentInventoryStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.kdis[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.kdis, id)
+	return nil
 }

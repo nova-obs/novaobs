@@ -23,6 +23,7 @@ type Store interface {
 	AuditEvents() AuditEventStore
 	K8sClusters() K8sClusterStore
 	K8sNamespaces() K8sNamespaceStore
+	K8sDeploymentInventory() K8sDeploymentInventoryStore
 	Close(ctx context.Context) error
 }
 
@@ -152,4 +153,11 @@ type K8sNamespaceStore interface {
 	Upsert(ctx context.Context, id string, namespace interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
 	FindByCluster(ctx context.Context, clusterID string, results interface{}) error
+}
+
+type K8sDeploymentInventoryStore interface {
+	Upsert(ctx context.Context, id string, record interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByIdentity(ctx context.Context, clusterID string, namespace string, apiVersion string, kind string, name string, result interface{}) error
+	Delete(ctx context.Context, id string) error
 }
