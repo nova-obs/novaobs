@@ -188,6 +188,60 @@ metadata:
 	require.ErrorIs(t, deleteErr, ErrResourceOperationInvalid)
 }
 
+func TestResourceOperationEnginePreviewApplyDiffInputs(t *testing.T) {
+	existing := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "orders-api",
+			"namespace": "orders",
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+		},
+	}}
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+	dynamicClient.PrependReactor("patch", "*", successfulDryRunPatch)
+	engine := NewResourceOperationEngine(
+		Bundle{Dynamic: dynamicClient},
+		CapabilitySnapshot{Resources: []APIResource{
+			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "deployments", Kind: "Deployment", Namespaced: true},
+			{Version: "v1", GroupVersion: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespaced: true},
+		}},
+	)
+
+	result, err := engine.PreviewApply(context.Background(), DryRunApplyRequest{YAMLContent: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: orders
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders
+spec:
+  replicas: 2`})
+
+	require.NoError(t, err)
+	require.Len(t, result.Objects, 2)
+	require.Equal(t, "create", result.Objects[0].Operation)
+	require.Empty(t, result.Objects[0].BeforeHash)
+	require.NotEmpty(t, result.Objects[0].AfterHash)
+	require.Equal(t, "update", result.Objects[1].Operation)
+	require.NotEmpty(t, result.Objects[1].BeforeHash)
+	require.NotEmpty(t, result.Objects[1].AfterHash)
+	require.NotEqual(t, result.Objects[1].BeforeHash, result.Objects[1].AfterHash)
+
+	actions := dynamicClient.Actions()
+	require.Len(t, actions, 4)
+	require.Equal(t, "get", actions[0].GetVerb())
+	require.Equal(t, "patch", actions[1].GetVerb())
+	require.Equal(t, "get", actions[2].GetVerb())
+	require.Equal(t, "patch", actions[3].GetVerb())
+}
+
 func TestResourceOperationEngineDryRunApplyUsesServerSideApplyAndResolvedGVR(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	dynamicClient.PrependReactor("patch", "*", successfulDryRunPatch)
@@ -208,26 +262,19 @@ spec:
 
 	require.NoError(t, err)
 	require.Len(t, result.Objects, 1)
-	require.Equal(t, OperationObject{
-		APIVersion: "extensions/v1beta1",
-		Kind:       "Ingress",
-		Namespace:  "orders",
-		Name:       "orders-ingress",
-		Resolved: ResolvedResourceVersion{
-			Group:        "extensions",
-			Version:      "v1beta1",
-			GroupVersion: "extensions/v1beta1",
-			APIVersion:   "extensions/v1beta1",
-			Resource:     "ingresses",
-			Kind:         "Ingress",
-			Namespaced:   true,
-		},
-		Executor: OperationExecutorDynamic,
-	}, result.Objects[0])
+	require.Equal(t, "extensions/v1beta1", result.Objects[0].APIVersion)
+	require.Equal(t, "Ingress", result.Objects[0].Kind)
+	require.Equal(t, "orders", result.Objects[0].Namespace)
+	require.Equal(t, "orders-ingress", result.Objects[0].Name)
+	require.Equal(t, OperationExecutorDynamic, result.Objects[0].Executor)
+	require.Equal(t, "create", result.Objects[0].Operation)
+	require.Empty(t, result.Objects[0].BeforeHash)
+	require.NotEmpty(t, result.Objects[0].AfterHash)
 
 	actions := dynamicClient.Actions()
-	require.Len(t, actions, 1)
-	action := actions[0].(k8stesting.PatchActionImpl)
+	require.Len(t, actions, 2)
+	require.Equal(t, "get", actions[0].GetVerb())
+	action := actions[1].(k8stesting.PatchActionImpl)
 	require.Equal(t, schema.GroupVersionResource{Group: "extensions", Version: "v1beta1", Resource: "ingresses"}, action.GetResource())
 	require.Equal(t, "orders", action.GetNamespace())
 	require.Equal(t, "orders-ingress", action.GetName())
@@ -277,9 +324,12 @@ spec:
 
 	require.NoError(t, err)
 	require.Len(t, result.Objects, 2)
-	require.Len(t, dynamicClient.Actions(), 2)
-	require.Equal(t, "configmaps", dynamicClient.Actions()[0].GetResource().Resource)
-	require.Equal(t, "deployments", dynamicClient.Actions()[1].GetResource().Resource)
+	actions := dynamicClient.Actions()
+	require.Len(t, actions, 4)
+	require.Equal(t, "configmaps", actions[0].GetResource().Resource)
+	require.Equal(t, "configmaps", actions[1].GetResource().Resource)
+	require.Equal(t, "deployments", actions[2].GetResource().Resource)
+	require.Equal(t, "deployments", actions[3].GetResource().Resource)
 }
 
 func TestResourceOperationEngineDryRunApplyRejectsUnsupportedResource(t *testing.T) {
@@ -352,7 +402,7 @@ metadata:
 	require.Equal(t, "prod", provider.clusterID)
 	require.Len(t, result.Objects, 1)
 	require.Equal(t, "apps/v1", result.Objects[0].APIVersion)
-	require.Len(t, dynamicClient.Actions(), 1)
+	require.Len(t, dynamicClient.Actions(), 2)
 }
 
 func successfulDryRunPatch(action k8stesting.Action) (bool, runtime.Object, error) {

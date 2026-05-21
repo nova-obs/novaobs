@@ -41,3 +41,5 @@ type ResourceOperationResult struct {
 	Objects  []OperationObject `json:"objects"`
 	Warnings []string          `json:"warnings"`
 }
+
+type PreviewApplyResult = ResourceOperationResult

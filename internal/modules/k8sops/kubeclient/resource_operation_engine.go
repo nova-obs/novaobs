@@ -3,6 +3,8 @@ package kubeclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 )
@@ -42,6 +45,9 @@ type OperationObject struct {
 	Name       string                  `json:"name"`
 	Resolved   ResolvedResourceVersion `json:"resolved"`
 	Executor   string                  `json:"executor,omitempty"`
+	Operation  string                  `json:"operation,omitempty"`
+	BeforeHash string                  `json:"before_hash,omitempty"`
+	AfterHash  string                  `json:"after_hash,omitempty"`
 }
 
 type DryRunApplyRequest struct {
@@ -87,12 +93,27 @@ func NewProviderBackedResourceOperationEngine(provider BundleProvider, opts ...R
 }
 
 func (e ProviderBackedResourceOperationEngine) DryRunApply(ctx context.Context, req ClusterDryRunApplyRequest) (DryRunApplyResult, error) {
-	result, err := e.Apply(ctx, ClusterApplyRequest{
-		ClusterID:    req.ClusterID,
-		Mode:         OperationModeDryRun,
-		YAMLContent:  req.YAMLContent,
-		FieldManager: req.FieldManager,
-	})
+	clusterID := strings.TrimSpace(req.ClusterID)
+	if clusterID == "" {
+		return DryRunApplyResult{}, ErrClusterRequired
+	}
+	if e.provider == nil {
+		return DryRunApplyResult{}, fmt.Errorf("%w: bundle provider required", ErrResourceOperationInvalid)
+	}
+	bundle, err := e.provider.Bundle(ctx, clusterID)
+	if err != nil {
+		return DryRunApplyResult{}, err
+	}
+	snapshot, err := DiscoverCapabilities(clusterID, bundle.Discovery)
+	if err != nil {
+		return DryRunApplyResult{}, err
+	}
+	fieldManager := e.fieldManager
+	if trimmed := strings.TrimSpace(req.FieldManager); trimmed != "" {
+		fieldManager = trimmed
+	}
+	engine := NewResourceOperationEngine(bundle, snapshot, WithFieldManager(fieldManager))
+	result, err := engine.PreviewApply(ctx, DryRunApplyRequest{YAMLContent: req.YAMLContent})
 	return DryRunApplyResult{Objects: result.Objects, Warnings: result.Warnings}, err
 }
 
@@ -145,8 +166,67 @@ func (e ProviderBackedResourceOperationEngine) Delete(ctx context.Context, req C
 }
 
 func (e ResourceOperationEngine) DryRunApply(ctx context.Context, req DryRunApplyRequest) (DryRunApplyResult, error) {
-	result, err := e.Apply(ctx, ApplyRequest{Mode: OperationModeDryRun, YAMLContent: req.YAMLContent})
+	result, err := e.PreviewApply(ctx, req)
 	return DryRunApplyResult{Objects: result.Objects, Warnings: result.Warnings}, err
+}
+
+func (e ResourceOperationEngine) PreviewApply(ctx context.Context, req DryRunApplyRequest) (PreviewApplyResult, error) {
+	objects, err := decodeOperationObjects(req.YAMLContent)
+	if err != nil {
+		return PreviewApplyResult{}, err
+	}
+	resolver := NewResourceVersionResolver(e.snapshot)
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	result := PreviewApplyResult{Objects: make([]OperationObject, 0, len(objects)), Warnings: append([]string{}, e.snapshot.Warnings...)}
+	for _, object := range objects {
+		resolved, err := resolver.Resolve(ResourceVersionRequest{APIVersion: object.GetAPIVersion(), Kind: object.GetKind()})
+		if err != nil {
+			return PreviewApplyResult{}, err
+		}
+		object.SetAPIVersion(resolved.APIVersion)
+		object.SetKind(resolved.Kind)
+		if resolved.Namespaced && object.GetNamespace() == "" {
+			return PreviewApplyResult{}, ErrResourceOperationInvalid
+		}
+		beforeHash, operation, err := e.liveObjectDiffInput(ctx, resolved, object)
+		if err != nil {
+			return PreviewApplyResult{}, err
+		}
+		patch, err := json.Marshal(object.Object)
+		if err != nil {
+			return PreviewApplyResult{}, fmt.Errorf("%w: json marshal failed", ErrResourceOperationInvalid)
+		}
+		operationObject := operationApplyObject{
+			Name:      object.GetName(),
+			Namespace: object.GetNamespace(),
+			Resolved:  resolved,
+			Patch:     patch,
+		}
+		executor := OperationExecutorTyped
+		handled, err := typedExecutor.Apply(ctx, operationObject, OperationModeDryRun)
+		if err != nil {
+			return PreviewApplyResult{}, resourceOperationError(err)
+		}
+		if !handled {
+			executor = OperationExecutorDynamic
+			if err := dynamicExecutor.Apply(ctx, operationObject, OperationModeDryRun); err != nil {
+				return PreviewApplyResult{}, resourceOperationError(err)
+			}
+		}
+		result.Objects = append(result.Objects, OperationObject{
+			APIVersion: resolved.APIVersion,
+			Kind:       resolved.Kind,
+			Namespace:  object.GetNamespace(),
+			Name:       object.GetName(),
+			Resolved:   resolved,
+			Executor:   executor,
+			Operation:  operation,
+			BeforeHash: beforeHash,
+			AfterHash:  operationObjectHash(object),
+		})
+	}
+	return result, nil
 }
 
 func (e ResourceOperationEngine) Apply(ctx context.Context, req ApplyRequest) (ResourceOperationResult, error) {
@@ -281,6 +361,39 @@ func decodeOperationObjects(yamlContent string) ([]*unstructured.Unstructured, e
 		return nil, ErrResourceOperationInvalid
 	}
 	return objects, nil
+}
+
+func (e ResourceOperationEngine) liveObjectDiffInput(ctx context.Context, resolved ResolvedResourceVersion, object *unstructured.Unstructured) (string, string, error) {
+	if e.bundle.Dynamic == nil {
+		return "", "apply", nil
+	}
+	resource := e.bundle.Dynamic.Resource(gvrFromResolved(resolved))
+	var live *unstructured.Unstructured
+	var err error
+	if resolved.Namespaced {
+		live, err = resource.Namespace(object.GetNamespace()).Get(ctx, object.GetName(), metav1.GetOptions{})
+	} else {
+		live, err = resource.Get(ctx, object.GetName(), metav1.GetOptions{})
+	}
+	if apierrors.IsNotFound(err) {
+		return "", "create", nil
+	}
+	if err != nil {
+		return "", "", resourceOperationError(err)
+	}
+	return operationObjectHash(live), "update", nil
+}
+
+func operationObjectHash(object *unstructured.Unstructured) string {
+	if object == nil {
+		return ""
+	}
+	payload, err := json.Marshal(object.Object)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 type operationApplyObject struct {
