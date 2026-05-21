@@ -383,6 +383,27 @@ func TestServicePreviewDeleteReturnsConfirmationPlan(t *testing.T) {
 	require.NotContains(t, events[0].RequestSummary, "confirmation_token")
 }
 
+func TestServiceRollbackRequiresExistingHistoryRecord(t *testing.T) {
+	identity := ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "orders",
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "orders-api",
+		UID:        "uid-orders-api",
+	}
+	svc := NewService(NewMemoryReader([]HistoryRecord{
+		{ID: "deploy-1", ClusterID: "prod", Namespace: "orders", Workload: "orders-api", Action: "deploy", Status: "applied"},
+	}), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()))
+
+	_, err := svc.Rollback(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RollbackRequest{HistoryID: "missing", Identity: identity})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+
+	result, err := svc.Rollback(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RollbackRequest{HistoryID: "deploy-1", Identity: identity})
+	require.NoError(t, err)
+	require.Equal(t, "rollback_requested", result.Status)
+}
+
 func TestServicePreviewRechecksPermissionForDryRunResultIdentities(t *testing.T) {
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
 		Objects: []kubeclient.OperationObject{{

@@ -349,6 +349,13 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, req
 	if !s.allowedAll(subject, "rollback", []ResourceIdentity{identity}) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	exists, err := s.historyRecordExists(ctx, req.HistoryID, identity)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if !exists {
+		return OperationResult{}, ErrInvalidRequest
+	}
 	event, err := s.record(ctx, subject, "rollback", identity.ClusterID, []ResourceIdentity{identity}, map[string]any{
 		"history_id": req.HistoryID,
 		"resource":   identitySummary(identity),
@@ -756,6 +763,19 @@ func (s Service) recordHistory(ctx context.Context, subject platformrbac.Subject
 		FinishedAt: now,
 	})
 	return err
+}
+
+func (s Service) historyRecordExists(ctx context.Context, historyID string, identity ResourceIdentity) (bool, error) {
+	items, err := s.reader.ListHistory(ctx, ListFilter{ClusterID: identity.ClusterID, Namespace: identity.Namespace})
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		if item.ID == historyID && (item.Workload == "" || item.Workload == identity.Name) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func resourceIdentityKey(identity ResourceIdentity) string {
