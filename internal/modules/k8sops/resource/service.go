@@ -13,6 +13,7 @@ type Reader interface {
 	GetDetail(ctx context.Context, query DetailQuery) (ResourceDetail, error)
 	GetYAML(ctx context.Context, query DetailQuery) (ResourceYAML, error)
 	GetPodLogs(ctx context.Context, query PodLogQuery) (PodLogResult, error)
+	ListRuntimeGroups(ctx context.Context, query RuntimeGroupsQuery) (RuntimeGroupsResponse, error)
 }
 
 type Service struct {
@@ -39,11 +40,25 @@ func (s Service) GetPodLogs(ctx context.Context, query PodLogQuery) (PodLogResul
 	return s.reader.GetPodLogs(ctx, query)
 }
 
+func (s Service) ListRuntimeGroups(ctx context.Context, query RuntimeGroupsQuery) (RuntimeGroupsResponse, error) {
+	if strings.TrimSpace(query.ClusterID) == "" {
+		return RuntimeGroupsResponse{}, ErrClusterRequired
+	}
+	query.Namespace = strings.TrimSpace(query.Namespace)
+	if query.Namespace == "" || query.Namespace == "*" {
+		return RuntimeGroupsResponse{}, ErrNamespaceRequired
+	}
+	return s.reader.ListRuntimeGroups(ctx, query)
+}
+
 type MemoryReader struct {
 	items []ResourceSummary
 }
 
-var ErrResourceNotFound = errors.New("k8s_resource_not_found")
+var (
+	ErrResourceNotFound = errors.New("k8s_resource_not_found")
+	ErrClusterRequired  = errors.New("k8s_cluster_required")
+)
 
 func NewMemoryReader(items []ResourceSummary) MemoryReader {
 	copied := make([]ResourceSummary, len(items))
@@ -90,6 +105,15 @@ func (r MemoryReader) GetPodLogs(_ context.Context, query PodLogQuery) (PodLogRe
 		return PodLogResult{}, ErrResourceNotFound
 	}
 	return PodLogResult{Identity: identity, Container: query.Container, Lines: []string{}}, nil
+}
+
+func (r MemoryReader) ListRuntimeGroups(_ context.Context, query RuntimeGroupsQuery) (RuntimeGroupsResponse, error) {
+	return RuntimeGroupsResponse{
+		ClusterID: query.ClusterID,
+		Namespace: query.Namespace,
+		Groups:    []RuntimeGroup{},
+		Summary:   RuntimeGroupsSummary{},
+	}, nil
 }
 
 func (r MemoryReader) find(identity Identity) (ResourceSummary, bool) {

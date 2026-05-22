@@ -8,13 +8,16 @@ import (
 	"io"
 	"strings"
 
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
 )
@@ -29,20 +32,35 @@ type ClientsetProvider interface {
 	Clientset(ctx context.Context, clusterID string) (kubernetes.Interface, error)
 }
 
+type BundleProvider interface {
+	Bundle(ctx context.Context, clusterID string) (kubeclient.Bundle, error)
+}
+
 type ReadAuthorizer interface {
 	Authorize(subject platformrbac.Subject, req platformrbac.Request) platformrbac.Decision
 }
 
 type KubernetesReader struct {
 	clients    ClientsetProvider
+	bundles    BundleProvider
 	authorizer ReadAuthorizer
 }
 
 func NewKubernetesReader(clients ClientsetProvider, dependencies ...any) KubernetesReader {
 	reader := KubernetesReader{clients: clients, authorizer: allowReadAuthorizer{}}
+	if value, ok := clients.(BundleProvider); ok && value != nil {
+		reader.bundles = value
+	}
 	for _, dependency := range dependencies {
-		if value, ok := dependency.(ReadAuthorizer); ok && value != nil {
-			reader.authorizer = value
+		switch value := dependency.(type) {
+		case ReadAuthorizer:
+			if value != nil {
+				reader.authorizer = value
+			}
+		case BundleProvider:
+			if value != nil {
+				reader.bundles = value
+			}
 		}
 	}
 	return reader
@@ -62,9 +80,13 @@ func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]Resour
 	}
 	items := make([]ResourceSummary, 0)
 	kinds := listKinds(filter.Kind)
+	bestEffort := strings.TrimSpace(filter.Kind) == ""
 	for _, kind := range kinds {
 		current, err := r.listKind(ctx, client, filter, kind)
 		if err != nil {
+			if bestEffort && errors.Is(err, ErrUnsupportedKind) {
+				continue
+			}
 			return nil, err
 		}
 		items = append(items, current...)
@@ -205,7 +227,7 @@ func (r KubernetesReader) listKind(ctx context.Context, client kubernetes.Interf
 		}
 		return items, nil
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedKind, kind)
+		return r.listDynamicKind(ctx, filter, kind)
 	}
 }
 
@@ -228,7 +250,7 @@ func (r KubernetesReader) getObject(ctx context.Context, identity Identity) (met
 	case "configmap":
 		object, err = client.CoreV1().ConfigMaps(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
 	default:
-		err = fmt.Errorf("%w: %s", ErrUnsupportedKind, identity.Kind)
+		return r.getDynamicObject(ctx, identity)
 	}
 	if err != nil {
 		return nil, Identity{}, err
@@ -245,7 +267,151 @@ func listKinds(kind string) []string {
 	if kind != "" {
 		return []string{kind}
 	}
-	return []string{"Pod", "Deployment", "Service", "ConfigMap"}
+	return []string{
+		"Pod",
+		"Deployment",
+		"StatefulSet",
+		"DaemonSet",
+		"ReplicaSet",
+		"Service",
+		"ConfigMap",
+		"PersistentVolumeClaim",
+		"PersistentVolume",
+		"HorizontalPodAutoscaler",
+		"Ingress",
+		"Gateway",
+		"VirtualService",
+		"DestinationRule",
+		"EnvoyFilter",
+	}
+}
+
+func (r KubernetesReader) listDynamicKind(ctx context.Context, filter ListFilter, kind string) ([]ResourceSummary, error) {
+	if r.bundles == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedKind, kind)
+	}
+	bundle, snapshot, err := r.bundleAndSnapshot(ctx, filter.ClusterID)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := resolveResourceVersion(snapshot, firstNonBlank(filter.APIVersion, apiVersionHint(kind)), kind)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedKind, kind)
+	}
+	list, err := dynamicResource(bundle, resolved, filter.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ResourceSummary, 0, len(list.Items))
+	for _, item := range list.Items {
+		items = append(items, dynamicSummary(filter.ClusterID, resolved, item))
+	}
+	return items, nil
+}
+
+func (r KubernetesReader) getDynamicObject(ctx context.Context, identity Identity) (metav1.Object, Identity, error) {
+	if r.bundles == nil {
+		return nil, Identity{}, fmt.Errorf("%w: %s", ErrUnsupportedKind, identity.Kind)
+	}
+	bundle, snapshot, err := r.bundleAndSnapshot(ctx, identity.ClusterID)
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	resolved, err := resolveResourceVersion(snapshot, identity.APIVersion, identity.Kind)
+	if err != nil {
+		return nil, Identity{}, fmt.Errorf("%w: %s", ErrUnsupportedKind, identity.Kind)
+	}
+	object, err := dynamicResource(bundle, resolved, identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	actual := dynamicIdentity(identity.ClusterID, resolved, *object)
+	if actual.Kind != identity.Kind || actual.Name != identity.Name || actual.Namespace != identity.Namespace || actual.UID != identity.UID {
+		return nil, Identity{}, errors.New("resource identity mismatch")
+	}
+	return object, actual, nil
+}
+
+func (r KubernetesReader) bundleAndSnapshot(ctx context.Context, clusterID string) (kubeclient.Bundle, kubeclient.CapabilitySnapshot, error) {
+	bundle, err := r.bundles.Bundle(ctx, clusterID)
+	if err != nil {
+		return kubeclient.Bundle{}, kubeclient.CapabilitySnapshot{}, err
+	}
+	snapshot, err := kubeclient.DiscoverCapabilities(clusterID, bundle.Discovery)
+	if err != nil {
+		return kubeclient.Bundle{}, kubeclient.CapabilitySnapshot{}, err
+	}
+	return bundle, snapshot, nil
+}
+
+func resolveResourceVersion(snapshot kubeclient.CapabilitySnapshot, apiVersion string, kind string) (kubeclient.ResolvedResourceVersion, error) {
+	return kubeclient.NewResourceVersionResolver(snapshot).Resolve(kubeclient.ResourceVersionRequest{
+		APIVersion: strings.TrimSpace(apiVersion),
+		Kind:       strings.TrimSpace(kind),
+	})
+}
+
+func dynamicResource(bundle kubeclient.Bundle, resolved kubeclient.ResolvedResourceVersion, namespace string) dynamicResourceInterface {
+	resource := bundle.Dynamic.Resource(schema.GroupVersionResource{
+		Group:    resolved.Group,
+		Version:  resolved.Version,
+		Resource: resolved.Resource,
+	})
+	if resolved.Namespaced {
+		return resource.Namespace(namespace)
+	}
+	return resource
+}
+
+type dynamicResourceInterface interface {
+	List(ctx context.Context, opts metav1.ListOptions) (*unstructured.UnstructuredList, error)
+	Get(ctx context.Context, name string, opts metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error)
+}
+
+func dynamicSummary(clusterID string, resolved kubeclient.ResolvedResourceVersion, item unstructured.Unstructured) ResourceSummary {
+	return ResourceSummary{
+		Identity:  dynamicIdentity(clusterID, resolved, item),
+		Status:    statusForUnstructured(item),
+		Labels:    copyLabels(item.GetLabels()),
+		UpdatedAt: item.GetCreationTimestamp().Time,
+	}
+}
+
+func dynamicIdentity(clusterID string, resolved kubeclient.ResolvedResourceVersion, item unstructured.Unstructured) Identity {
+	return Identity{
+		ClusterID:  clusterID,
+		Namespace:  item.GetNamespace(),
+		APIVersion: resolved.APIVersion,
+		Kind:       resolved.Kind,
+		Name:       item.GetName(),
+		UID:        string(item.GetUID()),
+	}
+}
+
+func apiVersionHint(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "persistentvolumeclaim", "persistentvolume":
+		return "v1"
+	case "replicaset":
+		return "apps/v1"
+	case "horizontalpodautoscaler":
+		return "autoscaling/v2"
+	case "ingress":
+		return "networking.k8s.io/v1"
+	case "gateway", "virtualservice", "destinationrule", "envoyfilter":
+		return "networking.istio.io/v1"
+	default:
+		return ""
+	}
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func filterResourcesByQuery(items []ResourceSummary, query string) []ResourceSummary {
@@ -320,6 +486,17 @@ func statusForObject(object metav1.Object) string {
 	}
 }
 
+func statusForUnstructured(item unstructured.Unstructured) string {
+	phase, _, _ := unstructured.NestedString(item.Object, "status", "phase")
+	if phase == "" {
+		return "active"
+	}
+	if strings.EqualFold(phase, "running") || strings.EqualFold(phase, "succeeded") || strings.EqualFold(phase, "active") {
+		return "healthy"
+	}
+	return "warning"
+}
+
 func podStatus(item corev1.Pod) string {
 	if item.Status.Phase == corev1.PodRunning || item.Status.Phase == corev1.PodSucceeded {
 		return "healthy"
@@ -342,7 +519,7 @@ func deploymentStatus(item appsv1.Deployment) string {
 }
 
 func objectSpec(object metav1.Object) (map[string]any, error) {
-	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(object)
+	content, err := objectContent(object)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +531,7 @@ func objectSpec(object metav1.Object) (map[string]any, error) {
 }
 
 func objectYAML(object metav1.Object, identity Identity) (string, error) {
-	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(object)
+	content, err := objectContent(object)
 	if err != nil {
 		return "", err
 	}
@@ -368,6 +545,13 @@ func objectYAML(object metav1.Object, identity Identity) (string, error) {
 		return "", err
 	}
 	return string(bytes.TrimSpace(data)) + "\n", nil
+}
+
+func objectContent(object metav1.Object) (map[string]any, error) {
+	if item, ok := object.(*unstructured.Unstructured); ok {
+		return item.UnstructuredContent(), nil
+	}
+	return runtime.DefaultUnstructuredConverter.ToUnstructured(object)
 }
 
 func copyLabels(labels map[string]string) map[string]string {

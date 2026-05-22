@@ -8,6 +8,7 @@ import (
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/modules/k8sops/kubeconfig"
 	"novaobs/internal/modules/k8sops/namespace"
+	"novaobs/internal/modules/k8sops/platformaccess"
 	k8srbac "novaobs/internal/modules/k8sops/rbac"
 	"novaobs/internal/modules/k8sops/resource"
 	"novaobs/internal/modules/k8sops/serviceaccount"
@@ -30,6 +31,7 @@ type Module struct {
 	Kubeconfig     kubeconfig.Service
 	Template       k8stemplate.Service
 	Terminal       terminal.Service
+	PlatformAccess platformaccess.Service
 }
 
 func NewModule() Module {
@@ -49,6 +51,8 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	rbacRepo := k8srbac.Repository(k8srbac.NewMemoryRepository(nil, nil))
 	certificateRepo := certificate.Repository(certificate.NewMemoryRepository(nil))
 	resourceReader := resource.Reader(resource.NewMemoryReader(nil))
+	platformAccessRepo := platformaccess.Repository(platformaccess.NewMemoryRepository())
+	platformSubjectRepo := platformaccess.SubjectRepository(platformaccess.NewMemorySubjectRepository())
 	terminalDependencies := []any{authorizer, auditor}
 	deploymentReader := deployment.Reader(deployment.NewMemoryReader(nil))
 	deploymentInventoryRepo := deployment.InventoryRepository(deployment.NewMemoryInventoryRepository(nil))
@@ -76,6 +80,14 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			if value != nil {
 				deploymentReader = value
 				deploymentDependencies = append(deploymentDependencies, value)
+			}
+		case platformaccess.Repository:
+			if value != nil {
+				platformAccessRepo = value
+			}
+		case platformaccess.SubjectRepository:
+			if value != nil {
+				platformSubjectRepo = value
 			}
 		case kubeclient.ClientsetProvider:
 			if value != nil {
@@ -115,5 +127,6 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor),
 		Template:       k8stemplate.NewService(k8stemplate.NewMemoryRepository(nil), authorizer, auditor),
 		Terminal:       terminal.NewService(terminalDependencies...),
+		PlatformAccess: platformaccess.NewService(platformAccessRepo, authorizer, auditor, platformSubjectRepo),
 	}
 }

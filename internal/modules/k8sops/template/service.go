@@ -186,6 +186,21 @@ func (s Service) Render(ctx context.Context, subject platformrbac.Subject, req R
 	return RenderResult{RenderedYAML: rendered, AuditID: event.ID}, nil
 }
 
+func BaseTemplate(templateType string) (BaseTemplateResult, error) {
+	kind := normalizeTemplateType(templateType)
+	content, variables, ok := baseTemplateContent(kind)
+	if !ok {
+		return BaseTemplateResult{}, ErrInvalidRequest
+	}
+	return BaseTemplateResult{
+		Type:        kind,
+		YAMLContent: content,
+		Variables:   variables,
+		Description: "NovaObs 内置 K8s 发布模板基线",
+		Source:      "novaobs-base",
+	}, nil
+}
+
 func (s Service) allowed(subject platformrbac.Subject, action string) bool {
 	decision := s.authorizer.Authorize(subject, platformrbac.Request{
 		Resource: "k8s.template",
@@ -315,9 +330,181 @@ func normalizeTemplateType(value string) string {
 		return "Ingress"
 	case "horizontalpodautoscaler", "horizontalpodautoscalers", "hpa":
 		return "HorizontalPodAutoscaler"
+	case "gateway", "gateways":
+		return "Gateway"
+	case "virtualservice", "virtualservices":
+		return "VirtualService"
+	case "destinationrule", "destinationrules":
+		return "DestinationRule"
+	case "envoyfilter", "envoyfilters":
+		return "EnvoyFilter"
 	default:
 		return strings.TrimSpace(value)
 	}
+}
+
+func baseTemplateContent(kind string) (string, []Variable, bool) {
+	switch kind {
+	case "Deployment":
+		return `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  replicas: <<replicas>>
+  selector:
+    matchLabels:
+      app: <<app>>
+  template:
+    metadata:
+      labels:
+        app: <<app>>
+    spec:
+      containers:
+        - name: <<container>>
+          image: <<image>>
+          ports:
+            - containerPort: <<port>>`, baseVariables("name", "namespace", "replicas", "app", "container", "image", "port"), true
+	case "StatefulSet":
+		return `apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  serviceName: <<service>>
+  replicas: <<replicas>>
+  selector:
+    matchLabels:
+      app: <<app>>
+  template:
+    metadata:
+      labels:
+        app: <<app>>
+    spec:
+      containers:
+        - name: <<container>>
+          image: <<image>>`, baseVariables("name", "namespace", "service", "replicas", "app", "container", "image"), true
+	case "Service":
+		return `apiVersion: v1
+kind: Service
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  selector:
+    app: <<app>>
+  ports:
+    - name: http
+      port: <<port>>
+      targetPort: <<target_port>>`, baseVariables("name", "namespace", "app", "port", "target_port"), true
+	case "ConfigMap":
+		return `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+data:
+  config.yaml: |
+    key: <<value>>`, baseVariables("name", "namespace", "value"), true
+	case "Ingress":
+		return `apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  rules:
+    - host: <<host>>
+      http:
+        paths:
+          - path: <<path>>
+            pathType: Prefix
+            backend:
+              service:
+                name: <<service>>
+                port:
+                  number: <<port>>`, baseVariables("name", "namespace", "host", "path", "service", "port"), true
+	case "HorizontalPodAutoscaler":
+		return `apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <<target>>
+  minReplicas: <<min_replicas>>
+  maxReplicas: <<max_replicas>>`, baseVariables("name", "namespace", "target", "min_replicas", "max_replicas"), true
+	case "Gateway":
+		return `apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: <<port>>
+        name: http
+        protocol: HTTP
+      hosts:
+        - <<host>>`, baseVariables("name", "namespace", "port", "host"), true
+	case "VirtualService":
+		return `apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  hosts:
+    - <<host>>
+  gateways:
+    - <<gateway>>
+  http:
+    - route:
+        - destination:
+            host: <<service>>
+            port:
+              number: <<port>>`, baseVariables("name", "namespace", "host", "gateway", "service", "port"), true
+	case "DestinationRule":
+		return `apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  host: <<host>>
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN`, baseVariables("name", "namespace", "host"), true
+	case "EnvoyFilter":
+		return `apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: <<name>>
+  namespace: <<namespace>>
+spec:
+  workloadSelector:
+    labels:
+      app: <<app>>
+  configPatches: []`, baseVariables("name", "namespace", "app"), true
+	default:
+		return "", nil, false
+	}
+}
+
+func baseVariables(names ...string) []Variable {
+	variables := make([]Variable, 0, len(names))
+	for _, name := range names {
+		variables = append(variables, Variable{Name: name, Required: true})
+	}
+	return variables
 }
 
 func renderYAML(item Template, values map[string]string) (string, error) {

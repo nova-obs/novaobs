@@ -36,6 +36,16 @@ func (r MongoRepository) SaveBinding(binding Binding) error {
 	return err
 }
 
+func (r MongoRepository) ListBindings() ([]Binding, error) {
+	cursor, err := r.bindings.Find(context.Background(), bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+	var out []Binding
+	return out, cursor.All(context.Background(), &out)
+}
+
 func (r MongoRepository) ListBindingsBySubject(subjectID string, subjectType string) ([]Binding, error) {
 	cursor, err := r.bindings.Find(context.Background(), bson.M{"subject_id": subjectID, "subject_type": subjectType})
 	if err != nil {
@@ -44,4 +54,9 @@ func (r MongoRepository) ListBindingsBySubject(subjectID string, subjectType str
 	defer cursor.Close(context.Background())
 	var out []Binding
 	return out, cursor.All(context.Background(), &out)
+}
+
+func (r MongoRepository) DeleteBinding(id string) error {
+	_, err := r.bindings.DeleteOne(context.Background(), bson.M{"_id": id})
+	return err
 }

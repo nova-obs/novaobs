@@ -29,6 +29,11 @@ type Store struct {
 	ars  map[string]interface{}
 	rrs  map[string]interface{}
 	rbs  map[string]interface{}
+	pss  map[string]interface{}
+	iums map[string]interface{}
+	igns map[string]interface{}
+	imbs map[string]interface{}
+	isas map[string]interface{}
 	secs map[string]interface{}
 	aes  map[string]interface{}
 	kcls map[string]interface{}
@@ -55,6 +60,11 @@ func NewStore() *Store {
 		ars:  map[string]interface{}{},
 		rrs:  map[string]interface{}{},
 		rbs:  map[string]interface{}{},
+		pss:  map[string]interface{}{},
+		iums: map[string]interface{}{},
+		igns: map[string]interface{}{},
+		imbs: map[string]interface{}{},
+		isas: map[string]interface{}{},
 		secs: map[string]interface{}{},
 		aes:  map[string]interface{}{},
 		kcls: map[string]interface{}{},
@@ -95,10 +105,17 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
-func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s} }
-func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s} }
-func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s} }
+func (s *Store) PlatformSubjects() database.PlatformSubjectStore      { return &platformSubjectStore{s} }
+func (s *Store) IAMUsers() database.IAMUserStore                      { return &iamUserStore{s} }
+func (s *Store) IAMGroups() database.IAMGroupStore                    { return &iamGroupStore{s} }
+func (s *Store) IAMMemberships() database.IAMMembershipStore          { return &iamMembershipStore{s} }
+func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
+	return &iamServiceAccountStore{s}
+}
+func (s *Store) Secrets() database.SecretStore             { return &secretStore{s} }
+func (s *Store) AuditEvents() database.AuditEventStore     { return &auditEventStore{s} }
+func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s}
 }
@@ -559,6 +576,12 @@ func (st *rbacRoleStore) Upsert(ctx context.Context, id string, v interface{}) e
 	return nil
 }
 
+func (st *rbacRoleStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.rrs, results)
+}
+
 func (st *rbacRoleStore) FindByID(ctx context.Context, id string, result interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
@@ -578,6 +601,12 @@ func (st *rbacBindingStore) Upsert(ctx context.Context, id string, v interface{}
 	return nil
 }
 
+func (st *rbacBindingStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.rbs, results)
+}
+
 func (st *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
@@ -588,6 +617,179 @@ func (st *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string,
 		}
 	}
 	return copyAll(filtered, results)
+}
+
+func (st *rbacBindingStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.rbs, id)
+	return nil
+}
+
+type platformSubjectStore struct{ s *Store }
+
+func (st *platformSubjectStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.pss[id] = v
+	return nil
+}
+
+func (st *platformSubjectStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.pss, results)
+}
+
+func (st *platformSubjectStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.pss, id)
+	return nil
+}
+
+// ---------- IAM Stores ----------
+
+type iamUserStore struct{ s *Store }
+
+func (st *iamUserStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.iums[id] = v
+	return nil
+}
+
+func (st *iamUserStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.iums, results)
+}
+
+func (st *iamUserStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.iums[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *iamUserStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.iums, id)
+	return nil
+}
+
+type iamGroupStore struct{ s *Store }
+
+func (st *iamGroupStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.igns[id] = v
+	return nil
+}
+
+func (st *iamGroupStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.igns, results)
+}
+
+func (st *iamGroupStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.igns[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *iamGroupStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.igns, id)
+	return nil
+}
+
+type iamMembershipStore struct{ s *Store }
+
+func (st *iamMembershipStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.imbs[id] = v
+	return nil
+}
+
+func (st *iamMembershipStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.imbs, results)
+}
+
+func (st *iamMembershipStore) FindByGroup(ctx context.Context, groupID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.imbs {
+		if extractStringField(value, "GroupID") == groupID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *iamMembershipStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.imbs {
+		if extractStringField(value, "SubjectID") == subjectID && extractStringField(value, "SubjectType") == subjectType {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *iamMembershipStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.imbs, id)
+	return nil
+}
+
+type iamServiceAccountStore struct{ s *Store }
+
+func (st *iamServiceAccountStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.isas[id] = v
+	return nil
+}
+
+func (st *iamServiceAccountStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.isas, results)
+}
+
+func (st *iamServiceAccountStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.isas[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *iamServiceAccountStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.isas, id)
+	return nil
 }
 
 // ---------- Secret Store ----------

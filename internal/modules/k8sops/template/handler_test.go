@@ -79,6 +79,21 @@ func TestRenderTemplateRequiresRequiredVariablesAndRecordsAudit(t *testing.T) {
 	require.Equal(t, []string{"image", "replicas"}, events[0].RequestSummary["variable_keys"])
 }
 
+func TestBaseTemplateHandlerReturnsBuiltInTemplateWithoutAudit(t *testing.T) {
+	router, auditStore := newTemplateTestRouter(t, testRBACRepo{})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/k8s/templates/base?type=Gateway", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "Gateway")
+	require.Contains(t, recorder.Body.String(), "novaobs-base")
+	events, err := auditStore.List(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, events)
+}
+
 func TestUpdateTemplateRollsBackOnAuditFailure(t *testing.T) {
 	repo := NewMemoryRepository([]Template{{ID: "tpl-1", Name: "orders-deploy", Type: "Deployment", YAMLContent: "kind: Deployment"}})
 	service := NewService(repo, platformrbac.NewService(templateWriterRepo()), failingAuditor{})
@@ -125,6 +140,7 @@ func newTemplateTestRouter(t *testing.T, rbacRepo testRBACRepo, subjectsAndSeeds
 	api.PUT("/k8s/templates", UpdateHandler(service))
 	api.DELETE("/k8s/templates/:id", DeleteHandler(service))
 	api.POST("/k8s/templates/render", RenderHandler(service))
+	api.GET("/k8s/templates/base", BaseTemplateHandler())
 	return router, auditStore
 }
 

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"novaobs/internal/alerting"
 	"novaobs/internal/collectorconfig"
@@ -15,9 +17,12 @@ import (
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/kubeclient"
+	"novaobs/internal/modules/k8sops/platformaccess"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
+	platformauth "novaobs/internal/platform/auth"
+	"novaobs/internal/platform/iam"
 	"novaobs/internal/platform/rbac"
 	"novaobs/internal/platform/secret"
 	"novaobs/internal/servicecatalog"
@@ -50,12 +55,55 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	alertSvc := alerting.NewService(store.AlertRules())
 	logQuerySvc := logquery.NewService()
 	rbacRepo := rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	bootstrapAdmin := platformBootstrapAdmin()
 	if cfg.Server.Mode != gin.ReleaseMode {
 		if err := rbac.EnsureK8sOpsDefaults(rbacRepo, rbac.DevAdminSubject(), rbac.DevK8sOpsScope()); err != nil {
 			return nil, fmt.Errorf("初始化 K8s 运维 RBAC 失败: %w", err)
 		}
+		if err := rbac.EnsurePlatformDefaults(rbacRepo, rbac.DevAdminSubject()); err != nil {
+			return nil, fmt.Errorf("初始化平台 RBAC 失败: %w", err)
+		}
+	} else if bootstrapAdmin.ID != "" {
+		if err := rbac.EnsurePlatformDefaults(rbacRepo, bootstrapAdmin); err != nil {
+			return nil, fmt.Errorf("初始化平台管理员 RBAC 失败: %w", err)
+		}
+	} else {
+		if err := rbac.EnsurePlatformDefaults(rbacRepo, rbac.Subject{}); err != nil {
+			return nil, fmt.Errorf("初始化平台默认角色失败: %w", err)
+		}
 	}
 	rbacSvc := rbac.NewService(rbacRepo)
+	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
+	iamRBACRepo := iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings())
+	iamSvc := iam.NewService(iamRepo, iamRBACRepo, rbacSvc)
+	if cfg.Server.Mode != gin.ReleaseMode {
+		_, err := iamSvc.CreateUser(ctx, rbac.DevAdminSubject(), iam.CreateUserRequest{
+			Username:    rbac.DevAdminSubject().ID,
+			DisplayName: "开发管理员",
+			Password:    os.Getenv("NOVAOBS_DEV_ADMIN_PASSWORD"),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("初始化开发管理员用户失败: %w", err)
+		}
+	} else if bootstrapAdmin.ID != "" {
+		bootstrapPassword := os.Getenv("NOVAOBS_BOOTSTRAP_ADMIN_PASSWORD")
+		if strings.TrimSpace(bootstrapPassword) == "" {
+			return nil, fmt.Errorf("NOVAOBS_BOOTSTRAP_ADMIN_PASSWORD 不能为空")
+		}
+		_, err := iamSvc.CreateUser(ctx, bootstrapAdmin, iam.CreateUserRequest{
+			Username:    bootstrapAdmin.ID,
+			DisplayName: bootstrapAdmin.DisplayName,
+			Password:    bootstrapPassword,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("初始化平台管理员用户失败: %w", err)
+		}
+	}
+	authSvc := platformauth.NewService(
+		iamRepo,
+		[]byte(cfg.Secret.Key),
+		platformauth.WithPasswordlessLocalUsers(cfg.Server.Mode != gin.ReleaseMode),
+	)
 	auditSvc := audit.NewService(audit.NewStoreRepository(store.AuditEvents()))
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
 	clusterCredentialSvc := cluster.NewCredentialService(secretSvc, rbacSvc, auditSvc)
@@ -67,6 +115,8 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		cluster.NewStoreRepository(store.K8sClusters()),
 		deployment.NewStoreInventoryRepository(store.K8sDeploymentInventory()),
 		deployment.NewStoreHistoryRepository(store.K8sDeploymentHistory()),
+		rbacRepo,
+		platformaccess.NewIAMSubjectRepository(iamSvc),
 		k8sClientProvider,
 	)
 	opampMgr := opamp.NewManager()
@@ -80,12 +130,23 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		OnboardingService:      onboardingSvc,
 		LogQueryService:        logQuerySvc,
 		AlertService:           alertSvc,
+		PlatformIAMService:     iamSvc,
 		K8sOpsModule:           k8sOpsModule,
 		OpAMPManager:           opampMgr,
 		CollectorTemplate:      cfg.CollectorTemplate,
-	}
-	if cfg.Server.Mode != gin.ReleaseMode {
-		deps.DefaultSubject = rbac.DevAdminSubject()
+		PlatformAuthService:    authSvc,
 	}
 	return httpapi.NewRouter(deps), nil
+}
+
+func platformBootstrapAdmin() rbac.Subject {
+	username := strings.TrimSpace(os.Getenv("NOVAOBS_BOOTSTRAP_ADMIN_USERNAME"))
+	if username == "" {
+		return rbac.Subject{}
+	}
+	displayName := strings.TrimSpace(os.Getenv("NOVAOBS_BOOTSTRAP_ADMIN_DISPLAY_NAME"))
+	if displayName == "" {
+		displayName = username
+	}
+	return rbac.Subject{ID: username, Type: iam.SubjectTypeUser, DisplayName: displayName}
 }

@@ -394,6 +394,14 @@ func (s *rbacRoleStore) Upsert(ctx context.Context, id string, role interface{})
 	return err
 }
 
+func (s *rbacRoleStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 func (s *rbacRoleStore) FindByID(ctx context.Context, id string, result interface{}) error {
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
 }
@@ -405,12 +413,155 @@ func (s *rbacBindingStore) Upsert(ctx context.Context, id string, binding interf
 	return err
 }
 
+func (s *rbacBindingStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 func (s *rbacBindingStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
 	cursor, err := s.col.Find(ctx, bson.M{"subject_id": subjectID, "subject_type": subjectType}, options.Find().SetSort(bson.M{"_id": 1}))
 	if err != nil {
 		return err
 	}
 	return cursor.All(ctx, results)
+}
+
+func (s *rbacBindingStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+type platformSubjectStore struct{ col *mongo.Collection }
+
+func (s *platformSubjectStore) Upsert(ctx context.Context, id string, subject interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, subject, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *platformSubjectStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *platformSubjectStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+// ---------- IAM Stores ----------
+
+type iamUserStore struct{ col *mongo.Collection }
+
+func (s *iamUserStore) Upsert(ctx context.Context, id string, user interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, user, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *iamUserStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamUserStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *iamUserStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+type iamGroupStore struct{ col *mongo.Collection }
+
+func (s *iamGroupStore) Upsert(ctx context.Context, id string, group interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, group, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *iamGroupStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamGroupStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *iamGroupStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+type iamMembershipStore struct{ col *mongo.Collection }
+
+func (s *iamMembershipStore) Upsert(ctx context.Context, id string, membership interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, membership, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *iamMembershipStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamMembershipStore) FindByGroup(ctx context.Context, groupID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"group_id": groupID}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamMembershipStore) FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"subject_id": subjectID, "subject_type": subjectType}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamMembershipStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+type iamServiceAccountStore struct{ col *mongo.Collection }
+
+func (s *iamServiceAccountStore) Upsert(ctx context.Context, id string, serviceAccount interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, serviceAccount, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *iamServiceAccountStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *iamServiceAccountStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *iamServiceAccountStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
 }
 
 // ---------- SecretStore ----------

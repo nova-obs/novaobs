@@ -51,3 +51,11 @@ type RenderResult struct {
 	RenderedYAML string `json:"rendered_yaml"`
 	AuditID      string `json:"audit_id"`
 }
+
+type BaseTemplateResult struct {
+	Type        string     `json:"type"`
+	YAMLContent string     `json:"yaml_content"`
+	Variables   []Variable `json:"variables"`
+	Description string     `json:"description"`
+	Source      string     `json:"source"`
+}

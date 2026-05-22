@@ -112,6 +112,32 @@ func PodLogsHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func RuntimeGroupsHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.ListRuntimeGroups(ctx.Request.Context(), RuntimeGroupsQuery{
+			ClusterID: ctx.Query("cluster_id"),
+			Namespace: ctx.Query("namespace"),
+		})
+		if err != nil {
+			if errors.Is(err, ErrReadPermissionDenied) || errors.Is(err, cluster.ErrCredentialPermissionDenied) {
+				response.Error(ctx, http.StatusForbidden, "permission_denied", "无权读取 Kubernetes 运行时拓扑")
+				return
+			}
+			if errors.Is(err, cluster.ErrCredentialNotFound) {
+				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
+				return
+			}
+			if errors.Is(err, ErrClusterRequired) || errors.Is(err, ErrNamespaceRequired) {
+				response.Error(ctx, http.StatusBadRequest, "invalid_request", "运行时拓扑必须指定集群和单个命名空间")
+				return
+			}
+			response.Error(ctx, http.StatusInternalServerError, "k8s_runtime_groups_failed", "运行时拓扑查询失败")
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func identityFromQuery(ctx *gin.Context) Identity {
 	return Identity{
 		ClusterID:  ctx.Query("cluster_id"),

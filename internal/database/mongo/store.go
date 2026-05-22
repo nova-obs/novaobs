@@ -31,6 +31,11 @@ type Store struct {
 	arCol  *mongo.Collection
 	rrCol  *mongo.Collection
 	rbCol  *mongo.Collection
+	psCol  *mongo.Collection
+	iuCol  *mongo.Collection
+	igCol  *mongo.Collection
+	imCol  *mongo.Collection
+	isaCol *mongo.Collection
 	secCol *mongo.Collection
 	aeCol  *mongo.Collection
 	kclCol *mongo.Collection
@@ -68,6 +73,11 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		arCol:  db.Collection("alert_rules"),
 		rrCol:  db.Collection("rbac_roles"),
 		rbCol:  db.Collection("rbac_bindings"),
+		psCol:  db.Collection("platform_subjects"),
+		iuCol:  db.Collection("iam_users"),
+		igCol:  db.Collection("iam_groups"),
+		imCol:  db.Collection("iam_memberships"),
+		isaCol: db.Collection("iam_service_accounts"),
 		secCol: db.Collection("secrets"),
 		aeCol:  db.Collection("audit_events"),
 		kclCol: db.Collection("k8s_clusters"),
@@ -110,10 +120,19 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s.arCol} }
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
-func (s *Store) Secrets() database.SecretStore                        { return &secretStore{s.secCol} }
-func (s *Store) AuditEvents() database.AuditEventStore                { return &auditEventStore{s.aeCol} }
-func (s *Store) K8sClusters() database.K8sClusterStore                { return &k8sClusterStore{s.kclCol} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore            { return &k8sNamespaceStore{s.knsCol} }
+func (s *Store) PlatformSubjects() database.PlatformSubjectStore {
+	return &platformSubjectStore{s.psCol}
+}
+func (s *Store) IAMUsers() database.IAMUserStore             { return &iamUserStore{s.iuCol} }
+func (s *Store) IAMGroups() database.IAMGroupStore           { return &iamGroupStore{s.igCol} }
+func (s *Store) IAMMemberships() database.IAMMembershipStore { return &iamMembershipStore{s.imCol} }
+func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
+	return &iamServiceAccountStore{s.isaCol}
+}
+func (s *Store) Secrets() database.SecretStore             { return &secretStore{s.secCol} }
+func (s *Store) AuditEvents() database.AuditEventStore     { return &auditEventStore{s.aeCol} }
+func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s.kclCol} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s.knsCol} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s.kdiCol}
 }

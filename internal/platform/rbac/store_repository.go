@@ -29,8 +29,18 @@ func (r StoreRepository) SaveBinding(binding Binding) error {
 	return r.bindings.Upsert(context.Background(), binding.ID, binding)
 }
 
+func (r StoreRepository) ListBindings() ([]Binding, error) {
+	var bindings []Binding
+	err := r.bindings.FindAll(context.Background(), &bindings)
+	return bindings, err
+}
+
 func (r StoreRepository) ListBindingsBySubject(subjectID string, subjectType string) ([]Binding, error) {
 	var bindings []Binding
 	err := r.bindings.FindBySubject(context.Background(), subjectID, subjectType, &bindings)
 	return bindings, err
+}
+
+func (r StoreRepository) DeleteBinding(id string) error {
+	return r.bindings.Delete(context.Background(), id)
 }

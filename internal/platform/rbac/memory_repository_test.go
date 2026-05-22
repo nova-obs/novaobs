@@ -29,6 +29,12 @@ func (r *MemoryRepository) SaveBinding(binding Binding) error {
 	return nil
 }
 
+func (r *MemoryRepository) ListBindings() ([]Binding, error) {
+	out := make([]Binding, len(r.bindings))
+	copy(out, r.bindings)
+	return out, nil
+}
+
 func (r *MemoryRepository) ListBindingsBySubject(subjectID string, subjectType string) ([]Binding, error) {
 	out := make([]Binding, 0, len(r.bindings))
 	for _, binding := range r.bindings {
@@ -37,4 +43,15 @@ func (r *MemoryRepository) ListBindingsBySubject(subjectID string, subjectType s
 		}
 	}
 	return out, nil
+}
+
+func (r *MemoryRepository) DeleteBinding(id string) error {
+	out := make([]Binding, 0, len(r.bindings))
+	for _, binding := range r.bindings {
+		if binding.ID != id {
+			out = append(out, binding)
+		}
+	}
+	r.bindings = out
+	return nil
 }

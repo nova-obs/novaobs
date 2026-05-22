@@ -85,12 +85,18 @@ func candidatesForKind(kind string) []resourceCandidate {
 		return []resourceCandidate{{version: "v1", resource: "services", kind: "Service"}}
 	case "configmap":
 		return []resourceCandidate{{version: "v1", resource: "configmaps", kind: "ConfigMap"}}
+	case "persistentvolumeclaim":
+		return []resourceCandidate{{version: "v1", resource: "persistentvolumeclaims", kind: "PersistentVolumeClaim"}}
+	case "persistentvolume":
+		return []resourceCandidate{{version: "v1", resource: "persistentvolumes", kind: "PersistentVolume"}}
 	case "deployment":
 		return []resourceCandidate{{group: "apps", version: "v1", resource: "deployments", kind: "Deployment"}}
 	case "statefulset":
 		return []resourceCandidate{{group: "apps", version: "v1", resource: "statefulsets", kind: "StatefulSet"}}
 	case "daemonset":
 		return []resourceCandidate{{group: "apps", version: "v1", resource: "daemonsets", kind: "DaemonSet"}}
+	case "replicaset":
+		return []resourceCandidate{{group: "apps", version: "v1", resource: "replicasets", kind: "ReplicaSet"}}
 	case "horizontalpodautoscaler":
 		return []resourceCandidate{
 			{group: "autoscaling", version: "v2", resource: "horizontalpodautoscalers", kind: "HorizontalPodAutoscaler"},
@@ -111,6 +117,20 @@ func candidatesForKind(kind string) []resourceCandidate {
 		return istioNetworkingCandidates("destinationrules", "DestinationRule")
 	case "envoyfilter":
 		return istioNetworkingCandidates("envoyfilters", "EnvoyFilter")
+	case "peerauthentication":
+		return istioSecurityCandidates("peerauthentications", "PeerAuthentication")
+	case "authorizationpolicy":
+		return istioSecurityCandidates("authorizationpolicies", "AuthorizationPolicy")
+	case "requestauthentication":
+		return istioSecurityCandidates("requestauthentications", "RequestAuthentication")
+	case "policy":
+		return []resourceCandidate{{group: "authentication.istio.io", version: "v1alpha1", resource: "policies", kind: "Policy"}}
+	case "meshpolicy":
+		return []resourceCandidate{{group: "authentication.istio.io", version: "v1alpha1", resource: "meshpolicies", kind: "MeshPolicy"}}
+	case "servicerolebinding":
+		return []resourceCandidate{{group: "rbac.istio.io", version: "v1alpha1", resource: "servicerolebindings", kind: "ServiceRoleBinding"}}
+	case "clusterrbacconfig":
+		return []resourceCandidate{{group: "rbac.istio.io", version: "v1alpha1", resource: "clusterrbacconfigs", kind: "ClusterRbacConfig"}}
 	default:
 		return nil
 	}
@@ -121,6 +141,14 @@ func istioNetworkingCandidates(resource string, kind string) []resourceCandidate
 		{group: "networking.istio.io", version: "v1", resource: resource, kind: kind},
 		{group: "networking.istio.io", version: "v1beta1", resource: resource, kind: kind},
 		{group: "networking.istio.io", version: "v1alpha3", resource: resource, kind: kind},
+	}
+}
+
+func istioSecurityCandidates(resource string, kind string) []resourceCandidate {
+	return []resourceCandidate{
+		{group: "security.istio.io", version: "v1", resource: resource, kind: kind},
+		{group: "security.istio.io", version: "v1beta1", resource: resource, kind: kind},
+		{group: "security.istio.io", version: "v1alpha1", resource: resource, kind: kind},
 	}
 }
 

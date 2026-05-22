@@ -88,6 +88,17 @@ func RenderHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func BaseTemplateHandler() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := BaseTemplate(ctx.Query("type"))
+		if err != nil {
+			writeTemplateError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func writeTemplateError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrPermissionDenied):

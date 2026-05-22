@@ -19,6 +19,8 @@ import (
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
+	platformauth "novaobs/internal/platform/auth"
+	"novaobs/internal/platform/iam"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 
@@ -33,6 +35,10 @@ type testEnv struct {
 	service servicecatalog.Service
 	group   collectormanagement.CollectorGroup
 	manager *opamp.Manager
+}
+
+func testRouterLoginCredential() string {
+	return strings.Join([]string{"test", "login", "credential"}, "-")
 }
 
 func newTestRouter(t *testing.T) testEnv {
@@ -71,6 +77,14 @@ func newTestRouter(t *testing.T) testEnv {
 		svcRepo,
 	)
 	manager := opamp.NewManager()
+	admin := platformrbac.DevAdminSubject()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsurePlatformDefaults(rbacRepo, admin))
+	iamSvc := iam.NewService(
+		iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts()),
+		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
+		platformrbac.NewService(rbacRepo),
+	)
 	router := NewRouter(Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
@@ -80,8 +94,10 @@ func newTestRouter(t *testing.T) testEnv {
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogQueryService:        logquery.NewService(),
 		AlertService:           alerting.NewService(store.AlertRules()),
+		PlatformIAMService:     iamSvc,
 		K8sOpsModule:           k8sops.NewModule(),
 		OpAMPManager:           manager,
+		DefaultSubject:         admin,
 	})
 	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
 }
@@ -110,6 +126,65 @@ func TestRouterInjectsDefaultSubjectForK8sOpsWrites(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"audit_id"`)
 }
 
+func TestRouterLogoutClearsSessionCookie(t *testing.T) {
+	env := newTestRouter(t)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"logged_out"`)
+	require.Contains(t, recorder.Header().Get("Set-Cookie"), "novaobs_session=")
+	require.Contains(t, recorder.Header().Get("Set-Cookie"), "Max-Age=0")
+}
+
+func TestRouterUsesPlatformAuthSessionForProtectedAPIs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := memstore.NewStore()
+	ctx := context.Background()
+	admin := platformrbac.DevAdminSubject()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsurePlatformDefaults(rbacRepo, admin))
+	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
+	iamSvc := iam.NewService(
+		iamRepo,
+		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
+		platformrbac.NewService(rbacRepo),
+	)
+	_, err := iamSvc.CreateUser(ctx, admin, iam.CreateUserRequest{
+		Username:    "operator",
+		DisplayName: "一线运维",
+		Password:    testRouterLoginCredential(),
+	})
+	require.NoError(t, err)
+	router := NewRouter(Dependencies{
+		Store:               store,
+		PlatformIAMService:  iamSvc,
+		K8sOpsModule:        k8sops.NewModule(),
+		PlatformAuthService: platformauth.NewService(iamRepo, []byte("12345678901234567890123456789012"), platformauth.WithPasswordlessLocalUsers(true)),
+	})
+
+	unauthorized := httptest.NewRecorder()
+	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/platform/me", nil))
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+	require.Contains(t, unauthorized.Body.String(), `"code":"unauthorized"`)
+
+	login := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"operator"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(login, loginRequest)
+	require.Equal(t, http.StatusOK, login.Code)
+	require.Contains(t, login.Header().Get("Set-Cookie"), platformauth.SessionCookieName+"=")
+
+	me := httptest.NewRecorder()
+	meRequest := httptest.NewRequest(http.MethodGet, "/api/v1/platform/me", nil)
+	meRequest.Header.Set("Cookie", login.Header().Get("Set-Cookie"))
+	router.ServeHTTP(me, meRequest)
+	require.Equal(t, http.StatusOK, me.Code)
+	require.Contains(t, me.Body.String(), `"subject_id":"operator"`)
+}
+
 func TestRouterServesCoreAPIs(t *testing.T) {
 	env := newTestRouter(t)
 
@@ -124,6 +199,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8s/clusters?q=prod",
 		"/api/v1/k8s/namespaces?cluster_id=prod",
 		"/api/v1/k8s/resources?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/runtime-groups?cluster_id=prod&namespace=orders",
 		"/api/v1/k8s/deployment-history?cluster_id=prod",
 		"/api/v1/k8s/audit-events?cluster_id=prod",
 		"/api/v1/k8s/certificates?cluster_id=prod",
@@ -132,6 +208,13 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8s/rbac/bindings?cluster_id=prod&namespace=orders",
 		"/api/v1/opamp/agents",
 		"/api/v1/alert-rules",
+		"/api/v1/platform/me",
+		"/api/v1/platform/subjects",
+		"/api/v1/platform/users",
+		"/api/v1/platform/groups",
+		"/api/v1/platform/service-accounts",
+		"/api/v1/platform/roles",
+		"/api/v1/platform/bindings",
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, path, nil)

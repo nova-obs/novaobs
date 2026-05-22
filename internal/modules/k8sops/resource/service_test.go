@@ -85,3 +85,47 @@ func TestServiceDoesNotReturnPodLogsForMissingPod(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestServiceListRuntimeGroupsRequiresClusterAndNamespace(t *testing.T) {
+	svc := NewService(NewMemoryReader(nil))
+
+	_, err := svc.ListRuntimeGroups(context.Background(), RuntimeGroupsQuery{Namespace: "orders"})
+	require.ErrorIs(t, err, ErrClusterRequired)
+
+	_, err = svc.ListRuntimeGroups(context.Background(), RuntimeGroupsQuery{ClusterID: "prod"})
+	require.ErrorIs(t, err, ErrNamespaceRequired)
+
+	_, err = svc.ListRuntimeGroups(context.Background(), RuntimeGroupsQuery{ClusterID: "prod", Namespace: "*"})
+	require.ErrorIs(t, err, ErrNamespaceRequired)
+}
+
+func TestServiceListRuntimeGroupsDelegatesToReader(t *testing.T) {
+	reader := runtimeGroupsReaderStub{
+		result: RuntimeGroupsResponse{
+			ClusterID: "prod",
+			Namespace: "orders",
+			Summary:   RuntimeGroupsSummary{GroupCount: 1},
+			Groups: []RuntimeGroup{{
+				Key:         "orders",
+				DisplayName: "orders",
+				Summary:     RuntimeGroupSummary{ServicesTotal: 1},
+			}},
+		},
+	}
+	svc := NewService(reader)
+
+	result, err := svc.ListRuntimeGroups(context.Background(), RuntimeGroupsQuery{ClusterID: "prod", Namespace: "orders"})
+
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Summary.GroupCount)
+	require.Len(t, result.Groups, 1)
+}
+
+type runtimeGroupsReaderStub struct {
+	MemoryReader
+	result RuntimeGroupsResponse
+}
+
+func (r runtimeGroupsReaderStub) ListRuntimeGroups(_ context.Context, _ RuntimeGroupsQuery) (RuntimeGroupsResponse, error) {
+	return r.result, nil
+}

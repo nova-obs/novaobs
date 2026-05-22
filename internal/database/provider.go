@@ -19,6 +19,11 @@ type Store interface {
 	AlertRules() AlertRuleStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
+	PlatformSubjects() PlatformSubjectStore
+	IAMUsers() IAMUserStore
+	IAMGroups() IAMGroupStore
+	IAMMemberships() IAMMembershipStore
+	IAMServiceAccounts() IAMServiceAccountStore
 	Secrets() SecretStore
 	AuditEvents() AuditEventStore
 	K8sClusters() K8sClusterStore
@@ -124,12 +129,50 @@ type AlertRuleStore interface {
 
 type RBACRoleStore interface {
 	Upsert(ctx context.Context, id string, role interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 }
 
 type RBACBindingStore interface {
 	Upsert(ctx context.Context, id string, binding interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 	FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type PlatformSubjectStore interface {
+	Upsert(ctx context.Context, id string, subject interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type IAMUserStore interface {
+	Upsert(ctx context.Context, id string, user interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type IAMGroupStore interface {
+	Upsert(ctx context.Context, id string, group interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type IAMMembershipStore interface {
+	Upsert(ctx context.Context, id string, membership interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByGroup(ctx context.Context, groupID string, results interface{}) error
+	FindBySubject(ctx context.Context, subjectID string, subjectType string, results interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type IAMServiceAccountStore interface {
+	Upsert(ctx context.Context, id string, serviceAccount interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type SecretStore interface {
