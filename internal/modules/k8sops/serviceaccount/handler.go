@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
@@ -72,6 +73,8 @@ func writeServiceAccountError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusNotFound, "not_found", "ServiceAccount 不存在")
 	case errors.Is(err, ErrWriteUnavailable):
 		response.Error(ctx, http.StatusConflict, "k8s_service_account_write_unavailable", "真实集群 ServiceAccount 写操作尚未启用")
+	case errors.Is(err, cluster.ErrClusterReadOnly):
+		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断 ServiceAccount 写操作")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_service_account_operation_failed", "ServiceAccount 操作失败")
 	}

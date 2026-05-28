@@ -7,14 +7,23 @@ import (
 	"strings"
 	"time"
 
+	"novaobs/internal/modules/k8sops/cluster"
+	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/platform/secret"
+
+	authv1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 var (
-	ErrPermissionDenied = errors.New("permission_denied")
-	ErrInvalidRequest   = errors.New("invalid_kubeconfig_request")
+	ErrPermissionDenied   = errors.New("permission_denied")
+	ErrInvalidRequest     = errors.New("invalid_kubeconfig_request")
+	ErrTokenUnavailable   = errors.New("kubeconfig_token_unavailable")
+	ErrCredentialRequired = errors.New("k8s_cluster_credential_required")
 )
 
 type SecretService interface {
@@ -32,20 +41,43 @@ type Auditor interface {
 	Record(ctx context.Context, event audit.Event) (audit.Event, error)
 }
 
+type TokenRequester interface {
+	Token(ctx context.Context, req TokenRequest) (TokenResult, error)
+}
+
+type TokenRequest struct {
+	ClusterID      string
+	Namespace      string
+	ServiceAccount string
+	Duration       time.Duration
+}
+
+type TokenResult struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
 type Service struct {
 	secrets    SecretService
 	authorizer Authorizer
 	auditor    Auditor
+	tokens     TokenRequester
 }
 
-func NewService(secrets SecretService, authorizer Authorizer, auditor Auditor) Service {
+func NewService(secrets SecretService, authorizer Authorizer, auditor Auditor, dependencies ...any) Service {
 	if authorizer == nil {
 		authorizer = denyAuthorizer{}
 	}
 	if auditor == nil {
 		auditor = noopAuditor{}
 	}
-	return Service{secrets: secrets, authorizer: authorizer, auditor: auditor}
+	service := Service{secrets: secrets, authorizer: authorizer, auditor: auditor}
+	for _, dependency := range dependencies {
+		if value, ok := dependency.(TokenRequester); ok && value != nil {
+			service.tokens = value
+		}
+	}
+	return service
 }
 
 func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req CreateRequest) (CreateResult, error) {
@@ -56,12 +88,20 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 	if !s.allowed(subject, req.ClusterID, req.Namespace) {
 		return CreateResult{}, ErrPermissionDenied
 	}
-	expiresAt := time.Now().UTC().Add(24 * time.Hour)
+	tokenResult, err := s.serviceAccountToken(ctx, req)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	kubeconfig, err := s.renderKubeconfig(ctx, req, tokenResult.Token)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	expiresAt := tokenResult.ExpiresAt
 	metadata, err := s.secrets.Create(ctx, secret.CreateRequest{
 		Name:      fmt.Sprintf("%s-%s-kubeconfig", req.Namespace, req.ServiceAccount),
 		Type:      "kubeconfig",
 		Scope:     secret.Scope{ClusterID: req.ClusterID, Namespace: req.Namespace},
-		Plaintext: []byte(renderKubeconfig(req)),
+		Plaintext: kubeconfig,
 		CreatedBy: subject.ID,
 		ExpiresAt: expiresAt,
 	})
@@ -133,8 +173,121 @@ func normalizeCreateRequest(req CreateRequest) CreateRequest {
 	return req
 }
 
-func renderKubeconfig(req CreateRequest) string {
-	return fmt.Sprintf("apiVersion: v1\nkind: Config\ncurrent-context: %s-context\nclusters:\n- name: %s\nusers:\n- name: %s\n", req.ServiceAccount, req.ClusterID, req.ServiceAccount)
+func (s Service) serviceAccountToken(ctx context.Context, req CreateRequest) (TokenResult, error) {
+	if req.Token != "" {
+		return TokenResult{Token: req.Token, ExpiresAt: time.Now().UTC().Add(24 * time.Hour)}, nil
+	}
+	if s.tokens == nil {
+		return TokenResult{}, ErrTokenUnavailable
+	}
+	return s.tokens.Token(ctx, TokenRequest{
+		ClusterID:      req.ClusterID,
+		Namespace:      req.Namespace,
+		ServiceAccount: req.ServiceAccount,
+		Duration:       24 * time.Hour,
+	})
+}
+
+func (s Service) renderKubeconfig(ctx context.Context, req CreateRequest, token string) ([]byte, error) {
+	if s.secrets == nil {
+		return nil, ErrCredentialRequired
+	}
+	source, _, err := s.secrets.PlaintextByTypeAndScope(ctx, cluster.ClusterCredentialSecretType, secret.Scope{ClusterID: req.ClusterID})
+	if err != nil {
+		return nil, ErrCredentialRequired
+	}
+	sourceConfig, err := clientcmd.Load(source)
+	if err != nil {
+		return nil, err
+	}
+	sourceCluster := currentCluster(sourceConfig)
+	if sourceCluster == nil || strings.TrimSpace(sourceCluster.Server) == "" {
+		return nil, ErrCredentialRequired
+	}
+	clusterName := req.ClusterID
+	userName := req.ServiceAccount
+	contextName := fmt.Sprintf("%s/%s/%s", req.ClusterID, req.Namespace, req.ServiceAccount)
+	return clientcmd.Write(clientcmdapi.Config{
+		Kind:           "Config",
+		APIVersion:     "v1",
+		CurrentContext: contextName,
+		Clusters: map[string]*clientcmdapi.Cluster{
+			clusterName: {
+				Server:                   sourceCluster.Server,
+				CertificateAuthorityData: append([]byte{}, sourceCluster.CertificateAuthorityData...),
+				InsecureSkipTLSVerify:    sourceCluster.InsecureSkipTLSVerify,
+				TLSServerName:            sourceCluster.TLSServerName,
+			},
+		},
+		AuthInfos: map[string]*clientcmdapi.AuthInfo{
+			userName: {Token: token},
+		},
+		Contexts: map[string]*clientcmdapi.Context{
+			contextName: {
+				Cluster:   clusterName,
+				AuthInfo:  userName,
+				Namespace: req.Namespace,
+			},
+		},
+	})
+}
+
+func currentCluster(config *clientcmdapi.Config) *clientcmdapi.Cluster {
+	if config == nil {
+		return nil
+	}
+	if config.CurrentContext != "" {
+		contextValue := config.Contexts[config.CurrentContext]
+		if contextValue != nil {
+			if clusterValue := config.Clusters[contextValue.Cluster]; clusterValue != nil {
+				return clusterValue
+			}
+		}
+	}
+	for _, clusterValue := range config.Clusters {
+		return clusterValue
+	}
+	return nil
+}
+
+type KubernetesTokenRequester struct {
+	clients kubeclient.ClientsetProvider
+}
+
+func NewKubernetesTokenRequester(clients kubeclient.ClientsetProvider) KubernetesTokenRequester {
+	return KubernetesTokenRequester{clients: clients}
+}
+
+func (r KubernetesTokenRequester) Token(ctx context.Context, req TokenRequest) (TokenResult, error) {
+	if r.clients == nil {
+		return TokenResult{}, ErrTokenUnavailable
+	}
+	req.ClusterID = strings.TrimSpace(req.ClusterID)
+	req.Namespace = strings.TrimSpace(req.Namespace)
+	req.ServiceAccount = strings.TrimSpace(req.ServiceAccount)
+	if req.ClusterID == "" || req.Namespace == "" || req.ServiceAccount == "" {
+		return TokenResult{}, ErrInvalidRequest
+	}
+	duration := req.Duration
+	if duration <= 0 {
+		duration = 24 * time.Hour
+	}
+	seconds := int64(duration.Seconds())
+	client, err := r.clients.Clientset(ctx, req.ClusterID)
+	if err != nil {
+		return TokenResult{}, err
+	}
+	token, err := client.CoreV1().ServiceAccounts(req.Namespace).CreateToken(ctx, req.ServiceAccount, &authv1.TokenRequest{
+		Spec: authv1.TokenRequestSpec{ExpirationSeconds: &seconds},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return TokenResult{}, err
+	}
+	expiresAt := token.Status.ExpirationTimestamp.Time
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(duration)
+	}
+	return TokenResult{Token: token.Status.Token, ExpiresAt: expiresAt.UTC()}, nil
 }
 
 type denyAuthorizer struct{}

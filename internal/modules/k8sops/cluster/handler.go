@@ -69,12 +69,30 @@ func CapabilityHandler(service CapabilityService) gin.HandlerFunc {
 	}
 }
 
+func ProbeHandler(clusterService Service, capabilityService CapabilityService) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		cluster, err := clusterService.Get(ctx.Request.Context(), ctx.Param("id"))
+		if err != nil {
+			writeClusterError(ctx, err)
+			return
+		}
+		result, err := capabilityService.Probe(ctx.Request.Context(), cluster)
+		if err != nil {
+			writeCapabilityError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{"source": "k8s.capabilities"})
+	}
+}
+
 func writeClusterError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidClusterRequest):
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", "集群 ID 和名称不能为空")
 	case errors.Is(err, ErrClusterRepositoryWrite):
 		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_write_unavailable", "集群仓储暂不支持写入")
+	case errors.Is(err, ErrClusterNotFound):
+		response.Error(ctx, http.StatusNotFound, "not_found", "集群不存在")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_cluster_operation_failed", "集群操作失败")
 	}
@@ -139,10 +157,30 @@ func RotateCredentialHandler(service CredentialService) gin.HandlerFunc {
 	}
 }
 
+func RollbackCredentialHandler(service CredentialService) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body RollbackCredentialRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求体格式不正确")
+			return
+		}
+		result, err := service.Rollback(ctx.Request.Context(), subjectFromRequest(ctx), body)
+		if err != nil {
+			writeCredentialError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func writeCredentialError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrCredentialPermissionDenied):
 		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权管理集群凭据")
+	case errors.Is(err, ErrCredentialNotFound):
+		response.Error(ctx, http.StatusNotFound, "not_found", "集群凭据版本不存在")
+	case errors.Is(err, ErrCredentialValidationFailed):
+		response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_validation_failed", "集群凭据连接探测失败")
 	case errors.Is(err, ErrInvalidCredentialRequest):
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", "集群凭据请求参数不完整")
 	default:

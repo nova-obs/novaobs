@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -73,6 +75,8 @@ func TestExportKubeconfigRequiresPermissionAndRecordsAudit(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, exportRecorder.Code)
 	require.Contains(t, exportRecorder.Body.String(), "apiVersion")
+	require.Contains(t, exportRecorder.Body.String(), "https://prod.example.internal")
+	require.Contains(t, exportRecorder.Body.String(), "issued-token")
 	require.Contains(t, exportRecorder.Body.String(), `"audit_id"`)
 
 	events, err := auditStore.List(context.Background())
@@ -86,7 +90,15 @@ func newKubeconfigTestRouter(t *testing.T, rbacRepo testRBACRepo, subjects ...pl
 	gin.SetMode(gin.TestMode)
 	auditStore := audit.NewMemoryStore()
 	secretSvc := secret.NewService(newTestSecretRepo(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
-	service := NewService(secretSvc, platformrbac.NewService(rbacRepo), audit.NewService(auditStore))
+	_, err := secretSvc.Create(context.Background(), secret.CreateRequest{
+		Name:      "prod-kubeconfig",
+		Type:      cluster.ClusterCredentialSecretType,
+		Scope:     secret.Scope{ClusterID: "prod"},
+		Plaintext: []byte(testClusterKubeconfig()),
+		CreatedBy: "test",
+	})
+	require.NoError(t, err)
+	service := NewService(secretSvc, platformrbac.NewService(rbacRepo), audit.NewService(auditStore), staticTokenRequester{value: "issued-token", expiresAt: time.Now().UTC().Add(time.Hour)})
 	router := gin.New()
 	if len(subjects) > 0 {
 		router.Use(func(ctx *gin.Context) {
@@ -97,6 +109,19 @@ func newKubeconfigTestRouter(t *testing.T, rbacRepo testRBACRepo, subjects ...pl
 	api.POST("/k8s/kubeconfigs", CreateHandler(service))
 	api.POST("/k8s/kubeconfigs/export", ExportHandler(service))
 	return router, auditStore
+}
+
+func testClusterKubeconfig() string {
+	return "apiVersion: v1\nkind: Config\ncurrent-context: prod\nclusters:\n- name: prod\n  cluster:\n    server: https://prod.example.internal\n    certificate-authority-data: Y2E=\ncontexts:\n- name: prod\n  context:\n    cluster: prod\n    user: admin\nusers:\n- name: admin\n  user:\n    token: admin-token\n"
+}
+
+type staticTokenRequester struct {
+	value     string
+	expiresAt time.Time
+}
+
+func (r staticTokenRequester) Token(context.Context, TokenRequest) (TokenResult, error) {
+	return TokenResult{Token: r.value, ExpiresAt: r.expiresAt}, nil
 }
 
 func extractCreatedSecretID(t *testing.T, raw string) string {

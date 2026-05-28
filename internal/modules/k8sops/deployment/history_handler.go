@@ -142,6 +142,8 @@ func writeDeploymentError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrPermissionDenied):
 		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权执行发布部署操作")
+	case errors.Is(err, ErrClusterReadOnly):
+		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断发布、删除、回滚和 server dry-run")
 	case errors.Is(err, ErrConfirmationMismatch):
 		response.Error(ctx, http.StatusBadRequest, "confirmation_mismatch", "预览确认已失效，请重新预览后再执行")
 	case errors.Is(err, ErrInvalidRequest):

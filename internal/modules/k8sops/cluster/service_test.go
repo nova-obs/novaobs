@@ -52,6 +52,51 @@ func TestMemoryRepositorySortsAndPaginatesClusters(t *testing.T) {
 	require.Equal(t, "prod-b", items[0].ID)
 }
 
+func TestServiceNormalizesAccessModeAndReadOnlyPolicy(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	svc := NewService(&repo)
+	created, err := svc.Create(context.Background(), UpsertRequest{
+		ID:       "test03",
+		Name:     "test03",
+		ReadOnly: true,
+	})
+	require.NoError(t, err)
+
+	readOnly, err := svc.IsReadOnly(context.Background(), "test03")
+
+	require.NoError(t, err)
+	require.True(t, readOnly)
+	require.Equal(t, "direct", created.AccessMode)
+	require.True(t, created.ReadOnly)
+	require.True(t, created.ReadOnlySet)
+}
+
+func TestServiceTreatsLegacyClusterPolicyAsReadOnly(t *testing.T) {
+	repo := NewMemoryRepository([]Cluster{
+		{ID: "test03", Name: "test03"},
+	})
+	svc := NewService(repo)
+
+	readOnly, err := svc.IsReadOnly(context.Background(), "test03")
+
+	require.NoError(t, err)
+	require.True(t, readOnly)
+}
+
+func TestServiceAllowsExplicitWriteEnabledCluster(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	svc := NewService(&repo)
+	created, err := svc.Create(context.Background(), UpsertRequest{
+		ID:       "sandbox",
+		Name:     "sandbox",
+		ReadOnly: false,
+	})
+
+	require.NoError(t, err)
+	require.False(t, created.ReadOnly)
+	require.True(t, created.ReadOnlySet)
+}
+
 func TestCapabilityServiceReturnsProviderSnapshot(t *testing.T) {
 	svc := NewCapabilityService(staticCapabilityProvider{snapshot: kubeclient.CapabilitySnapshot{
 		ClusterID:     "prod",
@@ -67,6 +112,26 @@ func TestCapabilityServiceReturnsProviderSnapshot(t *testing.T) {
 	require.Equal(t, "prod", snapshot.ClusterID)
 	require.Equal(t, "v1.30.2", snapshot.ServerVersion)
 	require.True(t, snapshot.Supports("networking.istio.io", "v1", "virtualservices"))
+}
+
+func TestCapabilityServiceProbeReturnsClusterPolicyAndDiscovery(t *testing.T) {
+	svc := NewCapabilityService(staticCapabilityProvider{snapshot: kubeclient.CapabilitySnapshot{
+		ServerVersion: "v1.30.2",
+		Resources: []kubeclient.APIResource{
+			{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices", Kind: "VirtualService", Namespaced: true},
+		},
+	}})
+
+	result, err := svc.Probe(context.Background(), Cluster{ID: "test03", ReadOnly: true})
+
+	require.NoError(t, err)
+	require.Equal(t, "test03", result.ClusterID)
+	require.Equal(t, "connected", result.Status)
+	require.Equal(t, "direct", result.AccessMode)
+	require.True(t, result.ReadOnly)
+	require.Equal(t, "v1.30.2", result.ServerVersion)
+	require.Equal(t, 1, result.ResourceCount)
+	require.NotEmpty(t, result.CheckedAt)
 }
 
 func TestCapabilityServiceRejectsMissingProviderAndClusterID(t *testing.T) {

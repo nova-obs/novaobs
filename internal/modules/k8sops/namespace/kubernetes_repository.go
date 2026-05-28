@@ -9,6 +9,7 @@ import (
 	platformrbac "novaobs/internal/platform/rbac"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -61,6 +62,57 @@ func (r KubernetesRepository) List(ctx context.Context, filter ListFilter) ([]Na
 	}
 	sortNamespaces(items, filter.Sort, filter.Order)
 	return paginate(items, filter.Page, filter.PageSize), nil
+}
+
+func (r KubernetesRepository) Create(ctx context.Context, item Namespace) (Namespace, error) {
+	item = normalizeNamespace(item)
+	if item.ClusterID == "" || item.Name == "" {
+		return Namespace{}, ErrInvalidRequest
+	}
+	client, err := r.clients.Clientset(ctx, item.ClusterID)
+	if err != nil {
+		return Namespace{}, err
+	}
+	labels := map[string]string{}
+	if item.Owner != "" {
+		labels["novaobs.io/owner"] = item.Owner
+	}
+	created, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: item.Name, Labels: labels},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return Namespace{}, err
+	}
+	return namespaceFromKubernetes(item.ClusterID, *created), nil
+}
+
+func (r KubernetesRepository) Delete(ctx context.Context, req DeleteRequest) (Namespace, error) {
+	req = normalizeDeleteRequest(req)
+	if req.ClusterID == "" || req.Name == "" || req.UID == "" {
+		return Namespace{}, ErrInvalidRequest
+	}
+	client, err := r.clients.Clientset(ctx, req.ClusterID)
+	if err != nil {
+		return Namespace{}, err
+	}
+	existing, err := client.CoreV1().Namespaces().Get(ctx, req.Name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return Namespace{}, ErrNotFound
+		}
+		return Namespace{}, err
+	}
+	if string(existing.UID) != req.UID {
+		return Namespace{}, ErrNotFound
+	}
+	deleted := namespaceFromKubernetes(req.ClusterID, *existing)
+	if err := client.CoreV1().Namespaces().Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return Namespace{}, ErrNotFound
+		}
+		return Namespace{}, err
+	}
+	return deleted, nil
 }
 
 func (r KubernetesRepository) allowed(ctx context.Context, clusterID string) bool {

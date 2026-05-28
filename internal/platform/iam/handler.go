@@ -49,6 +49,17 @@ func CreateUserHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func DeleteUserHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteUser(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func ListGroupsHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		items, err := service.ListGroups(ctx.Request.Context(), subjectFromRequest(ctx))
@@ -76,6 +87,55 @@ func CreateGroupHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func DeleteGroupHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteGroup(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func ListMembershipsHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		items, err := service.ListMemberships(ctx.Request.Context(), subjectFromRequest(ctx))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, items, gin.H{"total": len(items)})
+	}
+}
+
+func CreateMembershipHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var req CreateMembershipRequest
+		if err := ctx.ShouldBindJSON(&req); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "平台用户组成员参数无效")
+			return
+		}
+		result, err := service.CreateMembership(ctx.Request.Context(), subjectFromRequest(ctx), req)
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func DeleteMembershipHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteMembership(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func ListServiceAccountsHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		items, err := service.ListServiceAccounts(ctx.Request.Context(), subjectFromRequest(ctx))
@@ -95,6 +155,17 @@ func CreateServiceAccountHandler(service Service) gin.HandlerFunc {
 			return
 		}
 		result, err := service.CreateServiceAccount(ctx.Request.Context(), subjectFromRequest(ctx), req)
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func DeleteServiceAccountHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteServiceAccount(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
 		if err != nil {
 			writeError(ctx, err)
 			return
@@ -141,6 +212,17 @@ func CreateRoleHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func DeleteRoleHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteRole(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func ListBindingsHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		items, err := service.ListBindings(ctx.Request.Context(), subjectFromRequest(ctx))
@@ -168,14 +250,40 @@ func CreateBindingHandler(service Service) gin.HandlerFunc {
 	}
 }
 
+func DeleteBindingHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		result, err := service.DeleteBinding(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Param("id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
+func EffectivePermissionsHandler(service Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		items, err := service.EffectivePermissions(ctx.Request.Context(), subjectFromRequest(ctx), ctx.Query("subject_type"), ctx.Query("subject_id"))
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, items, gin.H{"total": len(items)})
+	}
+}
+
 func writeError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, ErrPermissionDenied):
 		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权管理平台用户权限")
+	case errors.Is(err, ErrUnsupportedMembershipSubject):
+		response.Error(ctx, http.StatusBadRequest, "unsupported_membership_subject", "用户组成员只支持用户或服务账号，不支持用户组嵌套")
 	case errors.Is(err, ErrInvalidRequest):
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", "平台用户权限参数无效")
 	case errors.Is(err, ErrNotFound):
 		response.Error(ctx, http.StatusNotFound, "not_found", "平台用户权限资源不存在")
+	case errors.Is(err, ErrProtectedResource):
+		response.Error(ctx, http.StatusConflict, "protected_resource", "当前使用中的平台账号不能删除")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "platform_iam_failed", "平台用户权限操作失败")
 	}

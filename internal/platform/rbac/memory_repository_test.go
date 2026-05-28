@@ -16,12 +16,25 @@ func (r *MemoryRepository) SaveRole(role Role) error {
 	return nil
 }
 
+func (r *MemoryRepository) ListRoles() ([]Role, error) {
+	out := make([]Role, 0, len(r.roles))
+	for _, role := range r.roles {
+		out = append(out, role)
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) GetRole(id string) (Role, error) {
 	role, ok := r.roles[id]
 	if !ok {
 		return Role{}, errors.New("role not found")
 	}
 	return role, nil
+}
+
+func (r *MemoryRepository) DeleteRole(id string) error {
+	delete(r.roles, id)
+	return nil
 }
 
 func (r *MemoryRepository) SaveBinding(binding Binding) error {

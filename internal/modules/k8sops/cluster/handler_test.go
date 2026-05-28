@@ -86,6 +86,44 @@ func TestClusterCapabilityHandlerReturnsSnapshot(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"horizontalpodautoscalers"`)
 }
 
+func TestClusterProbeHandlerReturnsPolicyAndCapabilitySummary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := NewMemoryRepository([]Cluster{{ID: "test03", Name: "test03", Status: "active", ReadOnly: true}})
+	clusterService := NewService(repo)
+	capabilityService := NewCapabilityService(staticHandlerCapabilityProvider{snapshot: kubeclient.CapabilitySnapshot{
+		ServerVersion: "v1.30.2",
+		Resources: []kubeclient.APIResource{
+			{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler", Namespaced: true},
+		},
+	}})
+	router := gin.New()
+	router.POST("/api/v1/k8s/clusters/:id/probe", ProbeHandler(clusterService, capabilityService))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/clusters/test03/probe", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"cluster_id":"test03"`)
+	require.Contains(t, recorder.Body.String(), `"read_only":true`)
+	require.Contains(t, recorder.Body.String(), `"access_mode":"direct"`)
+	require.Contains(t, recorder.Body.String(), `"server_version":"v1.30.2"`)
+	require.Contains(t, recorder.Body.String(), `"resource_count":1`)
+}
+
+func TestClusterProbeHandlerReportsMissingCluster(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/v1/k8s/clusters/:id/probe", ProbeHandler(NewService(NewMemoryRepository(nil)), NewCapabilityService(staticHandlerCapabilityProvider{})))
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/clusters/missing/probe", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "not_found")
+}
+
 func TestClusterCapabilityHandlerReportsUnavailableProvider(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

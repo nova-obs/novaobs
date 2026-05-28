@@ -7,6 +7,9 @@ type Cluster struct {
 	Region      string `json:"region" bson:"region"`
 	Description string `json:"description" bson:"description"`
 	Status      string `json:"status" bson:"status"`
+	AccessMode  string `json:"access_mode" bson:"access_mode"`
+	ReadOnly    bool   `json:"read_only" bson:"read_only"`
+	ReadOnlySet bool   `json:"read_only_configured" bson:"read_only_configured"`
 }
 
 type UpsertRequest struct {
@@ -16,6 +19,8 @@ type UpsertRequest struct {
 	Region      string `json:"region"`
 	Description string `json:"description"`
 	Status      string `json:"status"`
+	AccessMode  string `json:"access_mode"`
+	ReadOnly    bool   `json:"read_only"`
 }
 
 type ListFilter struct {

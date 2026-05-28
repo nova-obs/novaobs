@@ -66,15 +66,59 @@ func TestKubernetesRepositoryRequiresNamespaceAndReadPermission(t *testing.T) {
 	require.ErrorIs(t, deniedErr, ErrPermissionDenied)
 }
 
-func TestKubernetesRepositoryDisablesWrites(t *testing.T) {
-	repo := NewKubernetesRepository(staticCertificateClientsetProvider{client: fake.NewSimpleClientset()}, allowCertificateReadAuthorizer{})
+func TestKubernetesRepositoryCreatesTLSSecret(t *testing.T) {
+	notAfter := time.Now().UTC().Add(60 * 24 * time.Hour)
+	certPEM := testCertificatePEM(t, "orders.example.internal", notAfter)
+	client := fake.NewSimpleClientset()
+	repo := NewKubernetesRepository(staticCertificateClientsetProvider{client: client}, allowCertificateReadAuthorizer{})
 
-	_, createErr := repo.Create(context.Background(), Certificate{})
-	_, deleteErr := repo.Delete(context.Background(), "uid-cert")
+	created, err := repo.Create(context.Background(), Certificate{
+		ClusterID:   "test03-02",
+		Namespace:   "ingress",
+		Name:        "orders-tls",
+		Certificate: string(certPEM),
+		PrivateKey:  "private-key",
+	})
 
-	require.ErrorIs(t, createErr, ErrWriteUnavailable)
-	require.ErrorIs(t, deleteErr, ErrWriteUnavailable)
-	require.True(t, repo.WritesUnavailable())
+	require.NoError(t, err)
+	require.Equal(t, "orders-tls", created.Name)
+	require.Equal(t, "orders.example.internal", created.CommonName)
+	require.Empty(t, created.PrivateKey)
+	stored, getErr := client.CoreV1().Secrets("ingress").Get(context.Background(), "orders-tls", metav1.GetOptions{})
+	require.NoError(t, getErr)
+	require.Equal(t, corev1.SecretTypeTLS, stored.Type)
+	require.Equal(t, certPEM, stored.Data[corev1.TLSCertKey])
+	require.Equal(t, []byte("private-key"), stored.Data[corev1.TLSPrivateKeyKey])
+}
+
+func TestKubernetesRepositoryDeletesTLSSecretByUID(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders-tls", Namespace: "ingress", UID: "uid-cert"},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{corev1.TLSCertKey: testCertificatePEM(t, "orders.example.internal", time.Now().UTC().Add(24*time.Hour))},
+	})
+	repo := NewKubernetesRepository(staticCertificateClientsetProvider{client: client}, allowCertificateReadAuthorizer{})
+
+	deleted, err := repo.Delete(context.Background(), DeleteRequest{ID: "uid-cert", ClusterID: "test03-02", Namespace: "ingress", Name: "orders-tls"})
+
+	require.NoError(t, err)
+	require.Equal(t, "orders-tls", deleted.Name)
+	_, getErr := client.CoreV1().Secrets("ingress").Get(context.Background(), "orders-tls", metav1.GetOptions{})
+	require.Error(t, getErr)
+}
+
+func TestKubernetesRepositoryDeleteRejectsUIDMismatch(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders-tls", Namespace: "ingress", UID: "uid-cert"},
+		Type:       corev1.SecretTypeTLS,
+	})
+	repo := NewKubernetesRepository(staticCertificateClientsetProvider{client: client}, allowCertificateReadAuthorizer{})
+
+	_, err := repo.Delete(context.Background(), DeleteRequest{ID: "other-uid", ClusterID: "test03-02", Namespace: "ingress", Name: "orders-tls"})
+
+	require.ErrorIs(t, err, ErrNotFound)
+	_, getErr := client.CoreV1().Secrets("ingress").Get(context.Background(), "orders-tls", metav1.GetOptions{})
+	require.NoError(t, getErr)
 }
 
 func testCertificatePEM(t *testing.T, commonName string, notAfter time.Time) []byte {

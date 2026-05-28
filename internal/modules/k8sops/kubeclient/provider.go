@@ -150,6 +150,25 @@ func (p Provider) Capabilities(ctx context.Context, clusterID string) (Capabilit
 	return DiscoverCapabilities(clusterID, bundle.Discovery)
 }
 
+func (p Provider) ValidateCredential(_ context.Context, clusterID string, kubeconfig []byte) (CapabilitySnapshot, error) {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return CapabilitySnapshot{}, ErrClusterRequired
+	}
+	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return CapabilitySnapshot{}, err
+	}
+	if config.Timeout == 0 {
+		config.Timeout = p.timeout
+	}
+	discoveryClient, err := p.discoveryFactory(rest.CopyConfig(config))
+	if err != nil {
+		return CapabilitySnapshot{}, err
+	}
+	return DiscoverCapabilities(clusterID, discoveryClient)
+}
+
 func DiscoverCapabilities(clusterID string, discoveryClient discovery.DiscoveryInterface) (CapabilitySnapshot, error) {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {

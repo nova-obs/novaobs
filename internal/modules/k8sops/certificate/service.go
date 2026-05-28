@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/platform/secret"
@@ -29,7 +30,7 @@ var (
 type Repository interface {
 	List(ctx context.Context, filter ListFilter) ([]Certificate, error)
 	Create(ctx context.Context, item Certificate) (Certificate, error)
-	Delete(ctx context.Context, id string) (Certificate, error)
+	Delete(ctx context.Context, req DeleteRequest) (Certificate, error)
 }
 
 type Authorizer interface {
@@ -53,6 +54,7 @@ type Service struct {
 	authorizer Authorizer
 	auditor    Auditor
 	secrets    SecretService
+	policy     cluster.ReadOnlyPolicy
 }
 
 func NewService(repo Repository, dependencies ...any) Service {
@@ -71,6 +73,10 @@ func NewService(repo Repository, dependencies ...any) Service {
 			if value != nil {
 				service.secrets = value
 			}
+		case cluster.ReadOnlyPolicy:
+			if value != nil {
+				service.policy = value
+			}
 		}
 	}
 	return service
@@ -87,6 +93,9 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 	}
 	if !s.allowed(subject, "create", req.ClusterID, req.Namespace) {
 		return Certificate{}, audit.Event{}, ErrPermissionDenied
+	}
+	if err := s.ensureWritable(ctx, req.ClusterID); err != nil {
+		return Certificate{}, audit.Event{}, err
 	}
 	if guard, ok := s.repo.(writeUnavailableRepository); ok && guard.WritesUnavailable() {
 		return Certificate{}, audit.Event{}, ErrWriteUnavailable
@@ -121,6 +130,8 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 		NotAfter:    notAfter,
 		Status:      certificateStatus(notAfter),
 		Source:      "novaobs",
+		Certificate: req.CertificatePEM,
+		PrivateKey:  req.PrivateKeyPEM,
 	}
 	created, err := s.repo.Create(ctx, item)
 	if err != nil {
@@ -137,25 +148,29 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 		"certificate_bytes": len(req.CertificatePEM),
 	})
 	if err != nil {
-		_, _ = s.repo.Delete(ctx, created.ID)
+		_, _ = s.repo.Delete(ctx, DeleteRequest{ID: created.ID, ClusterID: created.ClusterID, Namespace: created.Namespace, Name: created.Name})
 		return Certificate{}, audit.Event{}, err
 	}
 	return created, event, nil
 }
 
 func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req DeleteRequest) (audit.Event, error) {
-	req.ID = strings.TrimSpace(req.ID)
-	if req.ID == "" {
+	req = normalizeDeleteRequest(req)
+	if req.ID == "" && (req.ClusterID == "" || req.Namespace == "" || req.Name == "") {
 		return audit.Event{}, ErrInvalidRequest
 	}
-	existing, err := s.findByID(ctx, req.ID)
+	existing, err := s.findByDeleteRequest(ctx, req)
 	if err != nil {
 		return audit.Event{}, err
 	}
 	if !s.allowed(subject, "delete", existing.ClusterID, existing.Namespace) {
 		return audit.Event{}, ErrPermissionDenied
 	}
-	deleted, err := s.repo.Delete(ctx, req.ID)
+	if err := s.ensureWritable(ctx, existing.ClusterID); err != nil {
+		return audit.Event{}, err
+	}
+	deleteReq := DeleteRequest{ID: existing.ID, ClusterID: existing.ClusterID, Namespace: existing.Namespace, Name: existing.Name}
+	deleted, err := s.repo.Delete(ctx, deleteReq)
 	if err != nil {
 		return audit.Event{}, err
 	}
@@ -172,6 +187,20 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 		return audit.Event{}, err
 	}
 	return event, nil
+}
+
+func (s Service) ensureWritable(ctx context.Context, clusterID string) error {
+	if s.policy == nil {
+		return nil
+	}
+	readOnly, err := s.policy.IsReadOnly(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if readOnly {
+		return cluster.ErrClusterReadOnly
+	}
+	return nil
 }
 
 type MemoryRepository struct {
@@ -225,13 +254,14 @@ func (r *MemoryRepository) Create(_ context.Context, item Certificate) (Certific
 	return item, nil
 }
 
-func (r *MemoryRepository) Delete(_ context.Context, id string) (Certificate, error) {
+func (r *MemoryRepository) Delete(_ context.Context, req DeleteRequest) (Certificate, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	req = normalizeDeleteRequest(req)
 	next := r.items[:0]
 	deleted := Certificate{}
 	for _, item := range r.items {
-		if item.ID == id {
+		if deleteRequestMatches(item, req) {
 			deleted = item
 			continue
 		}
@@ -262,17 +292,41 @@ func paginate(items []Certificate, page int, pageSize int) []Certificate {
 	return items[start:end]
 }
 
-func (s Service) findByID(ctx context.Context, id string) (Certificate, error) {
-	items, err := s.repo.List(ctx, ListFilter{})
+func (s Service) findByDeleteRequest(ctx context.Context, req DeleteRequest) (Certificate, error) {
+	items, err := s.repo.List(ctx, ListFilter{ClusterID: req.ClusterID, Namespace: req.Namespace})
 	if err != nil {
 		return Certificate{}, err
 	}
 	for _, item := range items {
-		if item.ID == id {
+		if deleteRequestMatches(item, req) {
 			return item, nil
 		}
 	}
 	return Certificate{}, ErrNotFound
+}
+
+func normalizeDeleteRequest(req DeleteRequest) DeleteRequest {
+	req.ID = strings.TrimSpace(req.ID)
+	req.ClusterID = strings.TrimSpace(req.ClusterID)
+	req.Namespace = strings.TrimSpace(req.Namespace)
+	req.Name = strings.TrimSpace(req.Name)
+	return req
+}
+
+func deleteRequestMatches(item Certificate, req DeleteRequest) bool {
+	if req.ID != "" && item.ID != req.ID {
+		return false
+	}
+	if req.ClusterID != "" && item.ClusterID != req.ClusterID {
+		return false
+	}
+	if req.Namespace != "" && item.Namespace != req.Namespace {
+		return false
+	}
+	if req.Name != "" && item.Name != req.Name {
+		return false
+	}
+	return req.ID != "" || (req.ClusterID != "" && req.Namespace != "" && req.Name != "")
 }
 
 func (s Service) allowed(subject platformrbac.Subject, action string, clusterID string, namespace string) bool {

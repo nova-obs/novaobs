@@ -16,9 +16,11 @@ import (
 )
 
 var (
-	ErrPermissionDenied = errors.New("permission_denied")
-	ErrInvalidRequest   = errors.New("invalid_request")
-	ErrNotFound         = errors.New("not_found")
+	ErrPermissionDenied             = errors.New("permission_denied")
+	ErrInvalidRequest               = errors.New("invalid_request")
+	ErrNotFound                     = errors.New("not_found")
+	ErrProtectedResource            = errors.New("protected_resource")
+	ErrUnsupportedMembershipSubject = errors.New("unsupported_membership_subject")
 )
 
 type Authorizer interface {
@@ -122,6 +124,32 @@ func (s Service) CreateUser(ctx context.Context, actor platformrbac.Subject, req
 	return WriteResult[User]{Item: item, Status: "created"}, nil
 }
 
+func (s Service) DeleteUser(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[User], error) {
+	if !s.allowed(actor, "platform.user", "manage") {
+		return WriteResult[User]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[User]{}, ErrInvalidRequest
+	}
+	if actor.Type == SubjectTypeUser && actor.ID == id {
+		return WriteResult[User]{}, ErrProtectedResource
+	}
+	item, err := s.repo.GetUser(ctx, id)
+	if err != nil {
+		return WriteResult[User]{}, ErrNotFound
+	}
+	if err := s.deleteSubjectReferences(ctx, SubjectTypeUser, id); err != nil {
+		return WriteResult[User]{}, err
+	}
+	if err := s.repo.DeleteUser(ctx, id); err != nil {
+		return WriteResult[User]{}, err
+	}
+	item.PasswordHash = ""
+	item.PasswordSet = item.PasswordHash != ""
+	return WriteResult[User]{Item: item, Status: "deleted"}, nil
+}
+
 func (s Service) ListGroups(ctx context.Context, actor platformrbac.Subject) ([]Group, error) {
 	if !s.allowed(actor, "platform.group", "read") {
 		return nil, ErrPermissionDenied
@@ -159,6 +187,123 @@ func (s Service) CreateGroup(ctx context.Context, actor platformrbac.Subject, re
 	return WriteResult[Group]{Item: item, Status: "created"}, nil
 }
 
+func (s Service) DeleteGroup(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[Group], error) {
+	if !s.allowed(actor, "platform.group", "manage") {
+		return WriteResult[Group]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[Group]{}, ErrInvalidRequest
+	}
+	item, err := s.repo.GetGroup(ctx, id)
+	if err != nil {
+		return WriteResult[Group]{}, ErrNotFound
+	}
+	if err := s.deleteSubjectReferences(ctx, SubjectTypeGroup, id); err != nil {
+		return WriteResult[Group]{}, err
+	}
+	memberships, err := s.repo.ListMembershipsByGroup(ctx, id)
+	if err != nil {
+		return WriteResult[Group]{}, err
+	}
+	for _, membership := range memberships {
+		if err := s.repo.DeleteMembership(ctx, membership.ID); err != nil {
+			return WriteResult[Group]{}, err
+		}
+	}
+	if err := s.repo.DeleteGroup(ctx, id); err != nil {
+		return WriteResult[Group]{}, err
+	}
+	return WriteResult[Group]{Item: item, Status: "deleted"}, nil
+}
+
+func (s Service) ListMemberships(ctx context.Context, actor platformrbac.Subject) ([]MembershipView, error) {
+	if !s.allowed(actor, "platform.group", "read") {
+		return nil, ErrPermissionDenied
+	}
+	items, err := s.repo.ListMemberships(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views, err := s.membershipViews(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(views, func(i, j int) bool { return views[i].ID < views[j].ID })
+	return views, nil
+}
+
+func (s Service) CreateMembership(ctx context.Context, actor platformrbac.Subject, req CreateMembershipRequest) (WriteResult[MembershipView], error) {
+	if !s.allowed(actor, "platform.group", "manage") {
+		return WriteResult[MembershipView]{}, ErrPermissionDenied
+	}
+	groupID := strings.TrimSpace(req.GroupID)
+	subjectIDValue := strings.TrimSpace(req.SubjectID)
+	subjectType := normalizeSubjectType(req.SubjectType)
+	if groupID == "" || subjectIDValue == "" || subjectType == "" {
+		return WriteResult[MembershipView]{}, ErrInvalidRequest
+	}
+	if subjectType == SubjectTypeGroup {
+		return WriteResult[MembershipView]{}, ErrUnsupportedMembershipSubject
+	}
+	if _, err := s.repo.GetGroup(ctx, groupID); err != nil {
+		return WriteResult[MembershipView]{}, ErrNotFound
+	}
+	if !s.subjectExists(ctx, subjectType, subjectIDValue) {
+		return WriteResult[MembershipView]{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	item := Membership{
+		ID:          membershipID(groupID, subjectType, subjectIDValue),
+		GroupID:     groupID,
+		SubjectID:   subjectIDValue,
+		SubjectType: subjectType,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.repo.SaveMembership(ctx, item); err != nil {
+		return WriteResult[MembershipView]{}, err
+	}
+	views, err := s.membershipViews(ctx, []Membership{item})
+	if err != nil {
+		return WriteResult[MembershipView]{}, err
+	}
+	return WriteResult[MembershipView]{Item: views[0], Status: "created"}, nil
+}
+
+func (s Service) DeleteMembership(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[MembershipView], error) {
+	if !s.allowed(actor, "platform.group", "manage") {
+		return WriteResult[MembershipView]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[MembershipView]{}, ErrInvalidRequest
+	}
+	items, err := s.repo.ListMemberships(ctx)
+	if err != nil {
+		return WriteResult[MembershipView]{}, err
+	}
+	var target *Membership
+	for _, item := range items {
+		if item.ID == id {
+			copy := item
+			target = &copy
+			break
+		}
+	}
+	if target == nil {
+		return WriteResult[MembershipView]{}, ErrNotFound
+	}
+	views, err := s.membershipViews(ctx, []Membership{*target})
+	if err != nil {
+		return WriteResult[MembershipView]{}, err
+	}
+	if err := s.repo.DeleteMembership(ctx, id); err != nil {
+		return WriteResult[MembershipView]{}, err
+	}
+	return WriteResult[MembershipView]{Item: views[0], Status: "deleted"}, nil
+}
+
 func (s Service) ListServiceAccounts(ctx context.Context, actor platformrbac.Subject) ([]ServiceAccount, error) {
 	if !s.allowed(actor, "platform.service-account", "read") {
 		return nil, ErrPermissionDenied
@@ -183,6 +328,27 @@ func (s Service) CreateServiceAccount(ctx context.Context, actor platformrbac.Su
 		return WriteResult[ServiceAccount]{}, err
 	}
 	return WriteResult[ServiceAccount]{Item: item, Status: "created"}, nil
+}
+
+func (s Service) DeleteServiceAccount(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[ServiceAccount], error) {
+	if !s.allowed(actor, "platform.service-account", "manage") {
+		return WriteResult[ServiceAccount]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[ServiceAccount]{}, ErrInvalidRequest
+	}
+	item, err := s.repo.GetServiceAccount(ctx, id)
+	if err != nil {
+		return WriteResult[ServiceAccount]{}, ErrNotFound
+	}
+	if err := s.deleteSubjectReferences(ctx, SubjectTypeServiceAccount, id); err != nil {
+		return WriteResult[ServiceAccount]{}, err
+	}
+	if err := s.repo.DeleteServiceAccount(ctx, id); err != nil {
+		return WriteResult[ServiceAccount]{}, err
+	}
+	return WriteResult[ServiceAccount]{Item: item, Status: "deleted"}, nil
 }
 
 func (s Service) Subjects(ctx context.Context, actor platformrbac.Subject) ([]SubjectView, error) {
@@ -344,6 +510,36 @@ func (s Service) CreateRole(ctx context.Context, actor platformrbac.Subject, req
 	return WriteResult[platformrbac.Role]{Item: role, Status: "created"}, nil
 }
 
+func (s Service) DeleteRole(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[platformrbac.Role], error) {
+	if !s.allowed(actor, "platform.role", "manage") {
+		return WriteResult[platformrbac.Role]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[platformrbac.Role]{}, ErrInvalidRequest
+	}
+	role, err := s.rbacRepo.GetRole(id)
+	if err != nil {
+		return WriteResult[platformrbac.Role]{}, ErrNotFound
+	}
+	bindings, err := s.rbacRepo.ListBindings(ctx)
+	if err != nil {
+		return WriteResult[platformrbac.Role]{}, err
+	}
+	for _, binding := range bindings {
+		if binding.RoleID != id {
+			continue
+		}
+		if err := s.rbacRepo.DeleteBinding(binding.ID); err != nil {
+			return WriteResult[platformrbac.Role]{}, err
+		}
+	}
+	if err := s.rbacRepo.DeleteRole(id); err != nil {
+		return WriteResult[platformrbac.Role]{}, err
+	}
+	return WriteResult[platformrbac.Role]{Item: role, Status: "deleted"}, nil
+}
+
 func (s Service) ListBindings(ctx context.Context, actor platformrbac.Subject) ([]BindingView, error) {
 	if !s.allowed(actor, "platform.binding", "read") {
 		return nil, ErrPermissionDenied
@@ -370,6 +566,76 @@ func (s Service) ListBindings(ctx context.Context, actor platformrbac.Subject) (
 	return out, nil
 }
 
+func (s Service) EffectivePermissions(ctx context.Context, actor platformrbac.Subject, subjectType string, subjectIDValue string) ([]EffectivePermissionView, error) {
+	if !s.allowed(actor, "platform.binding", "read") {
+		return nil, ErrPermissionDenied
+	}
+	subjectType = normalizeSubjectType(subjectType)
+	subjectIDValue = strings.TrimSpace(subjectIDValue)
+	if subjectType == "" || subjectIDValue == "" {
+		return nil, ErrInvalidRequest
+	}
+	if !s.subjectExists(ctx, subjectType, subjectIDValue) {
+		return nil, ErrNotFound
+	}
+	subjects := []platformrbac.Subject{{ID: subjectIDValue, Type: subjectType}}
+	if subjectType != SubjectTypeGroup {
+		memberships, err := s.repo.ListMembershipsBySubject(ctx, subjectIDValue, subjectType)
+		if err != nil {
+			return nil, err
+		}
+		for _, membership := range memberships {
+			if strings.TrimSpace(membership.GroupID) == "" {
+				continue
+			}
+			subjects = append(subjects, platformrbac.Subject{ID: membership.GroupID, Type: SubjectTypeGroup})
+		}
+	}
+	bindings, err := s.rbacRepo.ListBindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EffectivePermissionView, 0)
+	for _, binding := range bindings {
+		via := ""
+		for _, subject := range subjects {
+			if binding.SubjectID == subject.ID && binding.SubjectType == subject.Type {
+				if subject.ID == subjectIDValue && subject.Type == subjectType {
+					via = "direct"
+				} else {
+					via = "group"
+				}
+				break
+			}
+		}
+		if via == "" {
+			continue
+		}
+		role, err := s.rbacRepo.GetRole(binding.RoleID)
+		if err != nil {
+			continue
+		}
+		out = append(out, EffectivePermissionView{
+			BindingID:          binding.ID,
+			RoleID:             binding.RoleID,
+			RoleName:           role.Name,
+			GrantedToSubjectID: binding.SubjectID,
+			GrantedToType:      binding.SubjectType,
+			GrantedVia:         via,
+			Permissions:        role.Permissions,
+			Scope:              binding.Scope,
+			CreatedAt:          binding.CreatedAt,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].GrantedVia == out[j].GrantedVia {
+			return out[i].BindingID < out[j].BindingID
+		}
+		return out[i].GrantedVia < out[j].GrantedVia
+	})
+	return out, nil
+}
+
 func (s Service) CreateBinding(ctx context.Context, actor platformrbac.Subject, req CreateBindingRequest) (WriteResult[BindingView], error) {
 	if !s.allowed(actor, "platform.binding", "manage") {
 		return WriteResult[BindingView]{}, ErrPermissionDenied
@@ -379,6 +645,9 @@ func (s Service) CreateBinding(ctx context.Context, actor platformrbac.Subject, 
 	roleID := strings.TrimSpace(req.RoleID)
 	if subjectIDValue == "" || subjectType == "" || roleID == "" {
 		return WriteResult[BindingView]{}, ErrInvalidRequest
+	}
+	if !s.subjectExists(ctx, subjectType, subjectIDValue) {
+		return WriteResult[BindingView]{}, ErrNotFound
 	}
 	role, err := s.rbacRepo.GetRole(roleID)
 	if err != nil {
@@ -410,6 +679,82 @@ func (s Service) CreateBinding(ctx context.Context, actor platformrbac.Subject, 
 	return WriteResult[BindingView]{Item: view, Status: "created"}, nil
 }
 
+func (s Service) DeleteBinding(ctx context.Context, actor platformrbac.Subject, id string) (WriteResult[BindingView], error) {
+	if !s.allowed(actor, "platform.binding", "manage") {
+		return WriteResult[BindingView]{}, ErrPermissionDenied
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WriteResult[BindingView]{}, ErrInvalidRequest
+	}
+	bindings, err := s.rbacRepo.ListBindings(ctx)
+	if err != nil {
+		return WriteResult[BindingView]{}, err
+	}
+	var target *platformrbac.Binding
+	for _, binding := range bindings {
+		if binding.ID == id {
+			copied := binding
+			target = &copied
+			break
+		}
+	}
+	if target == nil {
+		return WriteResult[BindingView]{}, ErrNotFound
+	}
+	view, err := s.bindingView(*target)
+	if err != nil {
+		return WriteResult[BindingView]{}, err
+	}
+	if err := s.rbacRepo.DeleteBinding(id); err != nil {
+		return WriteResult[BindingView]{}, err
+	}
+	return WriteResult[BindingView]{Item: view, Status: "deleted"}, nil
+}
+
+func (s Service) deleteSubjectReferences(ctx context.Context, subjectType string, subjectIDValue string) error {
+	bindings, err := s.rbacRepo.ListBindings(ctx)
+	if err != nil {
+		return err
+	}
+	bindingIDs := []string{}
+	for _, binding := range bindings {
+		if binding.SubjectID != subjectIDValue || binding.SubjectType != subjectType {
+			continue
+		}
+		bindingIDs = append(bindingIDs, binding.ID)
+	}
+	memberships, err := s.repo.ListMembershipsBySubject(ctx, subjectIDValue, subjectType)
+	if err != nil {
+		return err
+	}
+	for _, membership := range memberships {
+		if err := s.repo.DeleteMembership(ctx, membership.ID); err != nil {
+			return err
+		}
+	}
+	for _, bindingID := range bindingIDs {
+		if err := s.rbacRepo.DeleteBinding(bindingID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Service) bindingView(binding platformrbac.Binding) (BindingView, error) {
+	role, _ := s.rbacRepo.GetRole(binding.RoleID)
+	return BindingView{
+		ID:          binding.ID,
+		SubjectID:   binding.SubjectID,
+		SubjectType: binding.SubjectType,
+		RoleID:      binding.RoleID,
+		RoleName:    role.Name,
+		Scope:       binding.Scope,
+		CreatedAt:   binding.CreatedAt,
+		UpdatedAt:   binding.UpdatedAt,
+	}, nil
+}
+
 func (s Service) allowed(actor platformrbac.Subject, resource string, action string) bool {
 	if actor.ID == "" || actor.Type == "" {
 		return false
@@ -435,6 +780,51 @@ func (s Service) allowed(actor platformrbac.Subject, resource string, action str
 		Action:   action,
 		Scope:    platformrbac.Scope{Global: true},
 	}).Allowed
+}
+
+func (s Service) subjectExists(ctx context.Context, subjectType string, id string) bool {
+	switch subjectType {
+	case SubjectTypeUser:
+		_, err := s.repo.GetUser(ctx, id)
+		return err == nil
+	case SubjectTypeGroup:
+		_, err := s.repo.GetGroup(ctx, id)
+		return err == nil
+	case SubjectTypeServiceAccount:
+		_, err := s.repo.GetServiceAccount(ctx, id)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+func (s Service) membershipViews(ctx context.Context, items []Membership) ([]MembershipView, error) {
+	out := make([]MembershipView, 0, len(items))
+	for _, item := range items {
+		view := MembershipView{
+			ID:          item.ID,
+			GroupID:     item.GroupID,
+			SubjectID:   item.SubjectID,
+			SubjectType: item.SubjectType,
+			CreatedAt:   item.CreatedAt,
+			UpdatedAt:   item.UpdatedAt,
+		}
+		if group, err := s.repo.GetGroup(ctx, item.GroupID); err == nil {
+			view.GroupName = firstNonEmpty(group.DisplayName, group.Name, group.ID)
+		}
+		switch item.SubjectType {
+		case SubjectTypeUser:
+			if user, err := s.repo.GetUser(ctx, item.SubjectID); err == nil {
+				view.SubjectDisplayName = firstNonEmpty(user.DisplayName, user.Username, user.ID)
+			}
+		case SubjectTypeServiceAccount:
+			if serviceAccount, err := s.repo.GetServiceAccount(ctx, item.SubjectID); err == nil {
+				view.SubjectDisplayName = firstNonEmpty(serviceAccount.DisplayName, serviceAccount.Name, serviceAccount.ID)
+			}
+		}
+		out = append(out, view)
+	}
+	return out, nil
 }
 
 func normalizeUser(req CreateUserRequest) User {
@@ -524,6 +914,12 @@ func bindingID(subjectType string, subjectIDValue string, roleID string, scope p
 	raw := fmt.Sprintf("%s|%s|%s|%t|%s|%s|%s|%s", subjectType, subjectIDValue, roleID, scope.Global, scope.ClusterID, scope.Namespace, scope.Environment, scope.ServiceID)
 	sum := sha256.Sum256([]byte(raw))
 	return "binding-platform-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func membershipID(groupID string, subjectType string, subjectIDValue string) string {
+	raw := fmt.Sprintf("%s|%s|%s", strings.TrimSpace(groupID), normalizeSubjectType(subjectType), strings.TrimSpace(subjectIDValue))
+	sum := sha256.Sum256([]byte(raw))
+	return "membership-platform-" + hex.EncodeToString(sum[:])[:16]
 }
 
 func roleID(name string, permissions []platformrbac.Permission) string {

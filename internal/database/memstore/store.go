@@ -592,6 +592,13 @@ func (st *rbacRoleStore) FindByID(ctx context.Context, id string, result interfa
 	return copyValue(v, result)
 }
 
+func (st *rbacRoleStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	delete(st.s.rrs, id)
+	return nil
+}
+
 type rbacBindingStore struct{ s *Store }
 
 func (st *rbacBindingStore) Upsert(ctx context.Context, id string, v interface{}) error {

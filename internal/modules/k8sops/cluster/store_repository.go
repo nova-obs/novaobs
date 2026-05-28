@@ -23,9 +23,7 @@ func (r *StoreRepository) List(ctx context.Context, filter ListFilter) ([]Cluste
 }
 
 func (r *StoreRepository) Upsert(ctx context.Context, item Cluster) (Cluster, error) {
-	if item.Status == "" {
-		item.Status = "active"
-	}
+	item = normalizeCluster(item)
 	if err := r.store.Upsert(ctx, item.ID, item); err != nil {
 		return Cluster{}, err
 	}

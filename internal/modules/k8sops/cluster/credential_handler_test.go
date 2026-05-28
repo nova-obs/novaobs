@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,18 +30,36 @@ func TestClusterCredentialHandlersCreateRotateAndListMetadata(t *testing.T) {
 	rotateRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rotateRecorder, rotateRequest)
 
+	var createdBody struct {
+		Data struct {
+			Item CredentialMetadata `json:"item"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &createdBody))
+
+	rollbackRecorder := httptest.NewRecorder()
+	rollbackRequest := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/cluster-credentials/rollback", strings.NewReader(`{"cluster_id":"prod","secret_id":"`+createdBody.Data.Item.SecretID+`"}`))
+	rollbackRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rollbackRecorder, rollbackRequest)
+
 	listRecorder := httptest.NewRecorder()
 	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/k8s/cluster-credentials?cluster_id=prod", nil)
 	router.ServeHTTP(listRecorder, listRequest)
 
 	require.Equal(t, http.StatusCreated, createRecorder.Code)
 	require.Equal(t, http.StatusOK, rotateRecorder.Code)
+	require.Equal(t, http.StatusOK, rollbackRecorder.Code)
 	require.Equal(t, http.StatusOK, listRecorder.Code)
 	require.Contains(t, createRecorder.Body.String(), `"audit_id"`)
 	require.Contains(t, rotateRecorder.Body.String(), `"audit_id"`)
+	require.Contains(t, rollbackRecorder.Body.String(), `"audit_id"`)
+	require.Contains(t, rollbackRecorder.Body.String(), `"probe"`)
 	require.Contains(t, listRecorder.Body.String(), `"fingerprint"`)
+	require.Contains(t, listRecorder.Body.String(), `"active"`)
+	require.Contains(t, listRecorder.Body.String(), `"superseded"`)
 	require.NotContains(t, createRecorder.Body.String(), "apiVersion")
 	require.NotContains(t, rotateRecorder.Body.String(), "apiVersion")
+	require.NotContains(t, rollbackRecorder.Body.String(), "apiVersion")
 	require.NotContains(t, listRecorder.Body.String(), "apiVersion")
 }
 
@@ -60,7 +79,7 @@ func newCredentialRouter(t *testing.T, rbacRepo testRBACRepo, subject platformrb
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	secretSvc := secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
-	service := NewCredentialService(secretSvc, platformrbac.NewService(rbacRepo), audit.NewService(audit.NewMemoryStore()))
+	service := NewCredentialService(secretSvc, platformrbac.NewService(rbacRepo), audit.NewService(audit.NewMemoryStore()), &credentialValidationStub{serverVersion: "v1.30.2", resourceCount: 2})
 	router := gin.New()
 	if subject.ID != "" {
 		router.Use(func(ctx *gin.Context) {
@@ -72,5 +91,6 @@ func newCredentialRouter(t *testing.T, rbacRepo testRBACRepo, subject platformrb
 	api.GET("/k8s/cluster-credentials", ListCredentialHandler(service))
 	api.POST("/k8s/cluster-credentials", CreateCredentialHandler(service))
 	api.POST("/k8s/cluster-credentials/rotate", RotateCredentialHandler(service))
+	api.POST("/k8s/cluster-credentials/rollback", RollbackCredentialHandler(service))
 	return router
 }

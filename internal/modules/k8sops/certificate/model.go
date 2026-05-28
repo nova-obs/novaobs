@@ -13,6 +13,7 @@ type Certificate struct {
 	NotAfter    time.Time `json:"not_after"`
 	Status      string    `json:"status"`
 	Source      string    `json:"source"`
+	Certificate string    `json:"-"`
 	PrivateKey  string    `json:"-"`
 }
 
@@ -37,7 +38,10 @@ type CreateRequest struct {
 }
 
 type DeleteRequest struct {
-	ID string
+	ID        string
+	ClusterID string
+	Namespace string
+	Name      string
 }
 
 func certificateJSONTags() []string {

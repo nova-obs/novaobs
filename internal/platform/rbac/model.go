@@ -9,11 +9,13 @@ type Subject struct {
 }
 
 type Scope struct {
-	Global      bool   `json:"global" bson:"global"`
-	ClusterID   string `json:"cluster_id,omitempty" bson:"cluster_id,omitempty"`
-	Namespace   string `json:"namespace,omitempty" bson:"namespace,omitempty"`
-	Environment string `json:"environment,omitempty" bson:"environment,omitempty"`
-	ServiceID   string `json:"service_id,omitempty" bson:"service_id,omitempty"`
+	Global        bool     `json:"global" bson:"global"`
+	ClusterID     string   `json:"cluster_id,omitempty" bson:"cluster_id,omitempty"`
+	Namespace     string   `json:"namespace,omitempty" bson:"namespace,omitempty"`
+	Namespaces    []string `json:"namespaces,omitempty" bson:"namespaces,omitempty"`
+	AllNamespaces bool     `json:"all_namespaces,omitempty" bson:"all_namespaces,omitempty"`
+	Environment   string   `json:"environment,omitempty" bson:"environment,omitempty"`
+	ServiceID     string   `json:"service_id,omitempty" bson:"service_id,omitempty"`
 }
 
 type Permission struct {

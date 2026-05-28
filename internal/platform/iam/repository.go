@@ -19,6 +19,7 @@ type Repository interface {
 	SaveMembership(ctx context.Context, membership Membership) error
 	ListMemberships(ctx context.Context) ([]Membership, error)
 	ListMembershipsByGroup(ctx context.Context, groupID string) ([]Membership, error)
+	ListMembershipsBySubject(ctx context.Context, subjectID string, subjectType string) ([]Membership, error)
 	DeleteMembership(ctx context.Context, id string) error
 	SaveServiceAccount(ctx context.Context, serviceAccount ServiceAccount) error
 	ListServiceAccounts(ctx context.Context) ([]ServiceAccount, error)
@@ -30,6 +31,7 @@ type RBACRepository interface {
 	SaveRole(role platformrbac.Role) error
 	GetRole(id string) (platformrbac.Role, error)
 	ListRoles(ctx context.Context) ([]platformrbac.Role, error)
+	DeleteRole(id string) error
 	SaveBinding(binding platformrbac.Binding) error
 	ListBindings(ctx context.Context) ([]platformrbac.Binding, error)
 	DeleteBinding(id string) error
@@ -102,6 +104,12 @@ func (r StoreRepository) ListMembershipsByGroup(ctx context.Context, groupID str
 	return memberships, err
 }
 
+func (r StoreRepository) ListMembershipsBySubject(ctx context.Context, subjectID string, subjectType string) ([]Membership, error) {
+	var memberships []Membership
+	err := r.memberships.FindBySubject(ctx, subjectID, subjectType, &memberships)
+	return memberships, err
+}
+
 func (r StoreRepository) DeleteMembership(ctx context.Context, id string) error {
 	return r.memberships.Delete(ctx, id)
 }
@@ -149,6 +157,10 @@ func (r StoreRBACRepository) ListRoles(ctx context.Context) ([]platformrbac.Role
 	var roles []platformrbac.Role
 	err := r.roles.FindAll(ctx, &roles)
 	return roles, err
+}
+
+func (r StoreRBACRepository) DeleteRole(id string) error {
+	return r.roles.Delete(context.Background(), id)
 }
 
 func (r StoreRBACRepository) SaveBinding(binding platformrbac.Binding) error {

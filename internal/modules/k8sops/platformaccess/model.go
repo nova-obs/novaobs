@@ -15,6 +15,16 @@ type PermissionOption struct {
 	ScopeMode   string `json:"scope_mode"`
 }
 
+type PermissionProfile struct {
+	ID                     string   `json:"id"`
+	Label                  string   `json:"label"`
+	Description            string   `json:"description"`
+	Risk                   string   `json:"risk"`
+	ScopeMode              string   `json:"scope_mode"`
+	RecommendedSubjectType string   `json:"recommended_subject_type"`
+	PermissionIDs          []string `json:"permission_ids"`
+}
+
 type Binding struct {
 	ID            string                    `json:"id"`
 	SubjectID     string                    `json:"subject_id"`
@@ -52,14 +62,18 @@ type CreateBindingRequest struct {
 	SubjectType   string   `json:"subject_type"`
 	ClusterID     string   `json:"cluster_id"`
 	Namespace     string   `json:"namespace"`
+	Namespaces    []string `json:"namespaces"`
+	AllNamespaces bool     `json:"all_namespaces"`
 	Global        bool     `json:"global"`
+	RiskAccepted  bool     `json:"risk_accepted"`
 	PermissionIDs []string `json:"permission_ids"`
 }
 
 type WriteResult struct {
-	Item    *Binding `json:"item,omitempty"`
-	Status  string   `json:"status"`
-	AuditID string   `json:"audit_id"`
+	Item    *Binding  `json:"item,omitempty"`
+	Items   []Binding `json:"items,omitempty"`
+	Status  string    `json:"status"`
+	AuditID string    `json:"audit_id"`
 }
 
 type SubjectWriteResult struct {

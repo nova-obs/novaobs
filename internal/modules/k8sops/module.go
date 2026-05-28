@@ -46,7 +46,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	clusterCapabilityProvider := cluster.CapabilityProvider(nil)
 	namespaceRepo := namespace.Repository(namespace.NewMemoryRepository(nil))
 	dashboardReader := dashboard.Reader(dashboard.NewStaticReader())
-	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor)
+	clusterCredentialDependencies := []any{}
 	serviceAccountRepo := serviceaccount.Repository(serviceaccount.NewMemoryRepository(nil))
 	rbacRepo := k8srbac.Repository(k8srbac.NewMemoryRepository(nil, nil))
 	certificateRepo := certificate.Repository(certificate.NewMemoryRepository(nil))
@@ -54,6 +54,7 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 	platformAccessRepo := platformaccess.Repository(platformaccess.NewMemoryRepository())
 	platformSubjectRepo := platformaccess.SubjectRepository(platformaccess.NewMemorySubjectRepository())
 	terminalDependencies := []any{authorizer, auditor}
+	kubeconfigDependencies := []any{}
 	deploymentReader := deployment.Reader(deployment.NewMemoryReader(nil))
 	deploymentInventoryRepo := deployment.InventoryRepository(deployment.NewMemoryInventoryRepository(nil))
 	deploymentDependencies := []any{authorizer, auditor, deploymentInventoryRepo}
@@ -97,9 +98,13 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 				serviceAccountRepo = serviceaccount.NewKubernetesRepository(value, authorizer)
 				rbacRepo = k8srbac.NewKubernetesRepository(value, authorizer)
 				certificateRepo = certificate.NewKubernetesRepository(value, authorizer)
+				kubeconfigDependencies = append(kubeconfigDependencies, kubeconfig.NewKubernetesTokenRequester(value))
 				if provider, ok := value.(cluster.CapabilityProvider); ok {
 					clusterCapabilityProvider = provider
 					deploymentDependencies = append(deploymentDependencies, provider)
+				}
+				if validator, ok := value.(cluster.CredentialValidator); ok {
+					clusterCredentialDependencies = append(clusterCredentialDependencies, validator)
 				}
 				if provider, ok := value.(kubeclient.BundleProvider); ok {
 					deploymentDependencies = append(deploymentDependencies, kubeclient.NewProviderBackedResourceOperationEngine(provider))
@@ -113,18 +118,21 @@ func NewModuleWithSecurity(authorizer serviceaccount.Authorizer, auditor service
 			terminalDependencies = append(terminalDependencies, value)
 		}
 	}
+	clusterService := cluster.NewService(clusterRepo)
+	clusterCredentialService := cluster.NewCredentialService(secrets, authorizer, auditor, clusterCredentialDependencies...)
+	deploymentDependencies = append(deploymentDependencies, clusterService)
 	return Module{
 		Dashboard:      dashboard.NewService(dashboardReader),
-		Cluster:        cluster.NewService(clusterRepo),
+		Cluster:        clusterService,
 		ClusterCaps:    cluster.NewCapabilityService(clusterCapabilityProvider),
 		ClusterCred:    clusterCredentialService,
-		Namespace:      namespace.NewService(namespaceRepo),
+		Namespace:      namespace.NewService(namespaceRepo, authorizer, auditor, clusterService),
 		Resource:       resource.NewService(resourceReader),
 		Deploy:         deployment.NewService(deploymentReader, deploymentDependencies...),
-		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets),
-		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor),
-		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor),
-		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor),
+		Cert:           certificate.NewService(certificateRepo, authorizer, auditor, secrets, clusterService),
+		ServiceAccount: serviceaccount.NewService(serviceAccountRepo, authorizer, auditor, clusterService),
+		RBAC:           k8srbac.NewService(rbacRepo, authorizer, auditor, clusterService),
+		Kubeconfig:     kubeconfig.NewService(secrets, authorizer, auditor, kubeconfigDependencies...),
 		Template:       k8stemplate.NewService(k8stemplate.NewMemoryRepository(nil), authorizer, auditor),
 		Terminal:       terminal.NewService(terminalDependencies...),
 		PlatformAccess: platformaccess.NewService(platformAccessRepo, authorizer, auditor, platformSubjectRepo),

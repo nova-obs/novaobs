@@ -20,3 +20,15 @@ type ListFilter struct {
 	Sort      string
 	Order     string
 }
+
+type CreateRequest struct {
+	ClusterID string `json:"cluster_id"`
+	Name      string `json:"name"`
+	Owner     string `json:"owner,omitempty"`
+}
+
+type DeleteRequest struct {
+	ClusterID string
+	Name      string
+	UID       string
+}

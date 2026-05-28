@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -48,6 +49,27 @@ func TestCreateCertificateStoresPrivateKeyAsSecretAndSanitizesAudit(t *testing.T
 	require.Equal(t, "k8s.certificate", events[0].ResourceType)
 	require.Equal(t, "create", events[0].Action)
 	require.Equal(t, "[redacted]", events[0].RequestSummary["private_key_pem"])
+}
+
+func TestCreateCertificateBlocksReadOnlyClusterBeforeSecretWrite(t *testing.T) {
+	auditStore := audit.NewMemoryStore()
+	secretSvc := secret.NewService(secret.NewMemoryRepository(), secret.NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	service := NewService(NewMemoryRepository(nil), platformrbac.NewService(certificateWriterRepo()), audit.NewService(auditStore), secretSvc, staticClusterPolicy{readOnly: true})
+
+	_, _, err := service.Create(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, CreateRequest{
+		ClusterID:      "prod",
+		Namespace:      "ingress",
+		Name:           "wildcard-prod",
+		CommonName:     "*.prod.example.com",
+		CertificatePEM: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+		PrivateKeyPEM:  "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+		NotAfter:       "2030-01-01T00:00:00Z",
+	})
+
+	require.ErrorIs(t, err, cluster.ErrClusterReadOnly)
+	events, listErr := auditStore.List(context.Background())
+	require.NoError(t, listErr)
+	require.Empty(t, events)
 }
 
 func TestDeleteCertificateRecordsAudit(t *testing.T) {
@@ -117,6 +139,14 @@ func certificateWriterRepo() testRBACRepo {
 type testRBACRepo struct {
 	roles    map[string]platformrbac.Role
 	bindings []platformrbac.Binding
+}
+
+type staticClusterPolicy struct {
+	readOnly bool
+}
+
+func (p staticClusterPolicy) IsReadOnly(context.Context, string) (bool, error) {
+	return p.readOnly, nil
 }
 
 func (r testRBACRepo) SaveRole(role platformrbac.Role) error { return nil }

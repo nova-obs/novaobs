@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -104,6 +105,60 @@ func TestCreateRoleDoesNotOverwriteExistingRole(t *testing.T) {
 	require.Equal(t, "uid-existing", items[0].UID)
 }
 
+func TestCreateRoleDoesNotOverwriteExistingKubernetesRoleWithUIDID(t *testing.T) {
+	repo := NewMemoryRepository([]RoleResource{
+		{ID: "uid-existing", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-existing", Rules: []Rule{{Resources: []string{"secrets"}, Verbs: []string{"get"}}}},
+	}, nil)
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	_, _, err := service.CreateRole(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RoleRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "Role",
+		Name:      "orders-reader",
+		Rules:     []Rule{{Resources: []string{"pods"}, Verbs: []string{"list"}}},
+	})
+
+	require.ErrorIs(t, err, ErrAlreadyExists)
+}
+
+func TestUpdateRoleFindsExistingKubernetesRoleWithUIDID(t *testing.T) {
+	repo := NewMemoryRepository([]RoleResource{
+		{ID: "uid-existing", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-existing", Rules: []Rule{{Resources: []string{"secrets"}, Verbs: []string{"get"}}}},
+	}, nil)
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), audit.NewService(audit.NewMemoryStore()))
+
+	updated, _, err := service.UpdateRole(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RoleRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "Role",
+		Name:      "orders-reader",
+		UID:       "uid-existing",
+		Rules:     []Rule{{Resources: []string{"pods"}, Verbs: []string{"list"}}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"pods"}, updated.Rules[0].Resources)
+}
+
+func TestCreateRoleBlocksReadOnlyCluster(t *testing.T) {
+	repo := NewMemoryRepository(nil, nil)
+	service := NewService(repo, platformrbac.NewService(rbacWriterRepo()), audit.NewService(audit.NewMemoryStore()), staticClusterPolicy{readOnly: true})
+
+	_, _, err := service.CreateRole(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RoleRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Kind:      "Role",
+		Name:      "orders-reader",
+		Rules:     []Rule{{Resources: []string{"pods"}, Verbs: []string{"list"}}},
+	})
+
+	require.ErrorIs(t, err, cluster.ErrClusterReadOnly)
+	items, listErr := repo.ListRoles(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Empty(t, items)
+}
+
 func TestUpdateRoleRestoresExistingRoleWhenAuditFails(t *testing.T) {
 	repo := NewMemoryRepository([]RoleResource{
 		{ID: "role-prod-orders-orders-reader", ClusterID: "prod", Namespace: "orders", Kind: "Role", Name: "orders-reader", UID: "uid-existing", Rules: []Rule{{Resources: []string{"secrets"}, Verbs: []string{"get"}}}},
@@ -175,6 +230,14 @@ type failingAuditor struct{}
 
 func (failingAuditor) Record(ctx context.Context, event audit.Event) (audit.Event, error) {
 	return audit.Event{}, errors.New("audit failed")
+}
+
+type staticClusterPolicy struct {
+	readOnly bool
+}
+
+func (p staticClusterPolicy) IsReadOnly(context.Context, string) (bool, error) {
+	return p.readOnly, nil
 }
 
 func rbacWriterRepo() testPlatformRBACRepo {

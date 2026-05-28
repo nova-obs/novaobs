@@ -55,6 +55,69 @@ func TestKubernetesRepositoryRequiresNamespaceAndReadPermission(t *testing.T) {
 	require.ErrorIs(t, deniedErr, ErrPermissionDenied)
 }
 
+func TestKubernetesRepositoryCreatesServiceAccountInCluster(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	repo := NewKubernetesRepository(staticServiceAccountClientsetProvider{client: client}, allowServiceAccountReadAuthorizer{})
+
+	created, err := repo.Create(context.Background(), ServiceAccount{
+		ClusterID: "test03-02",
+		Namespace: "logplatform",
+		Name:      "log-reader",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "test03-02", created.ClusterID)
+	require.Equal(t, "logplatform", created.Namespace)
+	require.Equal(t, "log-reader", created.Name)
+	require.Equal(t, "Kubernetes API", created.Source)
+	actual, err := client.CoreV1().ServiceAccounts("logplatform").Get(context.Background(), "log-reader", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "log-reader", actual.Name)
+}
+
+func TestKubernetesRepositoryDeletesServiceAccountByUID(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "log-reader",
+			Namespace: "logplatform",
+			UID:       "uid-log-reader",
+		},
+	})
+	repo := NewKubernetesRepository(staticServiceAccountClientsetProvider{client: client}, allowServiceAccountReadAuthorizer{})
+
+	deleted, err := repo.Delete(context.Background(), DeleteRequest{
+		ClusterID: "test03-02",
+		Namespace: "logplatform",
+		Name:      "log-reader",
+		UID:       "uid-log-reader",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "uid-log-reader", deleted.UID)
+	_, err = client.CoreV1().ServiceAccounts("logplatform").Get(context.Background(), "log-reader", metav1.GetOptions{})
+	require.Error(t, err)
+}
+
+func TestKubernetesRepositoryDeleteRejectsUIDMismatch(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "log-reader",
+			Namespace: "logplatform",
+			UID:       "uid-log-reader",
+		},
+	})
+	repo := NewKubernetesRepository(staticServiceAccountClientsetProvider{client: client}, allowServiceAccountReadAuthorizer{})
+
+	_, err := repo.Delete(context.Background(), DeleteRequest{
+		ClusterID: "test03-02",
+		Namespace: "logplatform",
+		Name:      "log-reader",
+		UID:       "uid-other",
+	})
+
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
 type staticServiceAccountClientsetProvider struct {
 	client kubernetes.Interface
 }

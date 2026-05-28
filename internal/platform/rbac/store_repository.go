@@ -19,10 +19,20 @@ func (r StoreRepository) SaveRole(role Role) error {
 	return r.roles.Upsert(context.Background(), role.ID, role)
 }
 
+func (r StoreRepository) ListRoles() ([]Role, error) {
+	var roles []Role
+	err := r.roles.FindAll(context.Background(), &roles)
+	return roles, err
+}
+
 func (r StoreRepository) GetRole(id string) (Role, error) {
 	var role Role
 	err := r.roles.FindByID(context.Background(), id, &role)
 	return role, err
+}
+
+func (r StoreRepository) DeleteRole(id string) error {
+	return r.roles.Delete(context.Background(), id)
 }
 
 func (r StoreRepository) SaveBinding(binding Binding) error {

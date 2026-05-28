@@ -120,6 +120,51 @@ metadata:
 	require.Equal(t, "orders", result.Resources[0].Namespace)
 }
 
+func TestServiceBlocksPreviewForReadOnlyCluster(t *testing.T) {
+	dryRunner := &recordingDeploymentDryRunner{}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner, staticClusterPolicy{readOnly: true})
+
+	_, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "test03",
+		YAMLContent: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders`,
+	})
+
+	require.ErrorIs(t, err, ErrClusterReadOnly)
+	require.Equal(t, 0, dryRunner.calls)
+}
+
+func TestServiceBlocksDeleteForReadOnlyCluster(t *testing.T) {
+	deleter := &recordingDeploymentDeleter{}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), deleter, staticClusterPolicy{readOnly: true})
+
+	_, err := svc.Delete(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, DeleteRequest{
+		Identity: ResourceIdentity{ClusterID: "test03", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"},
+	})
+
+	require.ErrorIs(t, err, ErrClusterReadOnly)
+	require.Equal(t, 0, deleter.calls)
+}
+
+func TestServiceBlocksRollbackForReadOnlyCluster(t *testing.T) {
+	svc := NewService(
+		NewMemoryReader([]HistoryRecord{{ID: "history-1", ClusterID: "test03", Namespace: "orders", Workload: "orders-api"}}),
+		allowDeploymentAuthorizer{},
+		audit.NewService(audit.NewMemoryStore()),
+		staticClusterPolicy{readOnly: true},
+	)
+
+	_, err := svc.Rollback(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, RollbackRequest{
+		HistoryID: "history-1",
+		Identity:  ResourceIdentity{ClusterID: "test03", Namespace: "orders", APIVersion: "apps/v1", Kind: "Deployment", Name: "orders-api", UID: "uid-orders"},
+	})
+
+	require.ErrorIs(t, err, ErrClusterReadOnly)
+}
+
 func TestServicePreviewReturnsConfirmationPlan(t *testing.T) {
 	auditStore := audit.NewMemoryStore()
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
@@ -534,4 +579,12 @@ func (d *recordingDeploymentDeleter) Delete(_ context.Context, req kubeclient.Cl
 	d.calls++
 	d.request = req
 	return d.result, nil
+}
+
+type staticClusterPolicy struct {
+	readOnly bool
+}
+
+func (p staticClusterPolicy) IsReadOnly(context.Context, string) (bool, error) {
+	return p.readOnly, nil
 }

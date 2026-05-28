@@ -18,6 +18,7 @@ import (
 	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/modules/k8sops/platformaccess"
+	"novaobs/internal/modules/k8sops/terminal"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -55,25 +56,20 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	alertSvc := alerting.NewService(store.AlertRules())
 	logQuerySvc := logquery.NewService()
 	rbacRepo := rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
-	bootstrapAdmin := platformBootstrapAdmin()
+	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
 	if cfg.Server.Mode != gin.ReleaseMode {
-		if err := rbac.EnsureK8sOpsDefaults(rbacRepo, rbac.DevAdminSubject(), rbac.DevK8sOpsScope()); err != nil {
-			return nil, fmt.Errorf("初始化 K8s 运维 RBAC 失败: %w", err)
-		}
-		if err := rbac.EnsurePlatformDefaults(rbacRepo, rbac.DevAdminSubject()); err != nil {
-			return nil, fmt.Errorf("初始化平台 RBAC 失败: %w", err)
-		}
-	} else if bootstrapAdmin.ID != "" {
-		if err := rbac.EnsurePlatformDefaults(rbacRepo, bootstrapAdmin); err != nil {
-			return nil, fmt.Errorf("初始化平台管理员 RBAC 失败: %w", err)
-		}
-	} else {
-		if err := rbac.EnsurePlatformDefaults(rbacRepo, rbac.Subject{}); err != nil {
-			return nil, fmt.Errorf("初始化平台默认角色失败: %w", err)
+		if err := rbac.CleanupLegacyDefaults(rbacRepo); err != nil {
+			return nil, fmt.Errorf("清理开发态历史内置角色失败: %w", err)
 		}
 	}
-	rbacSvc := rbac.NewService(rbacRepo)
-	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
+	bootstrapAdmin := platformBootstrapAdmin()
+	superSubjects := []rbac.Subject{}
+	if cfg.Server.Mode != gin.ReleaseMode {
+		superSubjects = append(superSubjects, rbac.DevAdminSubject())
+	} else if bootstrapAdmin.ID != "" {
+		superSubjects = append(superSubjects, bootstrapAdmin)
+	}
+	rbacSvc := rbac.NewService(rbacRepo, rbac.WithSubjectResolver(iam.NewSubjectResolver(iamRepo)), rbac.WithSuperSubjects(superSubjects...))
 	iamRBACRepo := iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings())
 	iamSvc := iam.NewService(iamRepo, iamRBACRepo, rbacSvc)
 	if cfg.Server.Mode != gin.ReleaseMode {
@@ -118,6 +114,10 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		rbacRepo,
 		platformaccess.NewIAMSubjectRepository(iamSvc),
 		k8sClientProvider,
+		terminal.NewKubectlExecutor(clusterCredentialSvc, terminal.KubectlExecutorConfig{
+			BinaryPath: os.Getenv("NOVAOBS_KUBECTL_PATH"),
+			TempDir:    os.Getenv("NOVAOBS_KUBECTL_TEMP_DIR"),
+		}),
 	)
 	opampMgr := opamp.NewManager()
 

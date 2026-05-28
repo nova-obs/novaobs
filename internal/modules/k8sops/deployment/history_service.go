@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/platform/audit"
 	platformrbac "novaobs/internal/platform/rbac"
@@ -20,6 +21,7 @@ var (
 	ErrPermissionDenied     = errors.New("permission_denied")
 	ErrInvalidRequest       = errors.New("invalid_k8s_deployment_request")
 	ErrConfirmationMismatch = errors.New("confirmation_mismatch")
+	ErrClusterReadOnly      = cluster.ErrClusterReadOnly
 )
 
 type Reader interface {
@@ -28,16 +30,17 @@ type Reader interface {
 }
 
 type Service struct {
-	reader       Reader
-	authorizer   Authorizer
-	auditor      Auditor
-	auditReader  AuditEventReader
-	capabilities CapabilityProvider
-	dryRunner    OperationDryRunner
-	applier      OperationApplier
-	deleter      OperationDeleter
-	inventory    InventoryRepository
-	history      HistoryWriter
+	reader        Reader
+	authorizer    Authorizer
+	auditor       Auditor
+	auditReader   AuditEventReader
+	capabilities  CapabilityProvider
+	dryRunner     OperationDryRunner
+	applier       OperationApplier
+	deleter       OperationDeleter
+	inventory     InventoryRepository
+	history       HistoryWriter
+	clusterPolicy ClusterPolicy
 }
 
 type Authorizer interface {
@@ -68,6 +71,8 @@ type OperationDeleter interface {
 	Delete(ctx context.Context, req kubeclient.ClusterDeleteRequest) (kubeclient.ResourceOperationResult, error)
 }
 
+type ClusterPolicy = cluster.ReadOnlyPolicy
+
 func NewService(reader Reader, security ...any) Service {
 	service := Service{reader: reader, authorizer: denyAuthorizer{}, auditor: noopAuditor{}}
 	for _, item := range security {
@@ -97,6 +102,9 @@ func NewService(reader Reader, security ...any) Service {
 		}
 		if value, ok := item.(HistoryWriter); ok && value != nil {
 			service.history = value
+		}
+		if value, ok := item.(ClusterPolicy); ok && value != nil {
+			service.clusterPolicy = value
 		}
 	}
 	return service
@@ -138,6 +146,9 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	}
 	if !s.allowedAll(subject, "preview", identities) {
 		return OperationResult{}, ErrPermissionDenied
+	}
+	if err := s.ensureClusterWritable(ctx, req.ClusterID); err != nil {
+		return OperationResult{}, err
 	}
 	warnings := []string{}
 	if s.dryRunner != nil {
@@ -187,6 +198,9 @@ func (s Service) PreviewDelete(ctx context.Context, subject platformrbac.Subject
 	if !s.allowedAll(subject, "delete", []ResourceIdentity{identity}) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	if err := s.ensureClusterWritable(ctx, identity.ClusterID); err != nil {
+		return OperationResult{}, err
+	}
 	plan := buildDeletePlan(identity)
 	event, err := s.record(ctx, subject, "delete_preview", identity.ClusterID, []ResourceIdentity{identity}, map[string]any{
 		"cluster_id": identity.ClusterID,
@@ -216,6 +230,9 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 	}
 	if !s.allowedAll(subject, "deploy", identities) {
 		return OperationResult{}, ErrPermissionDenied
+	}
+	if err := s.ensureClusterWritable(ctx, req.ClusterID); err != nil {
+		return OperationResult{}, err
 	}
 	if s.applier != nil {
 		plan, err := s.previewPlanForRequest(ctx, subject, req, "deploy", identities)
@@ -286,6 +303,9 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 	if !s.allowedAll(subject, "delete", []ResourceIdentity{identity}) {
 		return OperationResult{}, ErrPermissionDenied
 	}
+	if err := s.ensureClusterWritable(ctx, identity.ClusterID); err != nil {
+		return OperationResult{}, err
+	}
 	if s.deleter != nil {
 		plan := buildDeletePlan(identity)
 		if !matchingDeleteConfirmation(req, plan) {
@@ -348,6 +368,9 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, req
 	}
 	if !s.allowedAll(subject, "rollback", []ResourceIdentity{identity}) {
 		return OperationResult{}, ErrPermissionDenied
+	}
+	if err := s.ensureClusterWritable(ctx, identity.ClusterID); err != nil {
+		return OperationResult{}, err
 	}
 	exists, err := s.historyRecordExists(ctx, req.HistoryID, identity)
 	if err != nil {
@@ -691,6 +714,20 @@ func matchingConfirmation(req OperationRequest, plan PreviewPlan) bool {
 		strings.TrimSpace(req.ConfirmationToken) != "" &&
 		strings.TrimSpace(req.PreviewID) == plan.ID &&
 		strings.TrimSpace(req.ConfirmationToken) == plan.ConfirmationToken
+}
+
+func (s Service) ensureClusterWritable(ctx context.Context, clusterID string) error {
+	if s.clusterPolicy == nil {
+		return nil
+	}
+	readOnly, err := s.clusterPolicy.IsReadOnly(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if readOnly {
+		return ErrClusterReadOnly
+	}
+	return nil
 }
 
 func matchingDeleteConfirmation(req DeleteRequest, plan PreviewPlan) bool {

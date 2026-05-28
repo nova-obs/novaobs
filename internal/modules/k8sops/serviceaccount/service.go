@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/rbac"
 
@@ -40,16 +41,23 @@ type Service struct {
 	repo       Repository
 	authorizer Authorizer
 	auditor    Auditor
+	policy     cluster.ReadOnlyPolicy
 }
 
-func NewService(repo Repository, authorizer Authorizer, auditor Auditor) Service {
+func NewService(repo Repository, authorizer Authorizer, auditor Auditor, policies ...cluster.ReadOnlyPolicy) Service {
 	if authorizer == nil {
 		authorizer = denyAuthorizer{}
 	}
 	if auditor == nil {
 		auditor = noopAuditor{}
 	}
-	return Service{repo: repo, authorizer: authorizer, auditor: auditor}
+	service := Service{repo: repo, authorizer: authorizer, auditor: auditor}
+	for _, policy := range policies {
+		if policy != nil {
+			service.policy = policy
+		}
+	}
+	return service
 }
 
 func (s Service) List(ctx context.Context, filter ListFilter) ([]ServiceAccount, error) {
@@ -68,6 +76,9 @@ func (s Service) Create(ctx context.Context, subject rbac.Subject, req CreateReq
 	})
 	if !decision.Allowed {
 		return ServiceAccount{}, audit.Event{}, ErrPermissionDenied
+	}
+	if err := s.ensureWritable(ctx, req.ClusterID); err != nil {
+		return ServiceAccount{}, audit.Event{}, err
 	}
 	item := ServiceAccount{
 		ID:        fmt.Sprintf("sa-%s-%s-%s", req.ClusterID, req.Namespace, req.Name),
@@ -116,6 +127,9 @@ func (s Service) Delete(ctx context.Context, subject rbac.Subject, req DeleteReq
 	if !decision.Allowed {
 		return audit.Event{}, ErrPermissionDenied
 	}
+	if err := s.ensureWritable(ctx, req.ClusterID); err != nil {
+		return audit.Event{}, err
+	}
 	deleted, err := s.repo.Delete(ctx, req)
 	if err != nil {
 		return audit.Event{}, err
@@ -138,6 +152,20 @@ func (s Service) Delete(ctx context.Context, subject rbac.Subject, req DeleteReq
 		return audit.Event{}, err
 	}
 	return event, nil
+}
+
+func (s Service) ensureWritable(ctx context.Context, clusterID string) error {
+	if s.policy == nil {
+		return nil
+	}
+	readOnly, err := s.policy.IsReadOnly(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if readOnly {
+		return cluster.ErrClusterReadOnly
+	}
+	return nil
 }
 
 type MemoryRepository struct {

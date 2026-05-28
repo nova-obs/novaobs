@@ -62,6 +62,39 @@ func TestServiceDeniesDifferentNamespace(t *testing.T) {
 	require.Equal(t, "permission_denied", decision.Reason)
 }
 
+func TestServiceAllowsNamespaceListScope(t *testing.T) {
+	repo := NewMemoryRepository()
+	require.NoError(t, repo.SaveRole(Role{
+		ID:   "role-multi-namespace-deployer",
+		Name: "Multi Namespace Deployer",
+		Permissions: []Permission{
+			{Resource: "k8s.deployment", Action: "deploy", ScopeMode: "namespace"},
+		},
+	}))
+	require.NoError(t, repo.SaveBinding(Binding{
+		ID:          "binding-multi-namespace",
+		SubjectID:   "group-sre",
+		SubjectType: "group",
+		RoleID:      "role-multi-namespace-deployer",
+		Scope:       Scope{ClusterID: "prod", Namespaces: []string{"orders", "payments"}},
+	}))
+	svc := NewService(repo)
+
+	orders := svc.Authorize(Subject{ID: "group-sre", Type: "group"}, Request{
+		Resource: "k8s.deployment",
+		Action:   "deploy",
+		Scope:    Scope{ClusterID: "prod", Namespace: "orders"},
+	})
+	billing := svc.Authorize(Subject{ID: "group-sre", Type: "group"}, Request{
+		Resource: "k8s.deployment",
+		Action:   "deploy",
+		Scope:    Scope{ClusterID: "prod", Namespace: "billing"},
+	})
+
+	require.True(t, orders.Allowed)
+	require.False(t, billing.Allowed)
+}
+
 func TestServiceAllowsGlobalAdmin(t *testing.T) {
 	repo := NewMemoryRepository()
 	require.NoError(t, repo.SaveRole(Role{
@@ -87,6 +120,36 @@ func TestServiceAllowsGlobalAdmin(t *testing.T) {
 	})
 
 	require.True(t, decision.Allowed)
+}
+
+func TestServiceAllowsConfiguredSuperSubjectWithoutRoles(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, WithSuperSubjects(Subject{ID: "dev-admin", Type: "user"}))
+
+	decision := svc.Authorize(Subject{ID: "dev-admin", Type: "user"}, Request{
+		Resource: "k8s.kubeconfig",
+		Action:   "export",
+		Scope:    Scope{ClusterID: "test03-02", Namespace: "logplatform"},
+	})
+
+	require.True(t, decision.Allowed)
+	require.Empty(t, decision.Reason)
+	require.Empty(t, repo.roles)
+	require.Empty(t, repo.bindings)
+}
+
+func TestServiceDoesNotAllowUnconfiguredSubjectAsSuperSubject(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, WithSuperSubjects(Subject{ID: "dev-admin", Type: "user"}))
+
+	decision := svc.Authorize(Subject{ID: "operator-1", Type: "user"}, Request{
+		Resource: "platform.iam",
+		Action:   "manage",
+		Scope:    Scope{Global: true},
+	})
+
+	require.False(t, decision.Allowed)
+	require.Equal(t, "permission_denied", decision.Reason)
 }
 
 func TestServiceScopeDoesNotExpandAcrossClusters(t *testing.T) {

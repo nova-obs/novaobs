@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"io"
+	"sort"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -91,6 +92,7 @@ func (s Service) Create(ctx context.Context, req CreateRequest) (Secret, error) 
 		Fingerprint: hex.EncodeToString(sum[:]),
 		CreatedBy:   req.CreatedBy,
 		CreatedAt:   time.Now().UTC(),
+		RotatedAt:   req.RotatedAt,
 		ExpiresAt:   req.ExpiresAt,
 	}
 	if err := s.repo.Save(ctx, item); err != nil {
@@ -114,7 +116,7 @@ func (s Service) Plaintext(ctx context.Context, id string) ([]byte, Secret, erro
 }
 
 func (s Service) PlaintextByTypeAndScope(ctx context.Context, typ string, scope Scope) ([]byte, Secret, error) {
-	item, err := s.repo.FindByTypeAndScope(ctx, typ, scope)
+	item, err := s.latestByTypeAndScope(ctx, typ, scope)
 	if err != nil {
 		return nil, Secret{}, err
 	}
@@ -137,4 +139,31 @@ func (s Service) ListByType(ctx context.Context, typ string) ([]Secret, error) {
 		out[index] = item
 	}
 	return out, nil
+}
+
+func (s Service) latestByTypeAndScope(ctx context.Context, typ string, scope Scope) (Secret, error) {
+	items, err := s.repo.ListByType(ctx, typ)
+	if err != nil {
+		return Secret{}, err
+	}
+	matched := make([]Secret, 0, len(items))
+	for _, item := range items {
+		if scopeMatches(item.Scope, scope) {
+			matched = append(matched, item)
+		}
+	}
+	if len(matched) == 0 {
+		return Secret{}, ErrNotFound
+	}
+	sort.SliceStable(matched, func(left, right int) bool {
+		return secretFreshnessTime(matched[left]).After(secretFreshnessTime(matched[right]))
+	})
+	return matched[0], nil
+}
+
+func secretFreshnessTime(item Secret) time.Time {
+	if !item.RotatedAt.IsZero() {
+		return item.RotatedAt
+	}
+	return item.CreatedAt
 }

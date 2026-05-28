@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/audit"
 	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/rbac"
@@ -131,6 +132,22 @@ func TestCreateServiceAccountRollsBackWhenAuditFails(t *testing.T) {
 	require.Empty(t, items)
 }
 
+func TestCreateServiceAccountBlocksReadOnlyCluster(t *testing.T) {
+	repo := NewMemoryRepository(nil)
+	service := NewService(repo, rbac.NewService(serviceAccountWriterRepo()), audit.NewService(audit.NewMemoryStore()), staticClusterPolicy{readOnly: true})
+
+	_, _, err := service.Create(context.Background(), rbac.Subject{ID: "user-1", Type: "user"}, CreateRequest{
+		ClusterID: "prod",
+		Namespace: "orders",
+		Name:      "orders-reader",
+	})
+
+	require.ErrorIs(t, err, cluster.ErrClusterReadOnly)
+	items, listErr := repo.List(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders"})
+	require.NoError(t, listErr)
+	require.Empty(t, items)
+}
+
 func TestDeleteServiceAccountRollsBackWhenAuditFails(t *testing.T) {
 	repo := NewMemoryRepository([]ServiceAccount{
 		{ID: "sa-prod-orders-reader", ClusterID: "prod", Namespace: "orders", Name: "orders-reader", UID: "uid-orders-reader", Status: "active", Source: "startorch"},
@@ -173,6 +190,14 @@ type failingAuditor struct{}
 
 func (failingAuditor) Record(ctx context.Context, event audit.Event) (audit.Event, error) {
 	return audit.Event{}, errors.New("audit failed")
+}
+
+type staticClusterPolicy struct {
+	readOnly bool
+}
+
+func (p staticClusterPolicy) IsReadOnly(context.Context, string) (bool, error) {
+	return p.readOnly, nil
 }
 
 func serviceAccountWriterRepo() testRBACRepo {

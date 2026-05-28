@@ -13,6 +13,7 @@ import (
 	platformrbac "novaobs/internal/platform/rbac"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -76,16 +77,61 @@ func (r KubernetesRepository) List(ctx context.Context, filter ListFilter) ([]Ce
 	return paginate(items, filter.Page, filter.PageSize), nil
 }
 
-func (r KubernetesRepository) Create(context.Context, Certificate) (Certificate, error) {
-	return Certificate{}, ErrWriteUnavailable
+func (r KubernetesRepository) Create(ctx context.Context, item Certificate) (Certificate, error) {
+	item.ClusterID = strings.TrimSpace(item.ClusterID)
+	item.Namespace = strings.TrimSpace(item.Namespace)
+	item.Name = strings.TrimSpace(item.Name)
+	if item.ClusterID == "" || item.Namespace == "" || item.Name == "" || strings.TrimSpace(item.Certificate) == "" || strings.TrimSpace(item.PrivateKey) == "" {
+		return Certificate{}, ErrInvalidRequest
+	}
+	client, err := r.clients.Clientset(ctx, item.ClusterID)
+	if err != nil {
+		return Certificate{}, err
+	}
+	created, err := client.CoreV1().Secrets(item.Namespace).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: item.Name, Namespace: item.Namespace},
+		Type:       corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       []byte(item.Certificate),
+			corev1.TLSPrivateKeyKey: []byte(item.PrivateKey),
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return Certificate{}, ErrAlreadyExists
+		}
+		return Certificate{}, err
+	}
+	return mapKubernetesTLSSecret(item.ClusterID, *created), nil
 }
 
-func (r KubernetesRepository) Delete(context.Context, string) (Certificate, error) {
-	return Certificate{}, ErrWriteUnavailable
-}
-
-func (r KubernetesRepository) WritesUnavailable() bool {
-	return true
+func (r KubernetesRepository) Delete(ctx context.Context, req DeleteRequest) (Certificate, error) {
+	req = normalizeDeleteRequest(req)
+	if req.ID == "" || req.ClusterID == "" || req.Namespace == "" || req.Name == "" {
+		return Certificate{}, ErrInvalidRequest
+	}
+	client, err := r.clients.Clientset(ctx, req.ClusterID)
+	if err != nil {
+		return Certificate{}, err
+	}
+	existing, err := client.CoreV1().Secrets(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return Certificate{}, ErrNotFound
+		}
+		return Certificate{}, err
+	}
+	if existing.Type != corev1.SecretTypeTLS || string(existing.UID) != req.ID {
+		return Certificate{}, ErrNotFound
+	}
+	deleted := mapKubernetesTLSSecret(req.ClusterID, *existing)
+	if err := client.CoreV1().Secrets(req.Namespace).Delete(ctx, req.Name, metav1.DeleteOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return Certificate{}, ErrNotFound
+		}
+		return Certificate{}, err
+	}
+	return deleted, nil
 }
 
 func (r KubernetesRepository) allowed(ctx context.Context, clusterID string, namespace string) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"novaobs/internal/modules/k8sops/kubeclient"
 )
@@ -13,6 +14,8 @@ var (
 	ErrInvalidClusterRequest        = errors.New("invalid_cluster_request")
 	ErrClusterRepositoryWrite       = errors.New("cluster_repository_write_unavailable")
 	ErrClusterCapabilityUnavailable = errors.New("cluster_capability_unavailable")
+	ErrClusterNotFound              = errors.New("cluster_not_found")
+	ErrClusterReadOnly              = errors.New("k8s_cluster_read_only")
 )
 
 type Repository interface {
@@ -27,6 +30,10 @@ type DeleteRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+type ReadOnlyPolicy interface {
+	IsReadOnly(ctx context.Context, clusterID string) (bool, error)
+}
+
 type Service struct {
 	repo Repository
 }
@@ -37,6 +44,17 @@ type CapabilityProvider interface {
 
 type CapabilityService struct {
 	provider CapabilityProvider
+}
+
+type ProbeResult struct {
+	ClusterID     string   `json:"cluster_id"`
+	Status        string   `json:"status"`
+	AccessMode    string   `json:"access_mode"`
+	ReadOnly      bool     `json:"read_only"`
+	ServerVersion string   `json:"server_version"`
+	ResourceCount int      `json:"resource_count"`
+	Warnings      []string `json:"warnings"`
+	CheckedAt     string   `json:"checked_at"`
 }
 
 func NewService(repo Repository) Service {
@@ -51,6 +69,34 @@ func (s Service) List(ctx context.Context, filter ListFilter) ([]Cluster, error)
 	return s.repo.List(ctx, filter)
 }
 
+func (s Service) Get(ctx context.Context, id string) (Cluster, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Cluster{}, ErrInvalidClusterRequest
+	}
+	items, err := s.repo.List(ctx, ListFilter{PageSize: 0})
+	if err != nil {
+		return Cluster{}, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return normalizeCluster(item), nil
+		}
+	}
+	return Cluster{}, ErrClusterNotFound
+}
+
+func (s Service) IsReadOnly(ctx context.Context, clusterID string) (bool, error) {
+	item, err := s.Get(ctx, clusterID)
+	if err != nil {
+		if errors.Is(err, ErrClusterNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return item.ReadOnly, nil
+}
+
 func (s CapabilityService) Get(ctx context.Context, clusterID string) (kubeclient.CapabilitySnapshot, error) {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
@@ -62,6 +108,24 @@ func (s CapabilityService) Get(ctx context.Context, clusterID string) (kubeclien
 	return s.provider.Capabilities(ctx, clusterID)
 }
 
+func (s CapabilityService) Probe(ctx context.Context, cluster Cluster) (ProbeResult, error) {
+	cluster = normalizeCluster(cluster)
+	snapshot, err := s.Get(ctx, cluster.ID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	return ProbeResult{
+		ClusterID:     cluster.ID,
+		Status:        "connected",
+		AccessMode:    cluster.AccessMode,
+		ReadOnly:      cluster.ReadOnly,
+		ServerVersion: snapshot.ServerVersion,
+		ResourceCount: len(snapshot.Resources),
+		Warnings:      append([]string{}, snapshot.Warnings...),
+		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
 func (s Service) Create(ctx context.Context, req UpsertRequest) (Cluster, error) {
 	item := Cluster{
 		ID:          strings.TrimSpace(req.ID),
@@ -70,12 +134,18 @@ func (s Service) Create(ctx context.Context, req UpsertRequest) (Cluster, error)
 		Region:      strings.TrimSpace(req.Region),
 		Description: strings.TrimSpace(req.Description),
 		Status:      strings.TrimSpace(req.Status),
+		AccessMode:  strings.TrimSpace(req.AccessMode),
+		ReadOnly:    req.ReadOnly,
+		ReadOnlySet: true,
 	}
 	if item.ID == "" || item.Name == "" {
 		return Cluster{}, ErrInvalidClusterRequest
 	}
 	if item.Status == "" {
 		item.Status = "active"
+	}
+	if item.AccessMode == "" {
+		item.AccessMode = "direct"
 	}
 	repo, ok := s.repo.(UpsertRepository)
 	if !ok {
@@ -110,6 +180,7 @@ func (r MemoryRepository) List(_ context.Context, filter ListFilter) ([]Cluster,
 	out := make([]Cluster, 0, len(r.items))
 	query := strings.ToLower(strings.TrimSpace(filter.Query))
 	for _, item := range r.items {
+		item = normalizeCluster(item)
 		if query == "" || strings.Contains(strings.ToLower(item.Name), query) || strings.Contains(strings.ToLower(item.ID), query) {
 			out = append(out, item)
 		}
@@ -119,9 +190,7 @@ func (r MemoryRepository) List(_ context.Context, filter ListFilter) ([]Cluster,
 }
 
 func (r *MemoryRepository) Upsert(_ context.Context, item Cluster) (Cluster, error) {
-	if item.Status == "" {
-		item.Status = "active"
-	}
+	item = normalizeCluster(item)
 	for index, current := range r.items {
 		if current.ID == item.ID {
 			r.items[index] = item
@@ -130,6 +199,24 @@ func (r *MemoryRepository) Upsert(_ context.Context, item Cluster) (Cluster, err
 	}
 	r.items = append(r.items, item)
 	return item, nil
+}
+
+func normalizeCluster(item Cluster) Cluster {
+	item.ID = strings.TrimSpace(item.ID)
+	item.Name = strings.TrimSpace(item.Name)
+	item.Status = strings.TrimSpace(item.Status)
+	item.AccessMode = strings.TrimSpace(item.AccessMode)
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	if item.AccessMode == "" {
+		item.AccessMode = "direct"
+	}
+	if !item.ReadOnlySet {
+		item.ReadOnly = true
+		item.ReadOnlySet = true
+	}
+	return item
 }
 
 func (r *MemoryRepository) Delete(_ context.Context, id string) error {

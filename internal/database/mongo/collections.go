@@ -406,6 +406,11 @@ func (s *rbacRoleStore) FindByID(ctx context.Context, id string, result interfac
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
 }
 
+func (s *rbacRoleStore) Delete(ctx context.Context, id string) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
 type rbacBindingStore struct{ col *mongo.Collection }
 
 func (s *rbacBindingStore) Upsert(ctx context.Context, id string, binding interface{}) error {

@@ -64,6 +64,52 @@ func TestKubernetesRepositoryRequiresNamespaceReadPermission(t *testing.T) {
 	require.ErrorIs(t, err, ErrReadPermissionDenied)
 }
 
+func TestKubernetesRepositoryCreatesNamespaceInCluster(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	repo := NewKubernetesRepository(staticClientsetProvider{client: client})
+
+	created, err := repo.Create(context.Background(), Namespace{
+		ClusterID: "prod",
+		Name:      "orders",
+		Owner:     "orders-team",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "orders", created.Name)
+	require.Equal(t, "prod", created.ClusterID)
+	require.Equal(t, "orders-team", created.Owner)
+	stored, getErr := client.CoreV1().Namespaces().Get(context.Background(), "orders", metav1.GetOptions{})
+	require.NoError(t, getErr)
+	require.Equal(t, "orders-team", stored.Labels["novaobs.io/owner"])
+}
+
+func TestKubernetesRepositoryDeletesNamespaceByUID(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders", UID: "uid-orders"},
+	})
+	repo := NewKubernetesRepository(staticClientsetProvider{client: client})
+
+	deleted, err := repo.Delete(context.Background(), DeleteRequest{ClusterID: "prod", Name: "orders", UID: "uid-orders"})
+
+	require.NoError(t, err)
+	require.Equal(t, "orders", deleted.Name)
+	_, getErr := client.CoreV1().Namespaces().Get(context.Background(), "orders", metav1.GetOptions{})
+	require.Error(t, getErr)
+}
+
+func TestKubernetesRepositoryDeleteRejectsUIDMismatch(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders", UID: "uid-orders"},
+	})
+	repo := NewKubernetesRepository(staticClientsetProvider{client: client})
+
+	_, err := repo.Delete(context.Background(), DeleteRequest{ClusterID: "prod", Name: "orders", UID: "other-uid"})
+
+	require.ErrorIs(t, err, ErrNotFound)
+	_, getErr := client.CoreV1().Namespaces().Get(context.Background(), "orders", metav1.GetOptions{})
+	require.NoError(t, getErr)
+}
+
 type staticClientsetProvider struct {
 	client kubernetes.Interface
 }

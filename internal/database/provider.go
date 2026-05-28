@@ -131,6 +131,7 @@ type RBACRoleStore interface {
 	Upsert(ctx context.Context, id string, role interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type RBACBindingStore interface {

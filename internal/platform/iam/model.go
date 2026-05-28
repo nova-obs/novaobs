@@ -46,6 +46,17 @@ type Membership struct {
 	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
 }
 
+type MembershipView struct {
+	ID                 string    `json:"id"`
+	GroupID            string    `json:"group_id"`
+	GroupName          string    `json:"group_name,omitempty"`
+	SubjectID          string    `json:"subject_id"`
+	SubjectType        string    `json:"subject_type"`
+	SubjectDisplayName string    `json:"subject_display_name,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
 type ServiceAccount struct {
 	ID          string    `json:"id" bson:"_id,omitempty"`
 	Name        string    `json:"name" bson:"name"`
@@ -85,6 +96,12 @@ type CreateGroupRequest struct {
 	Status      string `json:"status"`
 }
 
+type CreateMembershipRequest struct {
+	GroupID     string `json:"group_id"`
+	SubjectID   string `json:"subject_id"`
+	SubjectType string `json:"subject_type"`
+}
+
 type CreateServiceAccountRequest struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
@@ -116,6 +133,18 @@ type BindingView struct {
 	Scope       platformrbac.Scope `json:"scope"`
 	CreatedAt   time.Time          `json:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at"`
+}
+
+type EffectivePermissionView struct {
+	BindingID          string                    `json:"binding_id"`
+	RoleID             string                    `json:"role_id"`
+	RoleName           string                    `json:"role_name"`
+	GrantedToSubjectID string                    `json:"granted_to_subject_id"`
+	GrantedToType      string                    `json:"granted_to_type"`
+	GrantedVia         string                    `json:"granted_via"`
+	Permissions        []platformrbac.Permission `json:"permissions"`
+	Scope              platformrbac.Scope        `json:"scope"`
+	CreatedAt          time.Time                 `json:"created_at"`
 }
 
 type WriteResult[T any] struct {

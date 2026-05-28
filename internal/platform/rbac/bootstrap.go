@@ -22,9 +22,13 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			{Resource: "k8s.service-account", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.rbac", Action: "create", ScopeMode: "namespace"},
+			{Resource: "k8s.rbac", Action: "create", ScopeMode: "cluster"},
 			{Resource: "k8s.rbac", Action: "update", ScopeMode: "namespace"},
+			{Resource: "k8s.rbac", Action: "update", ScopeMode: "cluster"},
 			{Resource: "k8s.rbac", Action: "delete", ScopeMode: "namespace"},
+			{Resource: "k8s.rbac", Action: "delete", ScopeMode: "cluster"},
 			{Resource: "k8s.rbac", Action: "read", ScopeMode: "namespace"},
+			{Resource: "k8s.rbac", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.kubeconfig", Action: "export", ScopeMode: "namespace"},
 			{Resource: "k8s.deployment", Action: "preview", ScopeMode: "namespace"},
 			{Resource: "k8s.deployment", Action: "deploy", ScopeMode: "namespace"},
@@ -34,6 +38,8 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			{Resource: "k8s.certificate", Action: "delete", ScopeMode: "namespace"},
 			{Resource: "k8s.certificate", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.terminal", Action: "exec", ScopeMode: "namespace"},
+			{Resource: "k8s.namespace", Action: "create", ScopeMode: "cluster"},
+			{Resource: "k8s.namespace", Action: "delete", ScopeMode: "cluster"},
 			{Resource: "k8s.namespace", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.cluster-credential", Action: "create", ScopeMode: "cluster"},
@@ -65,6 +71,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.service-account", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.rbac", Action: "read", ScopeMode: "namespace"},
+			{Resource: "k8s.rbac", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.certificate", Action: "read", ScopeMode: "namespace"},
 			{Resource: "k8s.terminal", Action: "exec", ScopeMode: "namespace"},
 			{Resource: "k8s.cluster-credential", Action: "read", ScopeMode: "cluster"},
@@ -109,6 +116,19 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 			UpdatedAt:   now,
 		}
 		if err := repo.SaveBinding(namespaceBinding); err != nil {
+			return err
+		}
+	} else {
+		globalNamespaceBinding := Binding{
+			ID:          k8sOpsAdminBindingPrefix + "global-namespace-" + subject.Type + "-" + subject.ID,
+			SubjectID:   subject.ID,
+			SubjectType: subject.Type,
+			RoleID:      K8sOpsAdminRoleID,
+			Scope:       Scope{Global: true},
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := repo.SaveBinding(globalNamespaceBinding); err != nil {
 			return err
 		}
 	}

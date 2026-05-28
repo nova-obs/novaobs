@@ -27,5 +27,6 @@ type CreateRequest struct {
 	Scope     Scope
 	Plaintext []byte
 	CreatedBy string
+	RotatedAt time.Time
 	ExpiresAt time.Time
 }

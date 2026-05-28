@@ -29,6 +29,38 @@ func TestDevK8sOpsScopeDoesNotSeedDemoClusterNamespace(t *testing.T) {
 	require.Empty(t, scope.Namespace)
 }
 
+func TestCleanupLegacyDefaultsRemovesSeededRolesAndBindings(t *testing.T) {
+	repo := NewMemoryRepository()
+	subject := DevAdminSubject()
+	require.NoError(t, EnsurePlatformDefaults(repo, subject))
+	require.NoError(t, EnsureK8sOpsDefaults(repo, subject, DevK8sOpsScope()))
+	require.NoError(t, repo.SaveRole(Role{
+		ID:   "role-custom",
+		Name: "自定义角色",
+		Permissions: []Permission{
+			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
+		},
+	}))
+	require.NoError(t, repo.SaveBinding(Binding{
+		ID:          "binding-custom",
+		SubjectID:   subject.ID,
+		SubjectType: subject.Type,
+		RoleID:      "role-custom",
+		Scope:       Scope{Global: true},
+	}))
+
+	require.NoError(t, CleanupLegacyDefaults(repo))
+
+	roles, err := repo.ListRoles()
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	require.Equal(t, "role-custom", roles[0].ID)
+	bindings, err := repo.ListBindings()
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.Equal(t, "binding-custom", bindings[0].ID)
+}
+
 func TestEnsureK8sOpsDefaultsCoversK8sWritePermissions(t *testing.T) {
 	repo := NewMemoryRepository()
 
@@ -44,6 +76,8 @@ func TestEnsureK8sOpsDefaultsCoversK8sWritePermissions(t *testing.T) {
 		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.certificate", Action: "read", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.certificate", Action: "create", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.namespace", Action: "create", Scope: Scope{ClusterID: "stage"}},
+		{Resource: "k8s.namespace", Action: "delete", Scope: Scope{ClusterID: "stage"}},
 		{Resource: "k8s.template", Action: "update", Scope: Scope{Global: true}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)
@@ -103,7 +137,7 @@ func TestEnsureK8sOpsDefaultsAllowsGlobalClusterCredentialManagement(t *testing.
 	}
 }
 
-func TestEnsureK8sOpsDefaultsDoesNotExpandClusterWriteScopeWithGlobalCredentialManagement(t *testing.T) {
+func TestEnsureK8sOpsDefaultsAllowsDevAdminGlobalK8sWrite(t *testing.T) {
 	repo := NewMemoryRepository()
 
 	err := EnsureK8sOpsDefaults(repo, DevAdminSubject(), DevK8sOpsScope())
@@ -113,8 +147,9 @@ func TestEnsureK8sOpsDefaultsDoesNotExpandClusterWriteScopeWithGlobalCredentialM
 	for _, req := range []Request{
 		{Resource: "k8s.deployment", Action: "rollback", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
 		{Resource: "k8s.rbac", Action: "delete", Scope: Scope{ClusterID: "stage", Namespace: "default"}},
+		{Resource: "k8s.namespace", Action: "delete", Scope: Scope{ClusterID: "stage"}},
 	} {
 		decision := svc.Authorize(DevAdminSubject(), req)
-		require.False(t, decision.Allowed, "%s:%s", req.Resource, req.Action)
+		require.True(t, decision.Allowed, "%s:%s", req.Resource, req.Action)
 	}
 }

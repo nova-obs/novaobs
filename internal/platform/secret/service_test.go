@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +29,36 @@ func TestServiceStoresCiphertextAndReturnsMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, stored.Ciphertext)
 	require.NotContains(t, stored.Ciphertext, "apiVersion")
+}
+
+func TestServiceDecryptsLatestSecretByTypeAndScope(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, NewAESGCMEncryptor([]byte("12345678901234567890123456789012")))
+	_, err := svc.Create(context.Background(), CreateRequest{
+		Name:      "prod-readonly-v1",
+		Type:      "k8s.cluster-credential",
+		Scope:     Scope{ClusterID: "prod"},
+		Plaintext: []byte("apiVersion: v1\nclusters: []\nversion: old"),
+		CreatedBy: "platform",
+	})
+	require.NoError(t, err)
+	rotatedAt := time.Now().UTC().Add(time.Minute)
+	_, err = svc.Create(context.Background(), CreateRequest{
+		Name:      "prod-readonly-v2",
+		Type:      "k8s.cluster-credential",
+		Scope:     Scope{ClusterID: "prod"},
+		Plaintext: []byte("apiVersion: v1\nclusters: []\nversion: new"),
+		CreatedBy: "platform",
+		RotatedAt: rotatedAt,
+	})
+	require.NoError(t, err)
+
+	plaintext, metadata, err := svc.PlaintextByTypeAndScope(context.Background(), "k8s.cluster-credential", Scope{ClusterID: "prod"})
+
+	require.NoError(t, err)
+	require.Equal(t, []byte("apiVersion: v1\nclusters: []\nversion: new"), plaintext)
+	require.Equal(t, "prod-readonly-v2", metadata.Name)
+	require.Equal(t, rotatedAt, metadata.RotatedAt)
 }
 
 func TestServiceDecryptsStoredSecretByID(t *testing.T) {

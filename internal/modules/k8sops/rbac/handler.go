@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
@@ -118,6 +119,8 @@ func writeRBACError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusConflict, "already_exists", "K8s RBAC 资源已存在")
 	case errors.Is(err, ErrWriteUnavailable):
 		response.Error(ctx, http.StatusConflict, "k8s_rbac_write_unavailable", "真实集群 K8s RBAC 写操作尚未启用")
+	case errors.Is(err, cluster.ErrClusterReadOnly):
+		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断 K8s RBAC 写操作")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_operation_failed", "K8s RBAC 操作失败")
 	}

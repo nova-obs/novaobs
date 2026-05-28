@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/platform/authctx"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/response"
@@ -50,7 +51,12 @@ func CreateHandler(service Service) gin.HandlerFunc {
 
 func DeleteHandler(service Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		event, err := service.Delete(ctx.Request.Context(), subjectFromRequest(ctx), DeleteRequest{ID: ctx.Param("id")})
+		event, err := service.Delete(ctx.Request.Context(), subjectFromRequest(ctx), DeleteRequest{
+			ID:        ctx.Param("id"),
+			ClusterID: ctx.Query("cluster_id"),
+			Namespace: ctx.Query("namespace"),
+			Name:      ctx.Query("name"),
+		})
 		if err != nil {
 			writeCertificateError(ctx, err)
 			return
@@ -79,6 +85,8 @@ func writeCertificateError(ctx *gin.Context, err error) {
 		response.Error(ctx, http.StatusConflict, "already_exists", "证书已存在")
 	case errors.Is(err, ErrWriteUnavailable):
 		response.Error(ctx, http.StatusConflict, "k8s_certificate_write_unavailable", "真实集群证书写操作尚未启用")
+	case errors.Is(err, cluster.ErrClusterReadOnly):
+		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断证书写操作")
 	default:
 		response.Error(ctx, http.StatusInternalServerError, "k8s_certificate_operation_failed", "证书操作失败")
 	}
