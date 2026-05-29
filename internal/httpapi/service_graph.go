@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"novaobs/internal/alerting"
-	"novaobs/internal/collectorconfig"
 	"novaobs/internal/collectormanagement"
+	"novaobs/internal/logs"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
 	"novaobs/pkg/response"
@@ -17,15 +17,13 @@ type serviceObservabilityGraph struct {
 	Service    servicecatalog.Service                  `json:"service"`
 	Targets    []servicecatalog.ObservedTarget         `json:"targets"`
 	Agents     []collectormanagement.CollectorInstance `json:"agents"`
-	Pipelines  serviceGraphPipelineSummary             `json:"pipelines"`
+	LogRoutes  serviceGraphLogRoutesSummary            `json:"log_routes"`
 	AlertRules []alerting.Rule                         `json:"alert_rules"`
 }
 
-type serviceGraphPipelineSummary struct {
-	ConfigHash      string                            `json:"config_hash"`
-	SourceBreakdown []collectorconfig.SourceBreakdown `json:"source_breakdown"`
-	Warnings        []string                          `json:"warnings"`
-	Errors          []string                          `json:"errors"`
+type serviceGraphLogRoutesSummary struct {
+	Total  int                 `json:"total"`
+	Routes []logs.LogRouteView `json:"routes"`
 }
 
 func getServiceObservabilityGraphHandler(deps Dependencies) gin.HandlerFunc {
@@ -44,7 +42,7 @@ func getServiceObservabilityGraphHandler(deps Dependencies) gin.HandlerFunc {
 			writeError(ctx, err)
 			return
 		}
-		pipelines, err := serviceGraphPipeline(deps.CollectorConfigService, service.ID)
+		logRoutes, err := serviceGraphLogRoutes(deps.LogsService, service.ID)
 		if err != nil {
 			writeError(ctx, err)
 			return
@@ -58,7 +56,7 @@ func getServiceObservabilityGraphHandler(deps Dependencies) gin.HandlerFunc {
 			Service:    service,
 			Targets:    targets,
 			Agents:     agents,
-			Pipelines:  pipelines,
+			LogRoutes:  logRoutes,
 			AlertRules: rules,
 		}, gin.H{})
 	}
@@ -103,17 +101,12 @@ func createServiceTargetHandler(repo servicecatalog.Repository, targetRepo servi
 	}
 }
 
-func serviceGraphPipeline(configService collectorconfig.Service, serviceID string) (serviceGraphPipelineSummary, error) {
-	sources, err := configService.ServiceConfigSources(bg, serviceID)
+func serviceGraphLogRoutes(service logs.Service, serviceID string) (serviceGraphLogRoutesSummary, error) {
+	routes, err := service.ServiceRouteSummary(bg, serviceID)
 	if err != nil {
-		return serviceGraphPipelineSummary{}, err
+		return serviceGraphLogRoutesSummary{}, err
 	}
-	return serviceGraphPipelineSummary{
-		ConfigHash:      sources.ConfigHash,
-		SourceBreakdown: sources.SourceBreakdown,
-		Warnings:        sources.Warnings,
-		Errors:          sources.Errors,
-	}, nil
+	return serviceGraphLogRoutesSummary{Total: len(routes), Routes: routes}, nil
 }
 
 func serviceGraphAlertRules(alertService alerting.Service, service servicecatalog.Service) ([]alerting.Rule, error) {

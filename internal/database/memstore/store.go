@@ -26,6 +26,10 @@ type Store struct {
 	cacs map[string]interface{}
 	iis  map[string]interface{}
 	onbs map[string]interface{}
+	lges map[string]interface{}
+	lgss map[string]interface{}
+	lgrs map[string]interface{}
+	lgps map[string]interface{}
 	ars  map[string]interface{}
 	rrs  map[string]interface{}
 	rbs  map[string]interface{}
@@ -57,6 +61,10 @@ func NewStore() *Store {
 		cacs: map[string]interface{}{},
 		iis:  map[string]interface{}{},
 		onbs: map[string]interface{}{},
+		lges: map[string]interface{}{},
+		lgss: map[string]interface{}{},
+		lgrs: map[string]interface{}{},
+		lgps: map[string]interface{}{},
 		ars:  map[string]interface{}{},
 		rrs:  map[string]interface{}{},
 		rbs:  map[string]interface{}{},
@@ -102,6 +110,10 @@ func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 }
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s} }
+func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s} }
+func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s} }
+func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s} }
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore            { return &logAgentPlanStore{s} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
@@ -538,6 +550,150 @@ func (st *sppStore) FindByService(ctx context.Context, serviceID string, result 
 }
 func (st *sppStore) FindByCollectorGroup(ctx context.Context, groupID string, results interface{}) error {
 	return findByCollectorGroup(ctx, st.s, st.s.spps, groupID, results)
+}
+
+// ---------- Logs ----------
+
+type logEndpointStore struct{ s *Store }
+
+func (st *logEndpointStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	st.s.lges[id] = v
+	return nil
+}
+
+func (st *logEndpointStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lges, results)
+}
+
+func (st *logEndpointStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.lges[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *logEndpointStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lges[id]; !ok {
+		return errNotFound
+	}
+	st.s.lges[id] = v
+	return nil
+}
+
+type logSourceStore struct{ s *Store }
+
+func (st *logSourceStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if strings.TrimSpace(id) == "" {
+		id = extractID(v)
+	}
+	if id == "" {
+		id = newID()
+	}
+	st.s.lgss[id] = v
+	return nil
+}
+
+func (st *logSourceStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lgss, results)
+}
+
+func (st *logSourceStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.lgss[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+type logRouteStore struct{ s *Store }
+
+func (st *logRouteStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if strings.TrimSpace(id) == "" {
+		id = extractID(v)
+	}
+	if id == "" {
+		id = newID()
+	}
+	st.s.lgrs[id] = v
+	return nil
+}
+
+func (st *logRouteStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lgrs, results)
+}
+
+func (st *logRouteStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.lgrs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *logRouteStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lgrs[id]; !ok {
+		return errNotFound
+	}
+	st.s.lgrs[id] = v
+	return nil
+}
+
+type logAgentPlanStore struct{ s *Store }
+
+func (st *logAgentPlanStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	st.s.lgps[id] = v
+	return nil
+}
+
+func (st *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lgps, results)
+}
+
+func (st *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, value := range st.s.lgps {
+		if extractStringField(value, "RouteID") == routeID {
+			filtered[id] = value
+		}
+	}
+	return copyAll(filtered, results)
 }
 
 // ---------- Alert Rules ----------

@@ -16,6 +16,10 @@ type Store interface {
 	ServicePipelinePatches() ServicePipelinePatchStore
 	IngestionIdentities() IngestionIdentityStore
 	Onboardings() OnboardingStore
+	LogEndpoints() LogEndpointStore
+	LogSources() LogSourceStore
+	LogRoutes() LogRouteStore
+	LogAgentPlans() LogAgentPlanStore
 	AlertRules() AlertRuleStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
@@ -118,6 +122,32 @@ type OnboardingStore interface {
 	Upsert(ctx context.Context, serviceID string, onboarding interface{}) error
 	FindByService(ctx context.Context, serviceID string, result interface{}) error
 	FindByCollectorGroup(ctx context.Context, groupID string, results interface{}) error
+}
+
+type LogEndpointStore interface {
+	Insert(ctx context.Context, endpoint interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, endpoint interface{}) error
+}
+
+type LogSourceStore interface {
+	Upsert(ctx context.Context, id string, source interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+}
+
+type LogRouteStore interface {
+	Upsert(ctx context.Context, id string, route interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, route interface{}) error
+}
+
+type LogAgentPlanStore interface {
+	Insert(ctx context.Context, plan interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByRoute(ctx context.Context, routeID string, results interface{}) error
 }
 
 // AlertRuleStore manages alert rules.

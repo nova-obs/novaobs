@@ -368,6 +368,129 @@ func (s *serviceScopedStore) FindByCollectorGroup(ctx context.Context, groupID s
 	return cursor.All(ctx, results)
 }
 
+// ---------- Logs ----------
+
+type logEndpointStore struct{ col *mongo.Collection }
+
+func (s *logEndpointStore) Insert(ctx context.Context, endpoint interface{}) error {
+	_, err := s.col.InsertOne(ctx, endpoint)
+	return err
+}
+
+func (s *logEndpointStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logEndpointStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *logEndpointStore) Update(ctx context.Context, id string, endpoint interface{}) error {
+	oid, _ := objectID(id)
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, endpoint)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+type logSourceStore struct{ col *mongo.Collection }
+
+func (s *logSourceStore) Upsert(ctx context.Context, id string, source interface{}) error {
+	setDoc, insertID, err := scopedUpsertDocuments(source, id)
+	if err != nil {
+		return err
+	}
+	_, err = s.col.UpdateOne(ctx, bson.M{"_id": insertID}, bson.M{
+		"$set":         setDoc,
+		"$setOnInsert": bson.M{"_id": insertID},
+	}, options.Update().SetUpsert(true))
+	return err
+}
+
+func (s *logSourceStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logSourceStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+type logRouteStore struct{ col *mongo.Collection }
+
+func (s *logRouteStore) Upsert(ctx context.Context, id string, route interface{}) error {
+	setDoc, insertID, err := scopedUpsertDocuments(route, id)
+	if err != nil {
+		return err
+	}
+	_, err = s.col.UpdateOne(ctx, bson.M{"_id": insertID}, bson.M{
+		"$set":         setDoc,
+		"$setOnInsert": bson.M{"_id": insertID},
+	}, options.Update().SetUpsert(true))
+	return err
+}
+
+func (s *logRouteStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logRouteStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *logRouteStore) Update(ctx context.Context, id string, route interface{}) error {
+	oid, _ := objectID(id)
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, route)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+type logAgentPlanStore struct{ col *mongo.Collection }
+
+func (s *logAgentPlanStore) Insert(ctx context.Context, plan interface{}) error {
+	_, err := s.col.InsertOne(ctx, plan)
+	return err
+}
+
+func (s *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"created_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"route_id": routeID}, options.Find().SetSort(bson.M{"created_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 // ---------- AlertRuleStore ----------
 type arStore struct{ col *mongo.Collection }
 

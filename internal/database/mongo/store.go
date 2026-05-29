@@ -28,6 +28,10 @@ type Store struct {
 	sppCol *mongo.Collection
 	iiCol  *mongo.Collection
 	onbCol *mongo.Collection
+	lgeCol *mongo.Collection
+	lgsCol *mongo.Collection
+	lgrCol *mongo.Collection
+	lgpCol *mongo.Collection
 	arCol  *mongo.Collection
 	rrCol  *mongo.Collection
 	rbCol  *mongo.Collection
@@ -70,6 +74,10 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		sppCol: db.Collection("service_pipeline_patches"),
 		iiCol:  db.Collection("ingestion_identities"),
 		onbCol: db.Collection("service_onboardings"),
+		lgeCol: db.Collection("log_endpoints"),
+		lgsCol: db.Collection("log_sources"),
+		lgrCol: db.Collection("log_routes"),
+		lgpCol: db.Collection("log_agent_plans"),
 		arCol:  db.Collection("alert_rules"),
 		rrCol:  db.Collection("rbac_roles"),
 		rbCol:  db.Collection("rbac_bindings"),
@@ -117,6 +125,10 @@ func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 }
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s.iiCol} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s.onbCol} }
+func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s.lgeCol} }
+func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s.lgsCol} }
+func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s.lgrCol} }
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore            { return &logAgentPlanStore{s.lgpCol} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s.arCol} }
 func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
 func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }

@@ -107,8 +107,8 @@ func validateService(service Service) error {
 	if strings.TrimSpace(service.Environment) == "" {
 		return apperr.InvalidRequest("服务环境不能为空")
 	}
-	if service.Source != "" && service.Source != "manual" && service.Source != "cmdb" {
-		return apperr.InvalidRequest("服务来源只能是 manual 或 cmdb")
+	if service.Source != "" && service.Source != "manual" && service.Source != "cmdb" && service.Source != "k8s" {
+		return apperr.InvalidRequest("服务来源只能是 manual、cmdb 或 k8s")
 	}
 	if service.Status != "" && service.Status != "pending" && service.Status != "active" && service.Status != "degraded" {
 		return apperr.InvalidRequest("服务状态只能是 pending、active 或 degraded")
@@ -135,8 +135,12 @@ func normalizeService(service Service) Service {
 	service.AlertRoute = strings.TrimSpace(service.AlertRoute)
 	service.SLOLevel = strings.TrimSpace(service.SLOLevel)
 	service.IdentityType = strings.TrimSpace(service.IdentityType)
+	service.ServiceType = strings.TrimSpace(service.ServiceType)
 	if service.IdentityType == "" {
 		service.IdentityType = "k8s_workload"
+	}
+	if service.ServiceType == "" && service.IdentityType == "k8s_workload" {
+		service.ServiceType = "k8s业务"
 	}
 	if service.DisplayName == "" {
 		service.DisplayName = service.Name
@@ -199,6 +203,9 @@ func applyUpdate(service Service, req UpdateRequest) Service {
 	}
 	if req.IdentityType != nil {
 		service.IdentityType = *req.IdentityType
+	}
+	if req.ServiceType != nil {
+		service.ServiceType = *req.ServiceType
 	}
 	if req.Status != nil {
 		service.Status = *req.Status

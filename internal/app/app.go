@@ -12,7 +12,7 @@ import (
 	"novaobs/internal/config"
 	"novaobs/internal/database/mongo"
 	"novaobs/internal/httpapi"
-	"novaobs/internal/logquery"
+	"novaobs/internal/logs"
 	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/deployment"
@@ -54,7 +54,6 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		svcRepo,
 	)
 	alertSvc := alerting.NewService(store.AlertRules())
-	logQuerySvc := logquery.NewService()
 	rbacRepo := rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
 	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
 	if cfg.Server.Mode != gin.ReleaseMode {
@@ -120,6 +119,18 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		}),
 	)
 	opampMgr := opamp.NewManager()
+	logsSvc := logs.NewService(
+		store.LogEndpoints(),
+		store.LogSources(),
+		store.LogRoutes(),
+		store.LogAgentPlans(),
+		svcRepo,
+		targetRepo,
+		collectorSvc,
+		k8sOpsModule.Cluster,
+		k8sOpsModule.Resource,
+		k8sOpsModule.Deploy,
+	)
 
 	deps := httpapi.Dependencies{
 		Store:                  store,
@@ -128,7 +139,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		CollectorConfigService: collectorConfigSvc,
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboardingSvc,
-		LogQueryService:        logQuerySvc,
+		LogsService:            logsSvc,
 		AlertService:           alertSvc,
 		PlatformIAMService:     iamSvc,
 		K8sOpsModule:           k8sOpsModule,

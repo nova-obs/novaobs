@@ -18,6 +18,7 @@ type Service struct {
 	AlertRoute    string     `json:"alert_route" bson:"alert_route"`
 	SLOLevel      string     `json:"slo_level" bson:"slo_level"`
 	IdentityType  string     `json:"identity_type" bson:"identity_type"`
+	ServiceType   string     `json:"service_type" bson:"service_type"`
 	Status        string     `json:"status" bson:"status"`
 	Source        string     `json:"source" bson:"source"`
 	SyncStatus    string     `json:"sync_status" bson:"sync_status"`
@@ -63,6 +64,7 @@ type UpdateRequest struct {
 	AlertRoute    *string `json:"alert_route"`
 	SLOLevel      *string `json:"slo_level"`
 	IdentityType  *string `json:"identity_type"`
+	ServiceType   *string `json:"service_type"`
 	Status        *string `json:"status"`
 	Source        *string `json:"source"`
 	SyncStatus    *string `json:"sync_status"`

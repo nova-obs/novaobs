@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"novaobs/internal/alerting"
 	"novaobs/internal/collectorconfig"
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database"
-	"novaobs/internal/logquery"
+	"novaobs/internal/logs"
 	"novaobs/internal/modules/k8sops"
 	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
@@ -50,7 +49,7 @@ type Dependencies struct {
 	CollectorConfigService collectorconfig.Service
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
-	LogQueryService        logquery.Service
+	LogsService            logs.Service
 	AlertService           alerting.Service
 	PlatformIAMService     iam.Service
 	K8sOpsModule           k8sops.Module
@@ -106,13 +105,6 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/services/:id/targets", listServiceTargetsHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.POST("/services/:id/targets", createServiceTargetHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.GET("/services/:id/agents", listServiceAgentsHandler(deps.ServiceRepo, deps.CollectorService))
-	api.PUT("/services/:id/pipeline/base", putServicePipelineBaseHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/enrichment/regenerate", regenerateServicePipelineEnrichmentHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.PUT("/services/:id/pipeline/parser-rule", putServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/parser-rule/preview", previewServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/parser-rule/generate-patch", generateServicePipelineParserPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/services/:id/pipeline/sources", getServicePipelineSourcesHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/publish", publishServicePipelineHandler(deps.ServiceRepo, deps.CollectorConfigService, deps.CollectorService, deps.OpAMPManager))
 	api.GET("/services/:id/onboarding", getOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding", upsertOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding/check", checkOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
@@ -134,13 +126,15 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/collector-platform-templates/import-from-agent", importCollectorPlatformTemplateHandler(deps.CollectorConfigService, deps.OpAMPManager))
 	api.GET("/collector-platform-templates/:id", getCollectorPlatformTemplateHandler(deps.CollectorConfigService))
 	api.PUT("/collector-platform-templates/:id", updateCollectorPlatformTemplateHandler(deps.CollectorConfigService))
-	api.GET("/services/:id/enrichment-patch", getServiceEnrichmentPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/enrichment-patch/regenerate", regenerateServiceEnrichmentPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/services/:id/parser-rule", getServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.PUT("/services/:id/parser-rule", putServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/parser-rule/preview", previewServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/parser-rule/generate-patch", generateServicePipelinePatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/logs", searchLogsHandler(deps.LogQueryService))
+	api.GET("/logs/onboarding/workspace", getLogsOnboardingWorkspaceHandler(deps.LogsService))
+	api.GET("/logs/onboarding/k8s/workloads", getLogsK8sWorkloadsHandler(deps.LogsService))
+	api.POST("/logs/onboarding/k8s/sync-services", syncLogsK8sServicesHandler(deps.LogsService))
+	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
+	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
+	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
 	api.GET("/platform/me", iam.MeHandler(deps.PlatformIAMService))
@@ -590,30 +584,6 @@ func getCollectorGroupLatestConfigYAMLHandler(service collectormanagement.Servic
 	}
 }
 
-func searchLogsHandler(service logquery.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		start, ok := parseOptionalTime(ctx, "start")
-		if !ok {
-			return
-		}
-		end, ok := parseOptionalTime(ctx, "end")
-		if !ok {
-			return
-		}
-		result := service.Search(logquery.Query{
-			Service:     ctx.Query("service"),
-			Environment: ctx.Query("environment"),
-			Level:       ctx.Query("level"),
-			Keyword:     ctx.Query("keyword"),
-			TraceID:     ctx.Query("trace_id"),
-			RequestID:   ctx.Query("request_id"),
-			Start:       start,
-			End:         end,
-		})
-		response.OK(ctx, result.Items, gin.H{"total": result.Total})
-	}
-}
-
 func registerOpAMPInstanceGroupHandler(manager *opamp.Manager, collectorService collectormanagement.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		uid := ctx.Param("uid")
@@ -777,19 +747,6 @@ func parseID(ctx *gin.Context) (string, bool) {
 		return "", false
 	}
 	return id, true
-}
-
-func parseOptionalTime(ctx *gin.Context, key string) (*time.Time, bool) {
-	value := ctx.Query(key)
-	if value == "" {
-		return nil, true
-	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		writeError(ctx, apperr.InvalidRequest(fmt.Sprintf("%s 必须是 RFC3339 时间", key)))
-		return nil, false
-	}
-	return &parsed, true
 }
 
 func normalizeNotFound(err error, message string) error {
