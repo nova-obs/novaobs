@@ -44,6 +44,7 @@ type LogSource struct {
 	HostSelector     map[string]string `json:"host_selector" bson:"host_selector"`
 	PathPattern      string            `json:"path_pattern" bson:"path_pattern"`
 	ParseRules       []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
+	CollectorYAML    string            `json:"collector_yaml" bson:"collector_yaml"`
 	CreatedAt        time.Time         `json:"created_at" bson:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at" bson:"updated_at"`
 }
@@ -55,6 +56,18 @@ type LogParseRule struct {
 	Pattern  string            `json:"pattern" bson:"pattern"`
 	Fields   map[string]string `json:"fields" bson:"fields"`
 	Enabled  bool              `json:"enabled" bson:"enabled"`
+}
+
+type ParsePreviewRequest struct {
+	Sample     string         `json:"sample"`
+	ParseRules []LogParseRule `json:"parse_rules"`
+}
+
+type ParsePreviewResult struct {
+	Status   string         `json:"status"`
+	Fields   map[string]any `json:"fields"`
+	Warnings []string       `json:"warnings"`
+	Errors   []string       `json:"errors"`
 }
 
 type LogRoute struct {
@@ -106,13 +119,15 @@ type K8sSourceInput struct {
 	WorkloadSelector map[string]string `json:"workload_selector"`
 	PathPattern      string            `json:"path_pattern"`
 	ParseRules       []LogParseRule    `json:"parse_rules"`
+	CollectorYAML    string            `json:"collector_yaml"`
 }
 
 type VMSourceInput struct {
-	HostGroup    string            `json:"host_group"`
-	HostSelector map[string]string `json:"host_selector"`
-	PathPattern  string            `json:"path_pattern"`
-	ParseRules   []LogParseRule    `json:"parse_rules"`
+	HostGroup     string            `json:"host_group"`
+	HostSelector  map[string]string `json:"host_selector"`
+	PathPattern   string            `json:"path_pattern"`
+	ParseRules    []LogParseRule    `json:"parse_rules"`
+	CollectorYAML string            `json:"collector_yaml"`
 }
 
 type SyncK8sNamespaceRequest struct {

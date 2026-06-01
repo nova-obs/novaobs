@@ -495,6 +495,48 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
 }
 
+func TestRouterPreviewsLogsParseRules(t *testing.T) {
+	env := newTestRouter(t)
+
+	recorder := httptest.NewRecorder()
+	body := `{"sample":"WARN payment timeout","parse_rules":[{"name":"text","rule_type":"regex","pattern":"^(?P<level>[A-Z]+)\\s+(?P<message>.*)$","enabled":true}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"ok"`)
+	require.Contains(t, recorder.Body.String(), `"level":"WARN"`)
+	require.Contains(t, recorder.Body.String(), `"message":"payment timeout"`)
+}
+
+func TestRouterPreviewsLogsParseRulesHandlesInvalidAndDisabledRules(t *testing.T) {
+	env := newTestRouter(t)
+
+	invalidJSONRecorder := httptest.NewRecorder()
+	invalidJSONRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(`{"sample":`))
+	invalidJSONRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(invalidJSONRecorder, invalidJSONRequest)
+	require.Equal(t, http.StatusBadRequest, invalidJSONRecorder.Code)
+
+	invalidRegexRecorder := httptest.NewRecorder()
+	invalidRegexBody := `{"sample":"WARN payment timeout","parse_rules":[{"name":"broken","rule_type":"regex","pattern":"^([A-Z]+)\\s+(.*)$","enabled":true}]}`
+	invalidRegexRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(invalidRegexBody))
+	invalidRegexRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(invalidRegexRecorder, invalidRegexRequest)
+	require.Equal(t, http.StatusOK, invalidRegexRecorder.Code)
+	require.Contains(t, invalidRegexRecorder.Body.String(), `"status":"error"`)
+
+	disabledRecorder := httptest.NewRecorder()
+	disabledBody := `{"sample":"WARN payment timeout","parse_rules":[{"name":"disabled","rule_type":"regex","pattern":"^(?P<level>[A-Z]+)\\s+(?P<message>.*)$","enabled":false}]}`
+	disabledRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(disabledBody))
+	disabledRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(disabledRecorder, disabledRequest)
+	require.Equal(t, http.StatusOK, disabledRecorder.Code)
+	require.Contains(t, disabledRecorder.Body.String(), `"body":"WARN payment timeout"`)
+	require.NotContains(t, disabledRecorder.Body.String(), `"level"`)
+}
+
 func TestRouterRemovesOldServicePipelineRoutes(t *testing.T) {
 	env := newTestRouter(t)
 

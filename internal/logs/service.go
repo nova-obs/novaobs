@@ -2,6 +2,8 @@ package logs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"sort"
@@ -19,6 +21,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"gopkg.in/yaml.v3"
 )
 
 type K8sClusterService interface {
@@ -337,11 +340,11 @@ func (s Service) ensureK8sServiceTarget(ctx context.Context, service servicecata
 }
 
 func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogRoutePreview, error) {
-	route, source, endpoint, service, err := s.routeDraft(ctx, req)
+	route, source, endpoint, service, err := s.routeDraft(ctx, req, false)
 	if err != nil {
 		return LogRoutePreview{}, err
 	}
-	yaml, configHash, err := s.renderRouteConfig(ctx, renderInput{
+	renderedYAML, configHash, err := s.renderRouteConfig(ctx, renderInput{
 		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
 		Environment: service.Environment,
 		Source:      source,
@@ -356,7 +359,7 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 	return LogRoutePreview{
 		Source:               source,
 		Endpoint:             endpoint,
-		AgentYAML:            yaml,
+		AgentYAML:            renderedYAML,
 		ConfigHash:           configHash,
 		Mode:                 previewMode(source),
 		PublishBlocked:       blocked,
@@ -366,11 +369,11 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 }
 
 func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRouteView, error) {
-	route, source, endpoint, service, err := s.routeDraft(ctx, req)
+	route, source, endpoint, service, err := s.routeDraft(ctx, req, true)
 	if err != nil {
 		return LogRouteView{}, err
 	}
-	yaml, configHash, err := s.renderRouteConfig(ctx, renderInput{
+	_, configHash, err := s.renderRouteConfig(ctx, renderInput{
 		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
 		Environment: service.Environment,
 		Source:      source,
@@ -380,7 +383,6 @@ func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRo
 	if err != nil {
 		return LogRouteView{}, err
 	}
-	_ = yaml
 	route.ConfigHash = configHash
 	route.Status = "ready"
 	now := time.Now().UTC()
@@ -597,7 +599,7 @@ func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subje
 	}, nil
 }
 
-func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest) (LogRoute, LogSource, LogEndpoint, servicecatalog.Service, error) {
+func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureAgentGroup bool) (LogRoute, LogSource, LogEndpoint, servicecatalog.Service, error) {
 	req = normalizeRouteRequest(req)
 	if err := validateRouteRequest(req); err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
@@ -610,21 +612,123 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest) (LogRou
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
-	if _, err := s.collectorGroups.GetGroup(ctx, req.AgentGroupID); err != nil {
-		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, normalizeNotFound(err, "AgentGroup 不存在")
+	if err := validateCollectorYAMLForRoute(req, endpoint); err != nil {
+		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
 	source := sourceFromRequest(req)
+	agentGroupID, err := s.resolveAgentGroup(ctx, req.AgentGroupID, source, service, ensureAgentGroup)
+	if err != nil {
+		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
+	}
 	route := LogRoute{
 		ID:           primitive.NewObjectID().Hex(),
 		Name:         firstNonEmpty(req.Name, service.DisplayName, service.Name),
 		ServiceID:    service.ID,
 		SourceID:     source.ID,
 		SourceType:   source.SourceType,
-		AgentGroupID: req.AgentGroupID,
+		AgentGroupID: agentGroupID,
 		EndpointID:   endpoint.ID,
 		Status:       "draft",
 	}
 	return route, source, endpoint, service, nil
+}
+
+func (s Service) resolveAgentGroup(ctx context.Context, explicitID string, source LogSource, service servicecatalog.Service, ensure bool) (string, error) {
+	if strings.TrimSpace(explicitID) != "" {
+		if _, err := s.collectorGroups.GetGroup(ctx, explicitID); err != nil {
+			return "", normalizeNotFound(err, "AgentGroup 不存在")
+		}
+		return explicitID, nil
+	}
+	group := derivedAgentGroup(source, service)
+	groups, err := s.collectorGroups.ListGroups(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range groups {
+		if item.Name == group.Name {
+			return item.ID, nil
+		}
+	}
+	if !ensure {
+		return group.Name, nil
+	}
+	created, err := s.collectorGroups.CreateGroup(ctx, group)
+	if err != nil {
+		return "", err
+	}
+	return created.ID, nil
+}
+
+func derivedAgentGroup(source LogSource, service servicecatalog.Service) collectormanagement.CollectorGroup {
+	environment := firstNonEmpty(service.Environment, "prod")
+	ownerTeam := service.OwnerTeam
+	if source.SourceType == SourceTypeVMFile {
+		scope := firstNonEmpty(source.HostGroup, selectorFingerprint(source.HostSelector), "hosts")
+		return collectormanagement.CollectorGroup{
+			Name:            "logs-vm-" + safeSegment(environment) + "-" + safeSegment(scope),
+			DisplayName:     "VM Logs / " + scope,
+			Mode:            "shared_gateway",
+			Environment:     environment,
+			OwnerTeam:       ownerTeam,
+			Status:          "active",
+			ReceiverProfile: "filelog",
+			MaxServices:     0,
+		}
+	}
+	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
+	return collectormanagement.CollectorGroup{
+		Name:            "logs-k8s-" + safeSegment(source.ClusterID) + "-" + safeSegment(agentNamespace),
+		DisplayName:     "K8s Logs / " + source.ClusterID + " / " + agentNamespace,
+		Mode:            "dedicated_collector",
+		Environment:     environment,
+		Cluster:         source.ClusterID,
+		Namespace:       agentNamespace,
+		OwnerTeam:       ownerTeam,
+		Status:          "active",
+		ReceiverProfile: "filelog",
+		DesiredReplicas: 1,
+	}
+}
+
+func selectorFingerprint(selector map[string]string) string {
+	if len(selector) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(selector))
+	for key := range selector {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+selector[key])
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, ",")))
+	return "selector-" + hex.EncodeToString(sum[:])[:10]
+}
+
+func safeSegment(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if allowed {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(builder.String(), "-")
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }
 
 func (s Service) routeParts(ctx context.Context, routeID string) (LogRoute, LogSource, LogEndpoint, servicecatalog.Service, error) {
@@ -743,6 +847,9 @@ func (s Service) renderRouteConfig(ctx context.Context, input renderInput) (stri
 	if err != nil {
 		return "", "", err
 	}
+	if err := validateK8sBundleCollectorYAML(inputs); err != nil {
+		return "", "", err
+	}
 	yaml, hash := renderK8sDaemonSetBundle(inputs)
 	return yaml, hash, nil
 }
@@ -804,6 +911,7 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 		source.HostSelector = copyStringMap(req.VM.HostSelector)
 		source.PathPattern = req.VM.PathPattern
 		source.ParseRules = normalizeParseRules(req.VM.ParseRules)
+		source.CollectorYAML = req.VM.CollectorYAML
 		return source
 	}
 	source.ClusterID = req.K8s.ClusterID
@@ -815,6 +923,7 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 	source.WorkloadSelector = copyStringMap(req.K8s.WorkloadSelector)
 	source.PathPattern = req.K8s.PathPattern
 	source.ParseRules = normalizeParseRules(req.K8s.ParseRules)
+	source.CollectorYAML = req.K8s.CollectorYAML
 	return source
 }
 
@@ -831,16 +940,18 @@ func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
 	req.K8s.WorkloadName = strings.TrimSpace(req.K8s.WorkloadName)
 	req.K8s.Container = strings.TrimSpace(req.K8s.Container)
 	req.K8s.PathPattern = strings.TrimSpace(req.K8s.PathPattern)
+	req.K8s.CollectorYAML = strings.TrimSpace(req.K8s.CollectorYAML)
 	req.K8s.ParseRules = normalizeParseRules(req.K8s.ParseRules)
 	req.VM.HostGroup = strings.TrimSpace(req.VM.HostGroup)
 	req.VM.PathPattern = strings.TrimSpace(req.VM.PathPattern)
+	req.VM.CollectorYAML = strings.TrimSpace(req.VM.CollectorYAML)
 	req.VM.ParseRules = normalizeParseRules(req.VM.ParseRules)
 	return req
 }
 
 func validateRouteRequest(req UpsertRouteRequest) error {
-	if req.ServiceID == "" || req.SourceType == "" || req.AgentGroupID == "" {
-		return apperr.InvalidRequest("service_id、source_type 和 agent_group_id 不能为空")
+	if req.ServiceID == "" || req.SourceType == "" {
+		return apperr.InvalidRequest("service_id 和 source_type 不能为空")
 	}
 	if !validSourceType(req.SourceType) {
 		return apperr.InvalidRequest("日志来源类型只支持 k8s_stdout、k8s_hostpath、vm_file")
@@ -1014,9 +1125,6 @@ func normalizeParseRules(rules []LogParseRule) []LogParseRule {
 		if rule.Name == "" {
 			rule.Name = rule.RuleType
 		}
-		if !rule.Enabled {
-			rule.Enabled = true
-		}
 		out = append(out, rule)
 	}
 	return out
@@ -1024,6 +1132,9 @@ func normalizeParseRules(rules []LogParseRule) []LogParseRule {
 
 func validateParseRules(rules []LogParseRule) error {
 	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
 		switch rule.RuleType {
 		case ParseRuleRegex:
 			if rule.Pattern == "" {
@@ -1038,6 +1149,149 @@ func validateParseRules(rules []LogParseRule) error {
 		}
 	}
 	return nil
+}
+
+func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint) error {
+	switch req.SourceType {
+	case SourceTypeVMFile:
+		return validateCollectorYAML(req.VM.CollectorYAML, endpoint)
+	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
+		return validateCollectorYAML(req.K8s.CollectorYAML, endpoint)
+	default:
+		return nil
+	}
+}
+
+func validateK8sBundleCollectorYAML(inputs []renderInput) error {
+	if len(inputs) <= 1 {
+		return nil
+	}
+	for _, input := range inputs {
+		if strings.TrimSpace(input.Source.CollectorYAML) != "" {
+			return apperr.InvalidRequest("同一 K8s 采集域包含多条日志路由时，暂不支持完整 collector_yaml 覆盖，请使用解析规则或拆分采集域")
+		}
+	}
+	return nil
+}
+
+func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	root, err := parseCollectorYAML(raw)
+	if err != nil {
+		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
+	}
+	if mappingValue(root, "service", "pipelines", "logs") == nil {
+		return apperr.InvalidRequest("collector_yaml 必须包含 service.pipelines.logs")
+	}
+	exporters := yamlMappingValue(root, "exporters")
+	if exporters == nil || exporters.Kind != yaml.MappingNode {
+		return apperr.InvalidRequest("collector_yaml 必须声明 exporters")
+	}
+	endpoints := collectorExporterEndpoints(exporters)
+	if len(endpoints) == 0 {
+		return apperr.InvalidRequest("collector_yaml exporter 必须显式配置 VictoriaLogs 写入地址")
+	}
+	for _, item := range endpoints {
+		if item != endpoint.WriteURL {
+			return apperr.InvalidRequest("collector_yaml exporter 写入地址必须与当前 VictoriaLogs 端点一致")
+		}
+	}
+	if containsSecretLikeKey(root) {
+		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
+	}
+	return nil
+}
+
+func parseCollectorYAML(raw string) (*yaml.Node, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, err
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("collector yaml root must be mapping")
+	}
+	return doc.Content[0], nil
+}
+
+func collectorExporterEndpoints(exporters *yaml.Node) []string {
+	out := []string{}
+	for i := 0; i+1 < len(exporters.Content); i += 2 {
+		exporter := exporters.Content[i+1]
+		if exporter.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(exporter.Content); j += 2 {
+			key := exporter.Content[j].Value
+			if key != "endpoint" && key != "logs_endpoint" {
+				continue
+			}
+			value := strings.TrimSpace(exporter.Content[j+1].Value)
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsSecretLikeKey(node *yaml.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := strings.ToLower(strings.TrimSpace(node.Content[i].Value))
+			if isSecretLikeKey(key) {
+				return true
+			}
+			if containsSecretLikeKey(node.Content[i+1]) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, child := range node.Content {
+		if containsSecretLikeKey(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSecretLikeKey(key string) bool {
+	for _, token := range []string{"authorization", "password", "passwd", "token", "secret", "api_key", "apikey"} {
+		if strings.Contains(key, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func mappingValue(node *yaml.Node, path ...string) *yaml.Node {
+	current := node
+	for _, key := range path {
+		current = yamlMappingValue(current, key)
+		if current == nil {
+			return nil
+		}
+	}
+	return current
 }
 
 func serviceSummary(item servicecatalog.Service) ServiceSummary {

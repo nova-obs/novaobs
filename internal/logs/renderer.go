@@ -24,16 +24,21 @@ func renderAgentConfig(input renderInput) (string, string) {
 }
 
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
+	yaml := renderK8sDaemonSetBundleYAML(inputs, "")
+	hash := hashYAML(yaml)
+	return renderK8sDaemonSetBundleYAML(inputs, hash), hash
+}
+
+func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) string {
 	if len(inputs) == 0 {
-		return "", hashYAML("")
+		return ""
 	}
 	first := inputs[0]
 	source := first.Source
 	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
 	agentName := "novaobs-logs-agent"
-	includes := renderK8sIncludes(inputs)
-	filterExpressions := renderFilterExpressions(inputs)
-	transformStatements := renderTransformStatements(inputs)
+	collectorConfig := renderK8sCollectorConfig(inputs)
+	collectorConfigBlock := indentYAMLBlock(collectorConfig, "    ")
 	yaml := fmt.Sprintf(`apiVersion: v1
 kind: Namespace
 metadata:
@@ -74,57 +79,7 @@ metadata:
   namespace: %s
 data:
   collector.yaml: |
-    receivers:
-      filelog/k8s:
-        include:
 %s
-        include_file_path: true
-        include_file_name: false
-        start_at: end
-        operators:
-          - type: container
-    processors:
-      k8sattributes:
-        auth_type: serviceAccount
-        passthrough: false
-        filter:
-          node_from_env_var: KUBE_NODE_NAME
-        extract:
-          metadata:
-            - k8s.namespace.name
-            - k8s.pod.name
-            - k8s.container.name
-            - k8s.deployment.name
-            - k8s.statefulset.name
-            - k8s.daemonset.name
-            - k8s.cronjob.name
-            - k8s.job.name
-      filter/workload:
-        logs:
-          include:
-            match_type: expr
-            expressions:
-%s
-      transform/novaobs_routes:
-        log_statements:
-          - context: log
-            statements:
-%s
-      resource/novaobs:
-        attributes:
-          - key: novaobs.source.type
-            value: %s
-            action: upsert
-      batch:
-    exporters:
-      otlphttp/victorialogs:
-        logs_endpoint: %s
-    service:
-      pipelines:
-        logs:
-          receivers: [filelog/k8s]
-          processors: [k8sattributes, filter/workload, transform/novaobs_routes, resource/novaobs, batch]
-          exporters: [otlphttp/victorialogs]
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -143,6 +98,8 @@ spec:
       labels:
         app.kubernetes.io/name: %s
         app.kubernetes.io/part-of: novaobs
+      annotations:
+        novaobs.io/config-hash: %s
     spec:
       serviceAccountName: %s
       containers:
@@ -180,27 +137,90 @@ spec:
 		agentNamespace,
 		agentName,
 		agentNamespace,
-		includes,
-		filterExpressions,
-		transformStatements,
-		yamlQuote(source.SourceType),
-		yamlQuote(first.Endpoint.WriteURL),
+		collectorConfigBlock,
 		agentName,
 		agentNamespace,
 		agentName,
 		agentName,
 		agentName,
+		yamlQuote(configHash),
 		agentName,
 		agentName,
 	)
-	return yaml, hashYAML(yaml)
+	return yaml
+}
+
+func renderK8sCollectorConfig(inputs []renderInput) string {
+	for _, input := range inputs {
+		if strings.TrimSpace(input.Source.CollectorYAML) != "" {
+			return strings.TrimSpace(input.Source.CollectorYAML)
+		}
+	}
+	source := inputs[0].Source
+	return fmt.Sprintf(`receivers:
+  filelog/k8s:
+    include:
+%s
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    operators:
+      - type: container
+processors:
+  k8sattributes:
+    auth_type: serviceAccount
+    passthrough: false
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.container.name
+        - k8s.deployment.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.cronjob.name
+        - k8s.job.name
+  filter/workload:
+    logs:
+      include:
+        match_type: expr
+        expressions:
+%s
+  transform/novaobs_routes:
+    log_statements:
+      - context: log
+        statements:
+%s
+  resource/novaobs:
+    attributes:
+      - key: novaobs.source.type
+        value: %s
+        action: upsert
+  batch:
+exporters:
+  otlphttp/victorialogs:
+    logs_endpoint: %s
+service:
+  pipelines:
+    logs:
+      receivers: [filelog/k8s]
+      processors: [k8sattributes, filter/workload, transform/novaobs_routes, resource/novaobs, batch]
+      exporters: [otlphttp/victorialogs]`,
+		renderK8sIncludes(inputs),
+		renderFilterExpressions(inputs),
+		renderTransformStatements(inputs),
+		yamlQuote(source.SourceType),
+		yamlQuote(inputs[0].Endpoint.WriteURL),
+	)
 }
 
 func renderK8sIncludes(inputs []renderInput) string {
 	seen := map[string]bool{}
 	lines := []string{}
 	for _, input := range inputs {
-		include := fmt.Sprintf("/var/log/pods/%s_*_*/*/*.log", input.Source.Namespace)
+		include := "/var/log/pods/*_*_*/*/*.log"
 		if input.Source.SourceType == SourceTypeK8sHostPath && strings.TrimSpace(input.Source.PathPattern) != "" {
 			include = input.Source.PathPattern
 		}
@@ -260,6 +280,10 @@ func renderTransformStatements(inputs []renderInput) string {
 
 func renderVMFileConfig(input renderInput) (string, string) {
 	source := input.Source
+	if strings.TrimSpace(source.CollectorYAML) != "" {
+		yaml := strings.TrimSpace(source.CollectorYAML) + "\n"
+		return yaml, hashYAML(yaml)
+	}
 	parseProcessor := ""
 	pipelineProcessors := "resource/novaobs, batch"
 	if len(source.ParseRules) > 0 {
@@ -369,6 +393,18 @@ func yamlQuote(value string) string {
 func hashYAML(yaml string) string {
 	sum := sha256.Sum256([]byte(yaml))
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+func indentYAMLBlock(value string, prefix string) string {
+	value = strings.TrimRight(value, "\n")
+	if value == "" {
+		return prefix
+	}
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func firstNonEmpty(values ...string) string {

@@ -96,6 +96,22 @@ func previewLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func previewLogsParseRulesHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body logs.ParsePreviewRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("日志解析预览请求无效"))
+			return
+		}
+		result, err := service.PreviewParseRules(ctx.Request.Context(), body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
+	}
+}
+
 func createLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body logs.UpsertRouteRequest
