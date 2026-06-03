@@ -19,7 +19,7 @@ func HistoryHandler(service Service) gin.HandlerFunc {
 		filter := listFilterFromQuery(ctx)
 		items, err := service.ListHistory(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_deployment_history_failed", "部署历史查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_deployment_history_failed", "部署历史查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -31,7 +31,7 @@ func AuditEventsHandler(service Service) gin.HandlerFunc {
 		filter := listFilterFromQuery(ctx)
 		items, err := service.ListAuditEvents(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_audit_events_failed", "操作审计查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_audit_events_failed", "操作审计查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -149,7 +149,7 @@ func writeDeploymentError(ctx *gin.Context, err error) {
 	case errors.Is(err, ErrInvalidRequest):
 		response.Error(ctx, http.StatusBadRequest, "invalid_request", invalidDeploymentRequestMessage(err))
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_deployment_operation_failed", "发布部署操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_deployment_operation_failed", "发布部署操作失败", err)
 	}
 }
 

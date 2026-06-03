@@ -25,8 +25,12 @@ func TestResourceVersionResolverPrefersSupportedIstioCandidate(t *testing.T) {
 func TestResourceVersionResolverCoversStartorchVersionCandidates(t *testing.T) {
 	resolver := NewResourceVersionResolver(CapabilitySnapshot{
 		Resources: []APIResource{
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "namespaces", Kind: "Namespace", Namespaced: false},
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true},
 			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Namespaced: true},
 			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "persistentvolumes", Kind: "PersistentVolume", Namespaced: false},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "clusterroles", Kind: "ClusterRole", Namespaced: false},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "clusterrolebindings", Kind: "ClusterRoleBinding", Namespaced: false},
 			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "replicasets", Kind: "ReplicaSet", Namespaced: true},
 			{Group: "autoscaling", Version: "v1", GroupVersion: "autoscaling/v1", Resource: "horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler", Namespaced: true},
 			{Group: "extensions", Version: "v1beta1", GroupVersion: "extensions/v1beta1", Resource: "ingresses", Kind: "Ingress", Namespaced: true},
@@ -49,8 +53,12 @@ func TestResourceVersionResolverCoversStartorchVersionCandidates(t *testing.T) {
 		kind       string
 		want       string
 	}{
+		{name: "namespace", apiVersion: "v1", kind: "Namespace", want: "v1"},
+		{name: "serviceaccount", apiVersion: "v1", kind: "ServiceAccount", want: "v1"},
 		{name: "pvc", apiVersion: "v1", kind: "PersistentVolumeClaim", want: "v1"},
 		{name: "pv", apiVersion: "v1", kind: "PersistentVolume", want: "v1"},
+		{name: "clusterrole", apiVersion: "rbac.authorization.k8s.io/v1beta1", kind: "ClusterRole", want: "rbac.authorization.k8s.io/v1"},
+		{name: "clusterrolebinding", apiVersion: "rbac.authorization.k8s.io/v1beta1", kind: "ClusterRoleBinding", want: "rbac.authorization.k8s.io/v1"},
 		{name: "replicaset", apiVersion: "apps/v1", kind: "ReplicaSet", want: "apps/v1"},
 		{name: "hpa", apiVersion: "autoscaling/v2", kind: "HorizontalPodAutoscaler", want: "autoscaling/v1"},
 		{name: "ingress", apiVersion: "networking.k8s.io/v1", kind: "Ingress", want: "extensions/v1beta1"},

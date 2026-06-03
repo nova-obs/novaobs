@@ -112,19 +112,14 @@ func (s Service) Workspace(ctx context.Context) (Workspace, error) {
 
 func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogEndpoint, error) {
 	endpoint = normalizeEndpoint(endpoint)
-	if endpoint.Name == "" || endpoint.WriteURL == "" || endpoint.QueryURL == "" || endpoint.VMUIURL == "" {
-		return LogEndpoint{}, apperr.InvalidRequest("VictoriaLogs 端点名称、写入地址、查询地址和 VMUI 地址不能为空")
+	if err := validateEndpoint(endpoint); err != nil {
+		return LogEndpoint{}, err
 	}
 	if endpoint.ScopeType != EndpointScopeGlobal && endpoint.ScopeType != EndpointScopeK8sCluster && endpoint.ScopeType != EndpointScopeVM {
-		return LogEndpoint{}, apperr.InvalidRequest("VictoriaLogs 端点 scope_type 只支持 global、k8s_cluster 或 vm")
+		return LogEndpoint{}, apperr.InvalidRequest("日志下游端点 scope_type 只支持 global、k8s_cluster 或 vm")
 	}
 	if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == "" {
-		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级 VictoriaLogs 端点必须填写 cluster_id")
-	}
-	for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
-		if err := validateURL(rawURL); err != nil {
-			return LogEndpoint{}, err
-		}
+		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级日志下游端点必须填写 cluster_id")
 	}
 	existing, err := s.ListEndpoints(ctx)
 	if err != nil {
@@ -132,10 +127,10 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 	}
 	for _, item := range existing {
 		if strings.EqualFold(item.Name, endpoint.Name) {
-			return LogEndpoint{}, apperr.Conflict("VictoriaLogs 端点名称已存在")
+			return LogEndpoint{}, apperr.Conflict("日志下游端点名称已存在")
 		}
 		if endpoint.ScopeType == EndpointScopeK8sCluster && item.ScopeType == EndpointScopeK8sCluster && item.ClusterID == endpoint.ClusterID {
-			return LogEndpoint{}, apperr.Conflict("该 K8s 集群已绑定 VictoriaLogs 端点")
+			return LogEndpoint{}, apperr.Conflict("该 K8s 集群已绑定日志下游端点")
 		}
 	}
 	if endpoint.ID == "" {
@@ -157,6 +152,9 @@ func (s Service) ListEndpoints(ctx context.Context) ([]LogEndpoint, error) {
 	var endpoints []LogEndpoint
 	if err := s.endpoints.FindAll(ctx, &endpoints); err != nil {
 		return nil, err
+	}
+	for index := range endpoints {
+		endpoints[index] = normalizeEndpoint(endpoints[index])
 	}
 	sort.SliceStable(endpoints, func(i, j int) bool {
 		return endpoints[i].Name < endpoints[j].Name
@@ -399,6 +397,62 @@ func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRo
 	return LogRouteView{Route: route, Source: &source, Endpoint: &endpoint}, nil
 }
 
+func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRouteRequest) (LogRouteView, error) {
+	existing, err := s.getRoute(ctx, routeID)
+	if err != nil {
+		return LogRouteView{}, err
+	}
+	existingSource, err := s.getSource(ctx, existing.SourceID)
+	if err != nil {
+		return LogRouteView{}, err
+	}
+	req.RouteID = existing.ID
+	route, source, endpoint, service, err := s.routeDraft(ctx, req, true)
+	if err != nil {
+		return LogRouteView{}, err
+	}
+	route.ID = existing.ID
+	route.SourceID = existing.SourceID
+	route.CreatedAt = existing.CreatedAt
+	source.ID = existing.SourceID
+	source.CreatedAt = existingSource.CreatedAt
+	_, configHash, err := s.renderRouteConfig(ctx, renderInput{
+		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+		Environment: service.Environment,
+		Source:      source,
+		Endpoint:    endpoint,
+		Route:       route,
+	})
+	if err != nil {
+		return LogRouteView{}, err
+	}
+	now := time.Now().UTC()
+	route.ConfigHash = configHash
+	route.Status = "ready"
+	route.UpdatedAt = now
+	source.UpdatedAt = now
+	if existing.ConfigHash == configHash {
+		route.LastProbeStatus = existing.LastProbeStatus
+		route.LastProbeMessage = existing.LastProbeMessage
+		route.LastProbeAt = existing.LastProbeAt
+		route.LastPublishStatus = existing.LastPublishStatus
+		route.LastPublishMessage = existing.LastPublishMessage
+		route.LastPublishedAt = existing.LastPublishedAt
+		route.LastAuditID = existing.LastAuditID
+		route.LastPreviewID = existing.LastPreviewID
+	} else {
+		route.LastPublishStatus = "pending_publish"
+		route.LastPublishMessage = "配置已更新，等待发布"
+	}
+	if err := s.sources.Upsert(ctx, source.ID, source); err != nil {
+		return LogRouteView{}, err
+	}
+	if err := s.routes.Update(ctx, route.ID, route); err != nil {
+		return LogRouteView{}, err
+	}
+	return LogRouteView{Route: route, Source: &source, Endpoint: &endpoint}, nil
+}
+
 func (s Service) ProbeRoute(ctx context.Context, routeID string) (ProbeResult, error) {
 	route, source, endpoint, _, err := s.routeParts(ctx, routeID)
 	if err != nil {
@@ -501,8 +555,9 @@ func (s Service) previewK8sPublish(ctx context.Context, subject platformrbac.Sub
 		return PublishRouteResult{}, apperr.InvalidRequest("K8s 部署服务不可用")
 	}
 	result, err := s.k8sDeployments.Preview(ctx, subject, k8sopsdeployment.OperationRequest{
-		ClusterID:   source.ClusterID,
-		YAMLContent: yaml,
+		ClusterID:      source.ClusterID,
+		YAMLContent:    yaml,
+		ForceConflicts: true,
 	})
 	if err != nil {
 		return PublishRouteResult{}, err
@@ -546,6 +601,7 @@ func (s Service) previewK8sPublish(ctx context.Context, subject platformrbac.Sub
 		ConfirmationToken:    result.ConfirmationToken,
 		AuditID:              result.AuditID,
 		Resources:            result.Resources,
+		Diffs:                result.Diffs,
 		Warnings:             result.Warnings,
 	}, nil
 }
@@ -556,6 +612,7 @@ func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subje
 		YAMLContent:       yaml,
 		PreviewID:         req.PreviewID,
 		ConfirmationToken: req.ConfirmationToken,
+		ForceConflicts:    true,
 	})
 	if err != nil {
 		return PublishRouteResult{}, err
@@ -595,6 +652,7 @@ func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subje
 		Message:   result.Message,
 		AuditID:   result.AuditID,
 		Resources: result.Resources,
+		Diffs:     result.Diffs,
 		Warnings:  result.Warnings,
 	}, nil
 }
@@ -607,6 +665,9 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 	service, err := s.services.Get(ctx, req.ServiceID)
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, normalizeNotFound(err, "服务不存在")
+	}
+	if err := validateServiceSourceMatch(service, req.SourceType); err != nil {
+		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
 	endpoint, err := s.endpointForRoute(ctx, req)
 	if err != nil {
@@ -621,7 +682,7 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
 	route := LogRoute{
-		ID:           primitive.NewObjectID().Hex(),
+		ID:           firstNonEmpty(req.RouteID, primitive.NewObjectID().Hex()),
 		Name:         firstNonEmpty(req.Name, service.DisplayName, service.Name),
 		ServiceID:    service.ID,
 		SourceID:     source.ID,
@@ -631,6 +692,20 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 		Status:       "draft",
 	}
 	return route, source, endpoint, service, nil
+}
+
+func validateServiceSourceMatch(service servicecatalog.Service, sourceType string) error {
+	switch sourceType {
+	case SourceTypeVMFile:
+		if service.IdentityType != "host_process" {
+			return apperr.InvalidRequest("VM 日志接入只能选择 VM/物理机服务")
+		}
+	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
+		if service.IdentityType != "" && service.IdentityType != "k8s_workload" {
+			return apperr.InvalidRequest("K8s 日志接入只能选择 K8s 服务")
+		}
+	}
+	return nil
 }
 
 func (s Service) resolveAgentGroup(ctx context.Context, explicitID string, source LogSource, service servicecatalog.Service, ensure bool) (string, error) {
@@ -754,9 +829,9 @@ func (s Service) routeParts(ctx context.Context, routeID string) (LogRoute, LogS
 func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error) {
 	var endpoint LogEndpoint
 	if err := s.endpoints.FindByID(ctx, strings.TrimSpace(id), &endpoint); err != nil {
-		return LogEndpoint{}, normalizeNotFound(err, "VictoriaLogs 端点不存在")
+		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
-	return endpoint, nil
+	return normalizeEndpoint(endpoint), nil
 }
 
 func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (LogEndpoint, error) {
@@ -767,16 +842,16 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 		}
 		if req.SourceType == SourceTypeVMFile {
 			if endpoint.ScopeType == EndpointScopeK8sCluster {
-				return LogEndpoint{}, apperr.InvalidRequest("VM 文件日志路由不能选择 K8s 集群级 VictoriaLogs 端点")
+				return LogEndpoint{}, apperr.InvalidRequest("VM 文件日志路由不能选择 K8s 集群级日志下游端点")
 			}
 			return endpoint, nil
 		}
 		switch endpoint.ScopeType {
 		case EndpointScopeVM:
-			return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由不能选择 VM 专用 VictoriaLogs 端点")
+			return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由不能选择 VM 专用日志下游端点")
 		case EndpointScopeK8sCluster:
 			if endpoint.ClusterID != req.K8s.ClusterID {
-				return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由只能选择当前集群绑定的 VictoriaLogs 端点")
+				return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由只能选择当前集群绑定的日志下游端点")
 			}
 		case EndpointScopeGlobal:
 			clusterEndpoint, ok, err := s.clusterEndpoint(ctx, req.K8s.ClusterID)
@@ -784,13 +859,13 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 				return LogEndpoint{}, err
 			}
 			if ok && clusterEndpoint.ID != endpoint.ID {
-				return LogEndpoint{}, apperr.InvalidRequest("当前集群已有绑定的 VictoriaLogs 端点，请使用集群绑定端点")
+				return LogEndpoint{}, apperr.InvalidRequest("当前集群已有绑定的日志下游端点，请使用集群绑定端点")
 			}
 		}
 		return endpoint, nil
 	}
 	if req.SourceType == SourceTypeVMFile {
-		return LogEndpoint{}, apperr.InvalidRequest("VM 文件接入必须选择 VictoriaLogs 端点")
+		return LogEndpoint{}, apperr.InvalidRequest("VM 文件接入必须选择日志下游端点")
 	}
 	endpoints, err := s.ListEndpoints(ctx)
 	if err != nil {
@@ -806,7 +881,7 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 			return endpoint, nil
 		}
 	}
-	return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群未绑定 VictoriaLogs 端点")
+	return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群未绑定日志下游端点")
 }
 
 func (s Service) clusterEndpoint(ctx context.Context, clusterID string) (LogEndpoint, bool, error) {
@@ -928,6 +1003,7 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 }
 
 func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
+	req.RouteID = strings.TrimSpace(req.RouteID)
 	req.Name = strings.TrimSpace(req.Name)
 	req.ServiceID = strings.TrimSpace(req.ServiceID)
 	req.SourceType = strings.TrimSpace(req.SourceType)
@@ -967,7 +1043,7 @@ func validateRouteRequest(req UpsertRouteRequest) error {
 		}
 	case SourceTypeVMFile:
 		if req.EndpointID == "" {
-			return apperr.InvalidRequest("VM 文件接入必须选择 VictoriaLogs 端点")
+			return apperr.InvalidRequest("VM 文件接入必须选择日志下游端点")
 		}
 		if req.VM.PathPattern == "" || (req.VM.HostGroup == "" && len(req.VM.HostSelector) == 0) {
 			return apperr.InvalidRequest("VM 文件接入必须填写主机组或主机标签，并填写日志路径")
@@ -989,6 +1065,8 @@ func validSourceType(value string) bool {
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
 	endpoint.Description = strings.TrimSpace(endpoint.Description)
+	endpoint.SinkType = strings.ToLower(strings.TrimSpace(endpoint.SinkType))
+	endpoint.StreamName = strings.TrimSpace(endpoint.StreamName)
 	endpoint.WriteURL = strings.TrimSpace(endpoint.WriteURL)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
 	endpoint.VMUIURL = strings.TrimSpace(endpoint.VMUIURL)
@@ -1003,16 +1081,76 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 			endpoint.ScopeType = EndpointScopeGlobal
 		}
 	}
+	if endpoint.SinkType == "" {
+		endpoint.SinkType = EndpointSinkVL
+	}
 	return endpoint
 }
 
-func validateURL(raw string) error {
+func validateEndpoint(endpoint LogEndpoint) error {
+	if endpoint.Name == "" || endpoint.WriteURL == "" {
+		return apperr.InvalidRequest("日志下游端点名称和写入地址不能为空")
+	}
+	if !validEndpointSinkType(endpoint.SinkType) {
+		return apperr.InvalidRequest("日志下游端点类型只支持 vl、es 或 kafka")
+	}
+	switch endpoint.SinkType {
+	case EndpointSinkVL:
+		if endpoint.QueryURL == "" || endpoint.VMUIURL == "" {
+			return apperr.InvalidRequest("VL 下游端点必须填写写入地址、查询地址和 VMUI 地址")
+		}
+		for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
+			if err := validateHTTPURL(rawURL, "VL 下游端点地址"); err != nil {
+				return err
+			}
+		}
+	case EndpointSinkES:
+		if err := validateHTTPURL(endpoint.WriteURL, "ES 下游端点写入地址"); err != nil {
+			return err
+		}
+		for _, rawURL := range []string{endpoint.QueryURL, endpoint.VMUIURL} {
+			if rawURL == "" {
+				continue
+			}
+			if err := validateHTTPURL(rawURL, "ES 下游端点查询地址"); err != nil {
+				return err
+			}
+		}
+	case EndpointSinkKafka:
+		if endpoint.StreamName == "" {
+			return apperr.InvalidRequest("Kafka 下游端点必须填写 topic")
+		}
+		if err := validateKafkaBrokers(endpoint.WriteURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validEndpointSinkType(value string) bool {
+	return value == EndpointSinkVL || value == EndpointSinkES || value == EndpointSinkKafka
+}
+
+func validateHTTPURL(raw string, label string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return apperr.InvalidRequest("VictoriaLogs URL 必须是完整的 http/https 地址")
+		return apperr.InvalidRequest(label + "必须是完整的 http/https 地址")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return apperr.InvalidRequest("VictoriaLogs URL 只支持 http/https")
+		return apperr.InvalidRequest(label + "只支持 http/https")
+	}
+	return nil
+}
+
+func validateKafkaBrokers(raw string) error {
+	brokers := splitEndpointList(raw)
+	if len(brokers) == 0 {
+		return apperr.InvalidRequest("Kafka 下游端点 brokers 不能为空")
+	}
+	for _, broker := range brokers {
+		if strings.ContainsAny(broker, " \t\r\n") {
+			return apperr.InvalidRequest("Kafka 下游端点 brokers 不能包含空白字符")
+		}
 	}
 	return nil
 }
@@ -1106,7 +1244,7 @@ func previewWarnings(source LogSource, endpoint LogEndpoint) []string {
 		}
 	}
 	if endpoint.SecretRef == "" {
-		warnings = append(warnings, "VictoriaLogs 端点未配置 secret_ref，当前预览不会持久化明文凭据")
+		warnings = append(warnings, "日志下游端点未配置 secret_ref，当前预览不会持久化明文凭据")
 	}
 	return warnings
 }
@@ -1156,19 +1294,45 @@ func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint)
 	case SourceTypeVMFile:
 		return validateCollectorYAML(req.VM.CollectorYAML, endpoint)
 	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
-		return validateCollectorYAML(req.K8s.CollectorYAML, endpoint)
+		if err := validateCollectorYAML(req.K8s.CollectorYAML, endpoint); err != nil {
+			return err
+		}
+		return validateK8sCollectorYAMLRuntimeScope(req.K8s.CollectorYAML)
 	default:
 		return nil
 	}
 }
 
 func validateK8sBundleCollectorYAML(inputs []renderInput) error {
-	if len(inputs) <= 1 {
+	customCount := 0
+	for _, input := range inputs {
+		raw := strings.TrimSpace(input.Source.CollectorYAML)
+		if raw == "" {
+			continue
+		}
+		customCount++
+		if err := validateK8sCollectorYAMLRuntimeScope(raw); err != nil {
+			return err
+		}
+	}
+	if len(inputs) > 1 && customCount > 0 {
+		return apperr.InvalidRequest("同一 K8s 采集域包含多条日志路由时，暂不支持完整 collector_yaml 覆盖，请使用解析规则或拆分采集域")
+	}
+	return nil
+}
+
+func validateK8sCollectorYAMLRuntimeScope(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return nil
 	}
-	for _, input := range inputs {
-		if strings.TrimSpace(input.Source.CollectorYAML) != "" {
-			return apperr.InvalidRequest("同一 K8s 采集域包含多条日志路由时，暂不支持完整 collector_yaml 覆盖，请使用解析规则或拆分采集域")
+	root, err := parseCollectorYAML(raw)
+	if err != nil {
+		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
+	}
+	for _, include := range collectorReceiverIncludes(root) {
+		if include == "/var/log/pods/*_*_*/*/*.log" {
+			return apperr.InvalidRequest("K8s collector_yaml 不能使用全局 Pod 日志路径，请按 Namespace/Workload 生成采集路径后再发布")
 		}
 	}
 	return nil
@@ -1192,12 +1356,10 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 	}
 	endpoints := collectorExporterEndpoints(exporters)
 	if len(endpoints) == 0 {
-		return apperr.InvalidRequest("collector_yaml exporter 必须显式配置 VictoriaLogs 写入地址")
+		return apperr.InvalidRequest("collector_yaml exporter 必须显式配置日志下游写入地址")
 	}
-	for _, item := range endpoints {
-		if item != endpoint.WriteURL {
-			return apperr.InvalidRequest("collector_yaml exporter 写入地址必须与当前 VictoriaLogs 端点一致")
-		}
+	if !collectorExporterTargetsMatch(endpoints, endpoint) {
+		return apperr.InvalidRequest("collector_yaml exporter 写入地址必须与当前日志下游端点一致")
 	}
 	if containsSecretLikeKey(root) {
 		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
@@ -1225,16 +1387,81 @@ func collectorExporterEndpoints(exporters *yaml.Node) []string {
 		}
 		for j := 0; j+1 < len(exporter.Content); j += 2 {
 			key := exporter.Content[j].Value
-			if key != "endpoint" && key != "logs_endpoint" {
+			if key != "endpoint" && key != "logs_endpoint" && key != "endpoints" && key != "brokers" {
 				continue
 			}
-			value := strings.TrimSpace(exporter.Content[j+1].Value)
-			if value != "" {
-				out = append(out, value)
-			}
+			out = append(out, yamlStringValues(exporter.Content[j+1])...)
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+func yamlStringValues(node *yaml.Node) []string {
+	if node == nil {
+		return nil
+	}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return splitEndpointList(node.Value)
+	case yaml.SequenceNode:
+		out := []string{}
+		for _, item := range node.Content {
+			out = append(out, yamlStringValues(item)...)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func collectorReceiverIncludes(root *yaml.Node) []string {
+	receivers := yamlMappingValue(root, "receivers")
+	if receivers == nil || receivers.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := []string{}
+	for i := 0; i+1 < len(receivers.Content); i += 2 {
+		receiver := receivers.Content[i+1]
+		if receiver.Kind != yaml.MappingNode {
+			continue
+		}
+		includes := yamlMappingValue(receiver, "include")
+		out = append(out, yamlStringValues(includes)...)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectorExporterTargetsMatch(actual []string, endpoint LogEndpoint) bool {
+	expected := splitEndpointList(endpoint.WriteURL)
+	if endpoint.SinkType != EndpointSinkKafka {
+		expected = []string{endpoint.WriteURL}
+	}
+	if len(expected) == 0 {
+		return false
+	}
+	actualSet := map[string]bool{}
+	for _, item := range actual {
+		actualSet[item] = true
+	}
+	for _, item := range expected {
+		if !actualSet[item] {
+			return false
+		}
+	}
+	return len(actualSet) == len(expected)
+}
+
+func splitEndpointList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
 	return out
 }
 

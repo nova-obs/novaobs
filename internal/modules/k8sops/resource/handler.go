@@ -39,7 +39,7 @@ func ListHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusBadRequest, "invalid_request", "资源列表必须指定命名空间")
 				return
 			}
-			response.Error(ctx, http.StatusInternalServerError, "k8s_resource_list_failed", "资源列表查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_resource_list_failed", "资源列表查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -105,7 +105,7 @@ func PodLogsHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusNotFound, "k8s_resource_not_found", "资源不存在")
 				return
 			}
-			response.Error(ctx, http.StatusInternalServerError, "k8s_pod_logs_failed", "Pod 日志查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_pod_logs_failed", "Pod 日志查询失败", err)
 			return
 		}
 		response.OK(ctx, logs, gin.H{})
@@ -131,7 +131,7 @@ func RuntimeGroupsHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusBadRequest, "invalid_request", "运行时拓扑必须指定集群和单个命名空间")
 				return
 			}
-			response.Error(ctx, http.StatusInternalServerError, "k8s_runtime_groups_failed", "运行时拓扑查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_runtime_groups_failed", "运行时拓扑查询失败", err)
 			return
 		}
 		response.OK(ctx, result, gin.H{})

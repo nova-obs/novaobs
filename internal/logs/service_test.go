@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"novaobs/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
@@ -131,10 +133,65 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	require.Equal(t, route.Route.AgentGroupID, secondRoute.Route.AgentGroupID)
 }
 
+func TestPreviewAndUpdateK8sRouteWithCollectorYAMLExcludeCurrentRoute(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+	require.NoError(t, err)
+
+	updateReq := UpsertRouteRequest{
+		RouteID:    route.Route.ID,
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:      "test03",
+			Namespace:      "logplatform",
+			AgentNamespace: "novaobs-system",
+			WorkloadKind:   "Deployment",
+			WorkloadName:   "utrace-api",
+			CollectorYAML:  validCollectorYAML(endpoint.WriteURL, ""),
+		},
+	}
+	preview, err := fixture.service.PreviewRoute(ctx, updateReq)
+	require.NoError(t, err)
+	require.Contains(t, preview.AgentYAML, "file_log/custom")
+
+	updated, err := fixture.service.UpdateRoute(ctx, route.Route.ID, updateReq)
+	require.NoError(t, err)
+	require.Equal(t, route.Route.ID, updated.Route.ID)
+	require.Equal(t, route.Route.SourceID, updated.Route.SourceID)
+	require.Equal(t, "pending_publish", updated.Route.LastPublishStatus)
+	require.Contains(t, updated.Source.CollectorYAML, "file_log/custom")
+
+	routes, err := fixture.service.ListRoutes(ctx)
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+}
+
 func TestCreateVMRouteAutoCreatesHostAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	service := fixture.createService(t, "billing-api")
+	service := fixture.createVMService(t, "billing-api")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-vm",
 		WriteURL:  "http://vl.vm:9428/insert/opentelemetry/v1/logs",
@@ -163,10 +220,93 @@ func TestCreateVMRouteAutoCreatesHostAgentGroup(t *testing.T) {
 	require.Empty(t, group.Namespace)
 }
 
+func TestRouteRejectsServiceIdentityMismatchedWithSource(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	k8sService := fixture.createService(t, "utrace-api")
+	vmService := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "logs-downstream",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ScopeType: EndpointScopeGlobal,
+	})
+	require.NoError(t, err)
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  k8sService.ID,
+		SourceType: SourceTypeVMFile,
+		EndpointID: endpoint.ID,
+		VM: VMSourceInput{
+			HostGroup:   "billing-vms",
+			PathPattern: "/data/logs/*.log",
+		},
+	})
+	require.ErrorContains(t, err, "VM 日志接入只能选择 VM/物理机服务")
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  vmService.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "billing-api",
+		},
+	})
+	require.ErrorContains(t, err, "K8s 日志接入只能选择 K8s 服务")
+}
+
+func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+
+	vlEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-prod",
+		SinkType: EndpointSinkVL,
+		WriteURL: "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:  "http://vl.prod:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	require.Equal(t, EndpointSinkVL, vlEndpoint.SinkType)
+
+	esEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:       "es-prod",
+		SinkType:   EndpointSinkES,
+		StreamName: "novaobs-logs",
+		WriteURL:   "http://elasticsearch.prod:9200",
+		ScopeType:  EndpointScopeVM,
+	})
+	require.NoError(t, err)
+	require.Equal(t, EndpointSinkES, esEndpoint.SinkType)
+	require.Equal(t, "novaobs-logs", esEndpoint.StreamName)
+
+	kafkaEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:       "kafka-prod",
+		SinkType:   EndpointSinkKafka,
+		StreamName: "novaobs-logs",
+		WriteURL:   "kafka-0.prod:9092,kafka-1.prod:9092",
+		ScopeType:  EndpointScopeVM,
+	})
+	require.NoError(t, err)
+	require.Equal(t, EndpointSinkKafka, kafkaEndpoint.SinkType)
+
+	_, err = fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "kafka-missing-topic",
+		SinkType:  EndpointSinkKafka,
+		WriteURL:  "kafka-0.prod:9092",
+		ScopeType: EndpointScopeVM,
+	})
+	require.ErrorContains(t, err, "Kafka 下游端点必须填写 topic")
+}
+
 func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	service := fixture.createService(t, "billing-api")
+	service := fixture.createVMService(t, "billing-api")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-vm",
 		WriteURL:  "http://vl.vm:9428/insert/opentelemetry/v1/logs",
@@ -183,7 +323,7 @@ func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 		VM: VMSourceInput{
 			HostGroup:     "billing-vms",
 			PathPattern:   "/data/logs/*.log",
-			CollectorYAML: "receivers:\n  filelog/custom:\n",
+			CollectorYAML: "receivers:\n  file_log/custom:\n",
 		},
 	})
 	require.ErrorContains(t, err, "collector_yaml 必须包含 service.pipelines.logs")
@@ -201,7 +341,7 @@ func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 			),
 		},
 	})
-	require.ErrorContains(t, err, "collector_yaml exporter 写入地址必须与当前 VictoriaLogs 端点一致")
+	require.ErrorContains(t, err, "collector_yaml exporter 写入地址必须与当前日志下游端点一致")
 
 	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  service.ID,
@@ -214,6 +354,63 @@ func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 		},
 	})
 	require.ErrorContains(t, err, "collector_yaml 不能直接包含")
+}
+
+func TestValidateCollectorYAMLSupportsESAndKafkaExporters(t *testing.T) {
+	esEndpoint := LogEndpoint{SinkType: EndpointSinkES, WriteURL: "http://elasticsearch.prod:9200"}
+	require.NoError(t, validateCollectorYAML(validESCollectorYAML(esEndpoint.WriteURL), esEndpoint))
+
+	kafkaEndpoint := LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaobs-logs"}
+	require.NoError(t, validateCollectorYAML(validKafkaCollectorYAML([]string{"kafka-0.prod:9092", "kafka-1.prod:9092"}), kafkaEndpoint))
+
+	err := validateCollectorYAML(validKafkaCollectorYAML([]string{"kafka-other.prod:9092"}), kafkaEndpoint)
+	require.ErrorContains(t, err, "collector_yaml exporter 写入地址必须与当前日志下游端点一致")
+}
+
+func TestK8sCollectorYAMLRejectsGlobalPodLogInclude(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	globalIncludeYAML := strings.ReplaceAll(validCollectorYAML(endpoint.WriteURL, ""), "/data/app.log", "/var/log/pods/*_*_*/*/*.log")
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:      "test03",
+			Namespace:      "logplatform",
+			AgentNamespace: "novaobs-system",
+			WorkloadKind:   "Deployment",
+			WorkloadName:   "utrace-api",
+			CollectorYAML:  globalIncludeYAML,
+		},
+	})
+	require.ErrorContains(t, err, "不能使用全局 Pod 日志路径")
+
+	err = validateK8sBundleCollectorYAML([]renderInput{{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:    SourceTypeK8sStdout,
+			ClusterID:     "test03",
+			Namespace:     "logplatform",
+			WorkloadKind:  "Deployment",
+			WorkloadName:  "utrace-api",
+			CollectorYAML: globalIncludeYAML,
+		},
+		Endpoint: endpoint,
+		Route:    LogRoute{ID: "route-001"},
+	}})
+	require.ErrorContains(t, err, "不能使用全局 Pod 日志路径")
 }
 
 func TestK8sRouteRejectsCustomCollectorYAMLWhenBundleHasMultipleRoutes(t *testing.T) {
@@ -301,11 +498,11 @@ func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
 	}
 	req.EndpointID = globalEndpoint.ID
 	_, err = fixture.service.PreviewRoute(ctx, req)
-	require.ErrorContains(t, err, "当前集群已有绑定的 VictoriaLogs 端点")
+	require.ErrorContains(t, err, "当前集群已有绑定的日志下游端点")
 
 	req.EndpointID = vmEndpoint.ID
 	_, err = fixture.service.PreviewRoute(ctx, req)
-	require.ErrorContains(t, err, "K8s 日志路由不能选择 VM 专用 VictoriaLogs 端点")
+	require.ErrorContains(t, err, "K8s 日志路由不能选择 VM 专用日志下游端点")
 }
 
 func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T) {
@@ -361,6 +558,9 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 
 	require.NoError(t, err)
 	require.True(t, result.RequiresConfirmation)
+	require.Len(t, result.Resources, 2)
+	require.Len(t, result.Diffs, 2)
+	require.True(t, deploy.lastPreviewReq.ForceConflicts)
 	require.Contains(t, deploy.lastPreviewYAML, "kind: DaemonSet")
 	require.Contains(t, deploy.lastPreviewYAML, "name: novaobs-logs-agent")
 	require.Equal(t, 1, strings.Count(deploy.lastPreviewYAML, "kind: DaemonSet"))
@@ -368,6 +568,44 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 	require.Contains(t, deploy.lastPreviewYAML, "payment-api")
 	require.Contains(t, deploy.lastPreviewYAML, "ExtractPatterns(body,")
 	require.Contains(t, deploy.lastPreviewYAML, "payment-text")
+}
+
+func TestPublishK8sRouteApplyForcesManagedFieldConflicts(t *testing.T) {
+	ctx := context.Background()
+	deploy := &fakeDeploymentService{}
+	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	service := fixture.createService(t, "utrace-api")
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{
+		PreviewID:         "preview-1",
+		ConfirmationToken: "confirm-1",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "applied", result.Status)
+	require.True(t, deploy.lastApplyReq.ForceConflicts)
+	require.Equal(t, "preview-1", deploy.lastApplyReq.PreviewID)
+	require.Equal(t, "confirm-1", deploy.lastApplyReq.ConfirmationToken)
 }
 
 func TestPreviewParseRulesReturnsFieldsAndErrors(t *testing.T) {
@@ -449,10 +687,48 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	yaml, hash := renderK8sDaemonSetBundle([]renderInput{input})
 
 	require.NotEmpty(t, hash)
-	require.Contains(t, yaml, `- "/var/log/pods/*_*_*/*/*.log"`)
-	require.NotContains(t, yaml, `/var/log/pods/logplatform_*_*/*/*.log`)
+	require.Contains(t, yaml, `- "/var/log/pods/logplatform_utrace-api*_*/*/*.log"`)
+	require.NotContains(t, yaml, `- "/var/log/pods/*_*_*/*/*.log"`)
+	require.Contains(t, yaml, "file_log/k8s")
+	require.Contains(t, yaml, "otlp_http/logs_downstream")
+	require.Contains(t, yaml, "file_storage/filelog_offsets")
+	require.Contains(t, yaml, "poll_interval: 5s")
+	require.Contains(t, yaml, "storage: file_storage/filelog_offsets")
 	require.Contains(t, yaml, `novaobs.io/config-hash: "`)
 	require.Contains(t, yaml, hash)
+}
+
+func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
+	input := renderInput{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:   SourceTypeK8sStdout,
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-001"},
+	}
+
+	rendered, _ := renderK8sDaemonSetBundle([]renderInput{input})
+
+	require.Contains(t, k8sDaemonSetBundleTemplateSource, "kind: DaemonSet")
+	require.Contains(t, rendered, "mountPath: /var/log/pods")
+	require.Contains(t, rendered, "mountPath: /var/log/containers")
+	require.Contains(t, rendered, "mountPath: /var/lib/docker/containers")
+	require.Contains(t, rendered, "mountPath: /var/lib/otelcol")
+	require.Contains(t, rendered, "name: offset-storage")
+	require.Equal(t, []string{
+		"Namespace",
+		"ServiceAccount",
+		"ClusterRole",
+		"ClusterRoleBinding",
+		"ConfigMap",
+		"DaemonSet",
+	}, renderedKinds(t, rendered))
 }
 
 func TestK8sDaemonSetEmbedsCustomCollectorYAML(t *testing.T) {
@@ -475,9 +751,9 @@ func TestK8sDaemonSetEmbedsCustomCollectorYAML(t *testing.T) {
 
 	require.NotEmpty(t, hash)
 	require.Contains(t, yaml, "collector.yaml: |")
-	require.Contains(t, yaml, "    receivers:\n      filelog/custom:")
+	require.Contains(t, yaml, "    receivers:\n      file_log/custom:")
 	require.Contains(t, yaml, `logs_endpoint: "http://vl.test03:9428/insert/opentelemetry/v1/logs"`)
-	require.NotContains(t, yaml, "filelog/k8s")
+	require.NotContains(t, yaml, "file_log/k8s")
 }
 
 func TestVMFileConfigUsesCustomCollectorYAML(t *testing.T) {
@@ -497,9 +773,60 @@ func TestVMFileConfigUsesCustomCollectorYAML(t *testing.T) {
 	yaml, hash := renderVMFileConfig(input)
 
 	require.NotEmpty(t, hash)
-	require.Contains(t, yaml, "receivers:\n  filelog/custom:")
+	require.Contains(t, yaml, "receivers:\n  file_log/custom:")
 	require.Contains(t, yaml, `logs_endpoint: "http://vl.vm:9428/insert/opentelemetry/v1/logs"`)
 	require.NotContains(t, yaml, "service.name")
+}
+
+func TestRenderConfigUsesDownstreamExporterByEndpointType(t *testing.T) {
+	vmInput := renderInput{
+		ServiceName: "billing-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:  SourceTypeVMFile,
+			HostGroup:   "vm-prod",
+			PathPattern: "/data/logs/*.log",
+		},
+		Route: LogRoute{ID: "route-vm"},
+	}
+
+	esInput := vmInput
+	esInput.Endpoint = LogEndpoint{SinkType: EndpointSinkES, WriteURL: "http://elasticsearch.prod:9200", StreamName: "novaobs-logs"}
+	esYAML, _ := renderVMFileConfig(esInput)
+	require.Contains(t, esYAML, "elasticsearch/logs_downstream:")
+	require.Contains(t, esYAML, `- "http://elasticsearch.prod:9200"`)
+	require.Contains(t, esYAML, `logs_index: "novaobs-logs"`)
+	require.Contains(t, esYAML, "exporters: [elasticsearch/logs_downstream]")
+
+	kafkaInput := vmInput
+	kafkaInput.Endpoint = LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaobs-logs"}
+	kafkaYAML, _ := renderVMFileConfig(kafkaInput)
+	require.Contains(t, kafkaYAML, "kafka/logs_downstream:")
+	require.Contains(t, kafkaYAML, `- "kafka-0.prod:9092"`)
+	require.Contains(t, kafkaYAML, `- "kafka-1.prod:9092"`)
+	require.Contains(t, kafkaYAML, `topic: "novaobs-logs"`)
+	require.Contains(t, kafkaYAML, "exporters: [kafka/logs_downstream]")
+}
+
+func renderedKinds(t *testing.T, raw string) []string {
+	t.Helper()
+	decoder := yaml.NewDecoder(strings.NewReader(raw))
+	kinds := []string{}
+	for {
+		var doc map[string]any
+		err := decoder.Decode(&doc)
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if len(doc) == 0 {
+			continue
+		}
+		kind, ok := doc["kind"].(string)
+		require.True(t, ok, "rendered YAML document must include kind")
+		kinds = append(kinds, kind)
+	}
+	return kinds
 }
 
 type logsFixture struct {
@@ -552,6 +879,23 @@ func (f logsFixture) createService(t *testing.T, name string) servicecatalog.Ser
 	return service
 }
 
+func (f logsFixture) createVMService(t *testing.T, name string) servicecatalog.Service {
+	t.Helper()
+	service, err := f.repo.Create(context.Background(), servicecatalog.Service{
+		Name:         name,
+		DisplayName:  name,
+		Environment:  "prod",
+		OwnerTeam:    "sre",
+		IdentityType: "host_process",
+		ServiceType:  "VM/物理机业务",
+		Status:       "active",
+		Source:       "manual",
+		SyncStatus:   "local",
+	})
+	require.NoError(t, err)
+	return service
+}
+
 func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGroup {
 	t.Helper()
 	group, err := collectormanagement.NewService(f.store.CollectorGroups(), f.store.CollectorInstances()).CreateGroup(context.Background(), collectormanagement.CollectorGroup{
@@ -568,17 +912,57 @@ func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGrou
 
 func validCollectorYAML(writeURL string, exporterExtras string) string {
 	return `receivers:
-  filelog/custom:
+  file_log/custom:
     include: [/data/app.log]
 exporters:
-  otlphttp/victorialogs:
+  otlp_http/victorialogs:
     logs_endpoint: "` + writeURL + `"
 ` + exporterExtras + `service:
   pipelines:
     logs:
-      receivers: [filelog/custom]
-      exporters: [otlphttp/victorialogs]
+      receivers: [file_log/custom]
+      exporters: [otlp_http/victorialogs]
 `
+}
+
+func validESCollectorYAML(writeURL string) string {
+	return `receivers:
+  file_log/custom:
+    include: [/data/app.log]
+exporters:
+  elasticsearch/logs_downstream:
+    endpoints:
+      - "` + writeURL + `"
+service:
+  pipelines:
+    logs:
+      receivers: [file_log/custom]
+      exporters: [elasticsearch/logs_downstream]
+`
+}
+
+func validKafkaCollectorYAML(brokers []string) string {
+	lines := []string{
+		"receivers:",
+		"  file_log/custom:",
+		"    include: [/data/app.log]",
+		"exporters:",
+		"  kafka/logs_downstream:",
+		"    brokers:",
+	}
+	for _, broker := range brokers {
+		lines = append(lines, `      - "`+broker+`"`)
+	}
+	lines = append(lines,
+		`    topic: "novaobs-logs"`,
+		"service:",
+		"  pipelines:",
+		"    logs:",
+		"      receivers: [file_log/custom]",
+		"      exporters: [kafka/logs_downstream]",
+		"",
+	)
+	return strings.Join(lines, "\n")
 }
 
 type fakeClusterService struct{}
@@ -630,19 +1014,51 @@ func (f fakeRuntimeGroups) ListRuntimeGroups(ctx context.Context, query k8sopsre
 
 type fakeDeploymentService struct {
 	lastPreviewYAML string
+	lastPreviewReq  k8sopsdeployment.OperationRequest
+	lastApplyReq    k8sopsdeployment.OperationRequest
 }
 
 func (f *fakeDeploymentService) Preview(ctx context.Context, subject platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error) {
 	f.lastPreviewYAML = req.YAMLContent
+	f.lastPreviewReq = req
 	return k8sopsdeployment.OperationResult{
 		Status:            "previewed",
 		Message:           "previewed",
 		PreviewID:         "preview-1",
 		ConfirmationToken: "confirm-1",
 		AuditID:           "audit-1",
+		Resources: []k8sopsdeployment.ResourceIdentity{{
+			ClusterID:  "test03",
+			APIVersion: "v1",
+			Kind:       "Namespace",
+			Name:       "novaobs-system",
+		}, {
+			ClusterID:  "test03",
+			Namespace:  "novaobs-system",
+			APIVersion: "apps/v1",
+			Kind:       "DaemonSet",
+			Name:       "novaobs-logs-agent",
+		}},
+		Diffs: []k8sopsdeployment.ResourceDiff{{
+			ClusterID:  "test03",
+			APIVersion: "v1",
+			Kind:       "Namespace",
+			Name:       "novaobs-system",
+			Operation:  "apply",
+			AfterHash:  "namespace-hash",
+		}, {
+			ClusterID:  "test03",
+			Namespace:  "novaobs-system",
+			APIVersion: "apps/v1",
+			Kind:       "DaemonSet",
+			Name:       "novaobs-logs-agent",
+			Operation:  "apply",
+			AfterHash:  "daemonset-hash",
+		}},
 	}, nil
 }
 
 func (f *fakeDeploymentService) Apply(ctx context.Context, subject platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error) {
+	f.lastApplyReq = req
 	return k8sopsdeployment.OperationResult{Status: "applied", Message: "applied", AuditID: "audit-2"}, nil
 }

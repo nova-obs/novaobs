@@ -79,6 +79,10 @@ func (r ResourceVersionResolver) find(group string, version string, resourceName
 
 func candidatesForKind(kind string) []resourceCandidate {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace":
+		return []resourceCandidate{{version: "v1", resource: "namespaces", kind: "Namespace"}}
+	case "serviceaccount":
+		return []resourceCandidate{{version: "v1", resource: "serviceaccounts", kind: "ServiceAccount"}}
 	case "pod":
 		return []resourceCandidate{{version: "v1", resource: "pods", kind: "Pod"}}
 	case "service":
@@ -89,6 +93,10 @@ func candidatesForKind(kind string) []resourceCandidate {
 		return []resourceCandidate{{version: "v1", resource: "persistentvolumeclaims", kind: "PersistentVolumeClaim"}}
 	case "persistentvolume":
 		return []resourceCandidate{{version: "v1", resource: "persistentvolumes", kind: "PersistentVolume"}}
+	case "clusterrole":
+		return rbacCandidates("clusterroles", "ClusterRole")
+	case "clusterrolebinding":
+		return rbacCandidates("clusterrolebindings", "ClusterRoleBinding")
 	case "deployment":
 		return []resourceCandidate{{group: "apps", version: "v1", resource: "deployments", kind: "Deployment"}}
 	case "statefulset":
@@ -149,6 +157,13 @@ func istioSecurityCandidates(resource string, kind string) []resourceCandidate {
 		{group: "security.istio.io", version: "v1", resource: resource, kind: kind},
 		{group: "security.istio.io", version: "v1beta1", resource: resource, kind: kind},
 		{group: "security.istio.io", version: "v1alpha1", resource: resource, kind: kind},
+	}
+}
+
+func rbacCandidates(resource string, kind string) []resourceCandidate {
+	return []resourceCandidate{
+		{group: "rbac.authorization.k8s.io", version: "v1", resource: resource, kind: kind},
+		{group: "rbac.authorization.k8s.io", version: "v1beta1", resource: resource, kind: kind},
 	}
 }
 

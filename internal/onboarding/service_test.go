@@ -94,11 +94,11 @@ func TestServiceDoesNotGenerateFakeEndpointWhenCollectorGroupHasNoEndpoint(t *te
 func TestServiceUsesServiceLevelRuntimeIdentityType(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
-		Name:         "device-svc",
+		Name:         "vm-api",
 		Environment:  "production",
 		Cluster:      "prod-1",
-		Namespace:    "security",
-		IdentityType: "syslog_device",
+		Namespace:    "billing",
+		IdentityType: "host_process",
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
@@ -115,8 +115,31 @@ func TestServiceUsesServiceLevelRuntimeIdentityType(t *testing.T) {
 		CollectorGroupID: group.ID,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "syslog_device", result.Service.IdentityType)
-	require.Equal(t, "syslog_device", result.Identity.IdentityType)
+	require.Equal(t, "host_process", result.Service.IdentityType)
+	require.Equal(t, "host_process", result.Identity.IdentityType)
+}
+
+func TestServiceRejectsDeprecatedSyslogIdentityType(t *testing.T) {
+	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
+	s, err := svcRepo.Create(ctx, servicecatalog.Service{
+		Name:        "legacy-device",
+		Environment: "production",
+	})
+	require.NoError(t, err)
+	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
+		Name:        "shared-prod-1",
+		Mode:        "shared_gateway",
+		Environment: "production",
+		Status:      "active",
+	})
+	require.NoError(t, err)
+
+	_, err = onbSvc.Upsert(ctx, s, UpsertRequest{
+		Mode:             "shared_gateway",
+		CollectorGroupID: group.ID,
+		IdentityType:     "syslog_device",
+	})
+	require.ErrorContains(t, err, "identity_type 只支持 k8s_workload 或 host_process")
 }
 
 func TestServiceReturnsWorkspaceForNewService(t *testing.T) {

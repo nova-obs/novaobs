@@ -9,13 +9,15 @@ const (
 )
 
 const (
-	OperationExecutorTyped   = "typed"
-	OperationExecutorDynamic = "dynamic"
+	OperationExecutorTyped          = "typed"
+	OperationExecutorDynamic        = "dynamic"
+	OperationExecutorDeferredDryRun = "deferred_dry_run"
 )
 
 type ApplyRequest struct {
-	Mode        OperationMode
-	YAMLContent string
+	Mode           OperationMode
+	YAMLContent    string
+	ForceConflicts bool
 }
 
 type DeleteRequest struct {
@@ -24,10 +26,11 @@ type DeleteRequest struct {
 }
 
 type ClusterApplyRequest struct {
-	ClusterID    string
-	Mode         OperationMode
-	YAMLContent  string
-	FieldManager string
+	ClusterID      string
+	Mode           OperationMode
+	YAMLContent    string
+	FieldManager   string
+	ForceConflicts bool
 }
 
 type ClusterDeleteRequest struct {

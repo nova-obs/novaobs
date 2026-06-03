@@ -24,7 +24,7 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_service_account_list_failed", "ServiceAccount 列表查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_service_account_list_failed", "ServiceAccount 列表查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -76,7 +76,7 @@ func writeServiceAccountError(ctx *gin.Context, err error) {
 	case errors.Is(err, cluster.ErrClusterReadOnly):
 		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断 ServiceAccount 写操作")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_service_account_operation_failed", "ServiceAccount 操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_service_account_operation_failed", "ServiceAccount 操作失败", err)
 	}
 }
 

@@ -174,7 +174,7 @@ paths:
                   type: string
                 identity_type:
                   type: string
-                  enum: [k8s_workload, host_process, syslog_device]
+                  enum: [k8s_workload, host_process]
                   deprecated: true
                   description: 已迁移到服务目录字段；表示服务运行身份类型，未传时后端使用服务级 identity_type。
                 k8s_namespace:

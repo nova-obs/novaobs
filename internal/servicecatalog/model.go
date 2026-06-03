@@ -49,6 +49,12 @@ type ListFilter struct {
 	Source      string
 }
 
+type DeleteDependencies struct {
+	LogRouteRefs   int
+	AgentRefs      int
+	OnboardingRefs int
+}
+
 type UpdateRequest struct {
 	CMDBServiceID *string `json:"cmdb_service_id"`
 	BusinessID    *string `json:"business_id"`

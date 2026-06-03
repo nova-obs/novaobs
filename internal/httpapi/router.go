@@ -61,7 +61,7 @@ type Dependencies struct {
 
 func NewRouter(deps Dependencies) *gin.Engine {
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(gin.Logger(), gin.Recovery(), errorLogMiddleware())
 	if deps.OpAMPManager != nil {
 		deps.OpAMPManager.SetStateSink(func(ctx context.Context, state opamp.AgentState) {
 			_, _ = deps.CollectorService.UpsertInstance(ctx, state.InstanceUID, state.CollectorGroupID, collectormanagement.InstanceStatus{
@@ -101,6 +101,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/services", createServiceHandler(deps.ServiceRepo))
 	api.GET("/services/:id", getServiceHandler(deps.ServiceRepo))
 	api.PATCH("/services/:id", updateServiceHandler(deps.ServiceRepo))
+	api.DELETE("/services/:id", deleteServiceHandler(deps.ServiceRepo, deps.CollectorService, deps.Store))
 	api.GET("/services/:id/observability-graph", getServiceObservabilityGraphHandler(deps))
 	api.GET("/services/:id/targets", listServiceTargetsHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.POST("/services/:id/targets", createServiceTargetHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
@@ -113,7 +114,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/collector-groups/:id", getCollectorGroupHandler(deps.CollectorService))
 	api.PATCH("/collector-groups/:id", updateCollectorGroupHandler(deps.CollectorService))
 	api.POST("/collector-groups/:id/activate", activateCollectorGroupHandler(deps.CollectorService, deps.CollectorConfigService))
-	api.DELETE("/collector-groups/:id", deleteCollectorGroupHandler(deps.CollectorService, deps.Store.Onboardings(), deps.Store.ServicePipelinePatches()))
+	api.DELETE("/collector-groups/:id", deleteCollectorGroupHandler(deps.CollectorService, deps.Store.Onboardings(), deps.Store.ServicePipelinePatches(), deps.Store.LogRoutes()))
 	api.GET("/collector-groups/:id/instances", listCollectorInstancesHandler(deps.CollectorService))
 	api.GET("/collector-groups/:id/config-versions", listCollectorGroupConfigVersionsHandler(deps.CollectorService))
 	api.GET("/collector-groups/:id/config/latest.yaml", getCollectorGroupLatestConfigYAMLHandler(deps.CollectorService))
@@ -134,6 +135,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
+	api.PATCH("/logs/routes/:id", updateLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))
@@ -358,6 +360,25 @@ func updateServiceHandler(repo servicecatalog.Repository) gin.HandlerFunc {
 	}
 }
 
+func deleteServiceHandler(repo servicecatalog.Repository, collectorService collectormanagement.Service, store database.Store) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		id, ok := parseID(ctx)
+		if !ok {
+			return
+		}
+		deps, err := serviceDeleteDependencies(bg, id, collectorService, store)
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		if _, err := repo.Delete(bg, id, deps); err != nil {
+			writeError(ctx, normalizeNotFound(err, "服务不存在"))
+			return
+		}
+		ctx.Status(http.StatusNoContent)
+	}
+}
+
 func getOnboardingHandler(repo servicecatalog.Repository, onboardingService onboarding.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		service, ok := getServiceFromPath(ctx, repo)
@@ -506,7 +527,7 @@ func activateCollectorGroupHandler(service collectormanagement.Service, configSe
 	}
 }
 
-func deleteCollectorGroupHandler(service collectormanagement.Service, onboardingStore database.OnboardingStore, pipelinePatchStore database.ServicePipelinePatchStore) gin.HandlerFunc {
+func deleteCollectorGroupHandler(service collectormanagement.Service, onboardingStore database.OnboardingStore, pipelinePatchStore database.ServicePipelinePatchStore, logRouteStore database.LogRouteStore) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		id, ok := parseID(ctx)
 		if !ok {
@@ -525,6 +546,14 @@ func deleteCollectorGroupHandler(service collectormanagement.Service, onboarding
 				deps.ConfigRefs += len(refs)
 			}
 		}
+		if logRouteStore != nil {
+			var refs []logs.LogRoute
+			if err := logRouteStore.FindByAgentGroup(bg, id, &refs); err != nil {
+				writeError(ctx, err)
+				return
+			}
+			deps.ConfigRefs += len(refs)
+		}
 		_, err := service.DeleteGroup(bg, id, deps)
 		if err != nil {
 			writeError(ctx, normalizeNotFound(err, "Collector Group 不存在"))
@@ -532,6 +561,29 @@ func deleteCollectorGroupHandler(service collectormanagement.Service, onboarding
 		}
 		ctx.Status(http.StatusNoContent)
 	}
+}
+
+func serviceDeleteDependencies(ctx context.Context, serviceID string, collectorService collectormanagement.Service, store database.Store) (servicecatalog.DeleteDependencies, error) {
+	deps := servicecatalog.DeleteDependencies{}
+	if store != nil {
+		var routes []logs.LogRoute
+		if err := store.LogRoutes().FindByService(ctx, serviceID, &routes); err != nil {
+			return deps, err
+		}
+		deps.LogRouteRefs = len(routes)
+		var onboardingState onboarding.ServiceOnboarding
+		if err := store.Onboardings().FindByService(ctx, serviceID, &onboardingState); err == nil {
+			deps.OnboardingRefs = 1
+		} else if !errors.Is(err, mongo.ErrNoDocuments) {
+			return deps, err
+		}
+	}
+	instances, err := collectorService.ListInstancesByService(ctx, serviceID)
+	if err != nil {
+		return deps, err
+	}
+	deps.AgentRefs = len(instances)
+	return deps, nil
 }
 
 func listCollectorInstancesHandler(service collectormanagement.Service) gin.HandlerFunc {
@@ -760,8 +812,8 @@ func normalizeNotFound(err error, message string) error {
 func writeError(ctx *gin.Context, err error) {
 	var appError apperr.Error
 	if errors.As(err, &appError) {
-		response.Error(ctx, appError.Status, appError.Code, appError.Message)
+		response.ErrorWithCause(ctx, appError.Status, appError.Code, appError.Message, err)
 		return
 	}
-	response.Error(ctx, http.StatusInternalServerError, "internal_error", "服务处理失败")
+	response.ErrorWithCause(ctx, http.StatusInternalServerError, "internal_error", "服务处理失败", err)
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -61,6 +62,34 @@ spec:
 	require.Equal(t, "orders", action.GetNamespace())
 	require.Equal(t, "orders-api", action.GetName())
 	require.Equal(t, metav1.PatchOptions{FieldManager: DefaultFieldManager, DryRun: []string{metav1.DryRunAll}}, action.GetPatchOptions())
+}
+
+func TestResourceOperationEngineDryRunApplyCanForceConflicts(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	clientset.PrependReactor("patch", "configmaps", successfulConfigMapPatch)
+	engine := NewResourceOperationEngine(
+		Bundle{Clientset: clientset},
+		CapabilitySnapshot{Resources: []APIResource{
+			{Version: "v1", GroupVersion: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespaced: true},
+		}},
+	)
+
+	_, err := engine.DryRunApply(context.Background(), DryRunApplyRequest{ForceConflicts: true, YAMLContent: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: novaobs-logs-agent-config
+  namespace: novaobs-system
+data:
+  collector.yaml: |
+    receivers: {}`})
+
+	require.NoError(t, err)
+	actions := clientset.Actions()
+	require.Len(t, actions, 1)
+	action := actions[0].(k8stesting.PatchActionImpl)
+	require.NotNil(t, action.GetPatchOptions().Force)
+	require.True(t, *action.GetPatchOptions().Force)
+	require.Equal(t, []string{metav1.DryRunAll}, action.GetPatchOptions().DryRun)
 }
 
 func TestResourceOperationEngineDynamicFallbackApplyVirtualService(t *testing.T) {
@@ -332,6 +361,54 @@ spec:
 	require.Equal(t, "deployments", actions[3].GetResource().Resource)
 }
 
+func TestResourceOperationEngineDryRunApplyDefersObjectsInNamespaceCreatedBySameBundle(t *testing.T) {
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClient.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "novaobs-system" {
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "novaobs-system")
+		}
+		return successfulDryRunPatch(action)
+	})
+	engine := NewResourceOperationEngine(
+		Bundle{Dynamic: dynamicClient},
+		CapabilitySnapshot{Resources: []APIResource{
+			{Version: "v1", GroupVersion: "v1", Resource: "namespaces", Kind: "Namespace", Namespaced: false},
+			{Version: "v1", GroupVersion: "v1", Resource: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true},
+			{Version: "v1", GroupVersion: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespaced: true},
+		}},
+	)
+
+	result, err := engine.DryRunApply(context.Background(), DryRunApplyRequest{YAMLContent: `apiVersion: v1
+kind: Namespace
+metadata:
+  name: novaobs-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: novaobs-logs-agent
+  namespace: novaobs-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: novaobs-logs-agent-config
+  namespace: novaobs-system`})
+
+	require.NoError(t, err)
+	require.Len(t, result.Objects, 3)
+	require.Equal(t, OperationExecutorDynamic, result.Objects[0].Executor)
+	require.Equal(t, OperationExecutorDeferredDryRun, result.Objects[1].Executor)
+	require.Equal(t, OperationExecutorDeferredDryRun, result.Objects[2].Executor)
+	require.Len(t, result.Warnings, 2)
+	require.Contains(t, result.Warnings[0], `namespace "novaobs-system"`)
+	actions := dynamicClient.Actions()
+	require.Len(t, actions, 6)
+	require.Equal(t, "namespaces", actions[1].GetResource().Resource)
+	require.Equal(t, "serviceaccounts", actions[3].GetResource().Resource)
+	require.Equal(t, "configmaps", actions[5].GetResource().Resource)
+}
+
 func TestResourceOperationEngineDryRunApplyRejectsUnsupportedResource(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	engine := NewResourceOperationEngine(Bundle{Dynamic: dynamicClient}, CapabilitySnapshot{})
@@ -421,6 +498,17 @@ func successfulTypedPatch(action k8stesting.Action) (bool, runtime.Object, error
 	patch := action.(k8stesting.PatchAction)
 	return true, &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: patch.GetResource().GroupVersion().String(), Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      patch.GetName(),
+			Namespace: action.GetNamespace(),
+		},
+	}, nil
+}
+
+func successfulConfigMapPatch(action k8stesting.Action) (bool, runtime.Object, error) {
+	patch := action.(k8stesting.PatchAction)
+	return true, &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{APIVersion: patch.GetResource().GroupVersion().String(), Kind: "ConfigMap"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      patch.GetName(),
 			Namespace: action.GetNamespace(),

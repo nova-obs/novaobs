@@ -479,7 +479,7 @@ func normalizeGroup(group CollectorGroup) CollectorGroup {
 		group.ReceiverProfile = "mixed"
 	}
 	if strings.TrimSpace(group.ExporterProfile) == "" {
-		group.ExporterProfile = "otlphttp/victorialogs"
+		group.ExporterProfile = "logs/downstream"
 	}
 	if group.DesiredReplicas == 0 {
 		group.DesiredReplicas = 1

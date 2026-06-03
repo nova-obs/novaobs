@@ -11,6 +11,10 @@ const (
 	EndpointScopeK8sCluster = "k8s_cluster"
 	EndpointScopeVM         = "vm"
 
+	EndpointSinkVL    = "vl"
+	EndpointSinkES    = "es"
+	EndpointSinkKafka = "kafka"
+
 	ParseRuleRegex = "regex"
 	ParseRuleJSON  = "json"
 )
@@ -19,6 +23,8 @@ type LogEndpoint struct {
 	ID          string    `json:"id" bson:"_id"`
 	Name        string    `json:"name" bson:"name"`
 	Description string    `json:"description" bson:"description"`
+	SinkType    string    `json:"sink_type" bson:"sink_type"`
+	StreamName  string    `json:"stream_name" bson:"stream_name"`
 	WriteURL    string    `json:"write_url" bson:"write_url"`
 	QueryURL    string    `json:"query_url" bson:"query_url"`
 	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
@@ -151,6 +157,7 @@ type SyncK8sNamespaceResult struct {
 }
 
 type UpsertRouteRequest struct {
+	RouteID      string         `json:"route_id"`
 	Name         string         `json:"name"`
 	ServiceID    string         `json:"service_id"`
 	SourceType   string         `json:"source_type"`
@@ -252,6 +259,7 @@ type PublishRouteResult struct {
 	ConfirmationToken    string       `json:"confirmation_token,omitempty"`
 	AuditID              string       `json:"audit_id,omitempty"`
 	Resources            any          `json:"resources,omitempty"`
+	Diffs                any          `json:"diffs,omitempty"`
 	Warnings             []string     `json:"warnings"`
 }
 

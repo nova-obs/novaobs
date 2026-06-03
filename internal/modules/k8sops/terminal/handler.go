@@ -41,7 +41,7 @@ func writeTerminalError(ctx *gin.Context, err error, result ExecResult) {
 			Meta:    gin.H{},
 		})
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_terminal_exec_failed", "K8s 终端命令执行失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_terminal_exec_failed", "K8s 终端命令执行失败", err)
 	}
 }
 

@@ -11,12 +11,13 @@ import (
 )
 
 type dynamicOperationExecutor struct {
-	client       dynamic.Interface
-	fieldManager string
+	client         dynamic.Interface
+	fieldManager   string
+	forceConflicts bool
 }
 
-func newDynamicOperationExecutor(client dynamic.Interface, fieldManager string) dynamicOperationExecutor {
-	return dynamicOperationExecutor{client: client, fieldManager: fieldManager}
+func newDynamicOperationExecutor(client dynamic.Interface, fieldManager string, forceConflicts bool) dynamicOperationExecutor {
+	return dynamicOperationExecutor{client: client, fieldManager: fieldManager, forceConflicts: forceConflicts}
 }
 
 func (e dynamicOperationExecutor) Apply(ctx context.Context, object operationApplyObject, mode OperationMode) error {
@@ -24,6 +25,9 @@ func (e dynamicOperationExecutor) Apply(ctx context.Context, object operationApp
 		return fmt.Errorf("%w: dynamic client required", ErrResourceOperationInvalid)
 	}
 	opts := metav1.PatchOptions{FieldManager: e.fieldManager}
+	if e.forceConflicts {
+		opts.Force = boolPtr(true)
+	}
 	if mode == OperationModeDryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	}

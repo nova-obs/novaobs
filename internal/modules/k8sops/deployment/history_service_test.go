@@ -98,6 +98,8 @@ func TestServicePreviewRunsServerSideDryRunAfterAuthorization(t *testing.T) {
 			Kind:       "Deployment",
 			Namespace:  "orders",
 			Name:       "orders-api",
+			Operation:  "create",
+			AfterHash:  "deployment-after",
 		}},
 	}}
 	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner)
@@ -118,6 +120,122 @@ metadata:
 	require.Equal(t, "apps/v1", result.Resources[0].APIVersion)
 	require.Equal(t, "Deployment", result.Resources[0].Kind)
 	require.Equal(t, "orders", result.Resources[0].Namespace)
+	require.Len(t, result.Diffs, 1)
+	require.Equal(t, "create", result.Diffs[0].Operation)
+	require.Equal(t, "deployment-after", result.Diffs[0].AfterHash)
+}
+
+func TestServicePreviewAcceptsClusterScopedResourcesWithoutNamespace(t *testing.T) {
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{
+			{APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaobs-logs-agent"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaobs-logs-agent"},
+			{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaobs-system", Name: "novaobs-logs-agent"},
+		},
+	}}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner)
+
+	result, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: v1
+kind: Namespace
+metadata:
+  name: novaobs-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novaobs-logs-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: novaobs-logs-agent
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: novaobs-logs-agent
+  namespace: novaobs-system`,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Resources, 4)
+	namespacesByKind := map[string]string{}
+	for _, resource := range result.Resources {
+		namespacesByKind[resource.Kind] = resource.Namespace
+	}
+	require.Equal(t, "", namespacesByKind["Namespace"])
+	require.Equal(t, "", namespacesByKind["ClusterRole"])
+	require.Equal(t, "", namespacesByKind["ClusterRoleBinding"])
+	require.Equal(t, "novaobs-system", namespacesByKind["DaemonSet"])
+	require.Equal(t, 1, dryRunner.calls)
+}
+
+func TestServiceApplyPersistsClusterScopedResourcesInInventory(t *testing.T) {
+	objects := []kubeclient.OperationObject{
+		{APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system", AfterHash: "namespace-hash"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaobs-logs-agent", AfterHash: "clusterrole-hash"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaobs-logs-agent", AfterHash: "clusterrolebinding-hash"},
+		{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaobs-system", Name: "novaobs-logs-agent", AfterHash: "daemonset-hash"},
+	}
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{Objects: objects}}
+	applier := &recordingDeploymentApplier{result: kubeclient.ResourceOperationResult{Objects: objects}}
+	inventory := NewMemoryInventoryRepository(nil)
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner, applier, inventory)
+	req := OperationRequest{
+		ClusterID: "prod",
+		YAMLContent: `apiVersion: v1
+kind: Namespace
+metadata:
+  name: novaobs-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: novaobs-logs-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: novaobs-logs-agent
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: novaobs-logs-agent
+  namespace: novaobs-system`,
+	}
+	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.NoError(t, err)
+
+	applied, err := svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID:         req.ClusterID,
+		YAMLContent:       req.YAMLContent,
+		PreviewID:         preview.PreviewID,
+		ConfirmationToken: preview.ConfirmationToken,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "applied", applied.Status)
+	clusterRole, err := inventory.Find(context.Background(), ResourceIdentity{
+		ClusterID:  "prod",
+		APIVersion: "rbac.authorization.k8s.io/v1",
+		Kind:       "ClusterRole",
+		Name:       "novaobs-logs-agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "", clusterRole.Namespace)
+	daemonSet, err := inventory.Find(context.Background(), ResourceIdentity{
+		ClusterID:  "prod",
+		Namespace:  "novaobs-system",
+		APIVersion: "apps/v1",
+		Kind:       "DaemonSet",
+		Name:       "novaobs-logs-agent",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "novaobs-system", daemonSet.Namespace)
 }
 
 func TestServiceBlocksPreviewForReadOnlyCluster(t *testing.T) {
@@ -285,6 +403,8 @@ metadata:
 	require.Equal(t, 1, applier.calls)
 	require.Equal(t, kubeclient.OperationModeApply, applier.request.Mode)
 	require.Equal(t, "prod", applier.request.ClusterID)
+	require.False(t, dryRunner.request.ForceConflicts)
+	require.False(t, applier.request.ForceConflicts)
 	found, err := inventory.Find(context.Background(), ResourceIdentity{
 		ClusterID:  "prod",
 		Namespace:  "orders",
@@ -303,6 +423,51 @@ metadata:
 	require.Equal(t, preview.PreviewID, events[1].RequestSummary["preview_id"])
 	require.NotContains(t, events[1].RequestSummary, "confirmation_token")
 	require.NotContains(t, events[1].RequestSummary, "yaml_content")
+}
+
+func TestServiceApplyPropagatesInternalForceConflicts(t *testing.T) {
+	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Namespace:  "novaobs-system",
+			Name:       "novaobs-logs-agent-config",
+			AfterHash:  "after-hash",
+		}},
+	}}
+	applier := &recordingDeploymentApplier{result: kubeclient.ResourceOperationResult{
+		Objects: []kubeclient.OperationObject{{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Namespace:  "novaobs-system",
+			Name:       "novaobs-logs-agent-config",
+		}},
+	}}
+	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner, applier, nil)
+	req := OperationRequest{
+		ClusterID:      "test03",
+		ForceConflicts: true,
+		YAMLContent: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: novaobs-logs-agent-config
+  namespace: novaobs-system`,
+	}
+
+	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
+	require.NoError(t, err)
+	require.True(t, dryRunner.request.ForceConflicts)
+
+	_, err = svc.Apply(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, OperationRequest{
+		ClusterID:         req.ClusterID,
+		YAMLContent:       req.YAMLContent,
+		PreviewID:         preview.PreviewID,
+		ConfirmationToken: preview.ConfirmationToken,
+		ForceConflicts:    true,
+	})
+	require.NoError(t, err)
+	require.True(t, dryRunner.request.ForceConflicts)
+	require.True(t, applier.request.ForceConflicts)
 }
 
 func TestServiceApplyPersistsDeploymentHistorySnapshot(t *testing.T) {
