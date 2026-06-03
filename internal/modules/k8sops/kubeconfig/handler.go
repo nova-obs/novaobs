@@ -54,7 +54,7 @@ func writeKubeconfigError(ctx *gin.Context, err error) {
 	case errors.Is(err, ErrCredentialRequired):
 		response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_kubeconfig_operation_failed", "Kubeconfig 操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_kubeconfig_operation_failed", "Kubeconfig 操作失败", err)
 	}
 }
 

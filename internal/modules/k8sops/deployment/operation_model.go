@@ -5,6 +5,7 @@ type OperationRequest struct {
 	YAMLContent       string `json:"yaml_content"`
 	PreviewID         string `json:"preview_id,omitempty"`
 	ConfirmationToken string `json:"confirmation_token,omitempty"`
+	ForceConflicts    bool   `json:"-"`
 }
 
 type ResourceIdentity struct {

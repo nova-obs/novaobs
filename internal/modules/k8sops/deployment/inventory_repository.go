@@ -142,7 +142,11 @@ func inventoryRecordFromIdentity(identity ResourceIdentity) InventoryRecord {
 }
 
 func completeInventoryRecord(record InventoryRecord) bool {
-	return record.ClusterID != "" && record.Namespace != "" && record.APIVersion != "" && record.Kind != "" && record.Name != ""
+	return record.ClusterID != "" &&
+		record.APIVersion != "" &&
+		record.Kind != "" &&
+		record.Name != "" &&
+		(record.Namespace != "" || clusterScopedKind(record.APIVersion, record.Kind))
 }
 
 func inventoryRecordKey(record InventoryRecord) string {

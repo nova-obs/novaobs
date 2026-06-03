@@ -95,7 +95,7 @@ func writeError(ctx *gin.Context, err error) {
 	case errors.Is(err, ErrBindingNotFound):
 		response.Error(ctx, http.StatusNotFound, "k8s_platform_binding_not_found", "平台 K8s 授权绑定不存在")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_platform_access_failed", "平台 K8s 授权操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_platform_access_failed", "平台 K8s 授权操作失败", err)
 	}
 }
 

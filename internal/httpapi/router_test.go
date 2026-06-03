@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"novaobs/internal/platform/iam"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
+	"novaobs/pkg/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/open-telemetry/opamp-go/protobufs"
@@ -35,6 +38,80 @@ type testEnv struct {
 	service servicecatalog.Service
 	group   collectormanagement.CollectorGroup
 	manager *opamp.Manager
+}
+
+func TestErrorLogMiddlewareLogsServerErrorsWithCause(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	output := captureSlog(t, slog.LevelInfo, func() {
+		router := gin.New()
+		router.Use(errorLogMiddleware())
+		router.GET("/boom", func(ctx *gin.Context) {
+			_ = ctx.Error(errors.New("mongo connection timeout"))
+			response.Error(ctx, http.StatusInternalServerError, "internal_error", "服务处理失败")
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/boom?cluster_id=test03&token=secret-token", nil)
+		req.Header.Set("X-Request-ID", "req-001")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	})
+
+	require.Contains(t, output, "level=ERROR")
+	require.Contains(t, output, "msg=\"HTTP 请求处理失败\"")
+	require.Contains(t, output, "path=/boom")
+	require.Contains(t, output, "code=internal_error")
+	require.Contains(t, output, "request_id=req-001")
+	require.Contains(t, output, "cluster_id")
+	require.Contains(t, output, "token")
+	require.Contains(t, output, "mongo connection timeout")
+	require.NotContains(t, output, "secret-token")
+}
+
+func TestErrorLogMiddlewareWarnsForPolicyErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	output := captureSlog(t, slog.LevelInfo, func() {
+		router := gin.New()
+		router.Use(errorLogMiddleware())
+		router.GET("/deny", func(ctx *gin.Context) {
+			response.Error(ctx, http.StatusForbidden, "permission_denied", "无权执行操作")
+		})
+
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/deny", nil))
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+	})
+
+	require.Contains(t, output, "level=WARN")
+	require.Contains(t, output, "msg=\"HTTP 请求被业务策略阻断\"")
+	require.Contains(t, output, "code=permission_denied")
+}
+
+func TestErrorLogMiddlewareDoesNotEmitBadRequestAtDefaultLevel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	output := captureSlog(t, slog.LevelInfo, func() {
+		router := gin.New()
+		router.Use(errorLogMiddleware())
+		router.GET("/bad-request", func(ctx *gin.Context) {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "请求参数无效")
+		})
+
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/bad-request", nil))
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+	})
+
+	require.Empty(t, strings.TrimSpace(output))
+}
+
+func captureSlog(t *testing.T, level slog.Leveler, fn func()) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: level})))
+	defer slog.SetDefault(previous)
+	fn()
+	return buffer.String()
 }
 
 func testRouterLoginCredential() string {
@@ -449,26 +526,14 @@ func TestRouterCreatesResources(t *testing.T) {
 func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	env := newTestRouter(t)
 
-	endpointRecorder := httptest.NewRecorder()
-	endpointBody := `{"name":"vl-prod","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
-	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
-	endpointRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(endpointRecorder, endpointRequest)
-	require.Equal(t, http.StatusCreated, endpointRecorder.Code)
-
-	var endpointEnvelope struct {
-		Data logs.LogEndpoint `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(endpointRecorder.Body.Bytes(), &endpointEnvelope))
-
-	routeBody := `{"service_id":"` + env.service.ID + `","source_type":"vm_file","agent_group_id":"` + env.group.ID + `","endpoint_id":"` + endpointEnvelope.Data.ID + `","vm":{"host_group":"billing-vms","path_pattern":"/data/logs/*.log"}}`
+	routeBody := createVMLogRouteRequestBody(t, env)
 	previewRecorder := httptest.NewRecorder()
 	previewRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/preview", bytes.NewBufferString(routeBody))
 	previewRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(previewRecorder, previewRequest)
 	require.Equal(t, http.StatusOK, previewRecorder.Code)
 	require.Contains(t, previewRecorder.Body.String(), `"source_type":"vm_file"`)
-	require.Contains(t, previewRecorder.Body.String(), "filelog/vm")
+	require.Contains(t, previewRecorder.Body.String(), "file_log/vm")
 
 	routeRecorder := httptest.NewRecorder()
 	routeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes", bytes.NewBufferString(routeBody))
@@ -495,6 +560,52 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
 }
 
+func TestRouterSoftDeletesServiceWithoutBlockingDependencies(t *testing.T) {
+	env := newTestRouter(t)
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/services/"+env.service.ID, nil)
+	env.router.ServeHTTP(deleteRecorder, deleteRequest)
+	require.Equal(t, http.StatusNoContent, deleteRecorder.Code)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+	env.router.ServeHTTP(listRecorder, listRequest)
+	require.Equal(t, http.StatusOK, listRecorder.Code)
+	require.NotContains(t, listRecorder.Body.String(), env.service.ID)
+
+	deletedRecorder := httptest.NewRecorder()
+	deletedRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services?status=deleted", nil)
+	env.router.ServeHTTP(deletedRecorder, deletedRequest)
+	require.Equal(t, http.StatusOK, deletedRecorder.Code)
+	require.Contains(t, deletedRecorder.Body.String(), env.service.ID)
+	require.Contains(t, deletedRecorder.Body.String(), `"status":"deleted"`)
+}
+
+func TestRouterRejectsServiceDeleteWhenLogRouteExists(t *testing.T) {
+	env := newTestRouter(t)
+	createK8sLogRoute(t, env)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/services/"+env.service.ID, nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "日志路由")
+}
+
+func TestRouterRejectsCollectorGroupDeleteWhenLogRouteExists(t *testing.T) {
+	env := newTestRouter(t)
+	createK8sLogRoute(t, env)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/collector-groups/"+env.group.ID, nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "服务日志配置")
+}
+
 func TestRouterPreviewsLogsParseRules(t *testing.T) {
 	env := newTestRouter(t)
 
@@ -508,6 +619,84 @@ func TestRouterPreviewsLogsParseRules(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"status":"ok"`)
 	require.Contains(t, recorder.Body.String(), `"level":"WARN"`)
 	require.Contains(t, recorder.Body.String(), `"message":"payment timeout"`)
+}
+
+func createVMLogRouteRequestBody(t *testing.T, env testEnv) string {
+	t.Helper()
+	vmService := createVMService(t, env)
+	endpointRecorder := httptest.NewRecorder()
+	endpointBody := `{"name":"vl-prod","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
+	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	endpointRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(endpointRecorder, endpointRequest)
+	require.Equal(t, http.StatusCreated, endpointRecorder.Code)
+
+	var endpointEnvelope struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(endpointRecorder.Body.Bytes(), &endpointEnvelope))
+	return `{"service_id":"` + vmService.ID + `","source_type":"vm_file","agent_group_id":"` + env.group.ID + `","endpoint_id":"` + endpointEnvelope.Data.ID + `","vm":{"host_group":"billing-vms","path_pattern":"/data/logs/*.log"}}`
+}
+
+func createVMLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
+	t.Helper()
+	routeRecorder := httptest.NewRecorder()
+	routeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes", bytes.NewBufferString(createVMLogRouteRequestBody(t, env)))
+	routeRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(routeRecorder, routeRequest)
+	require.Equal(t, http.StatusCreated, routeRecorder.Code)
+
+	var routeEnvelope struct {
+		Data logs.LogRouteView `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(routeRecorder.Body.Bytes(), &routeEnvelope))
+	return routeEnvelope.Data
+}
+
+func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
+	t.Helper()
+	endpointRecorder := httptest.NewRecorder()
+	endpointBody := `{"name":"vl-prod-k8s","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
+	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	endpointRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(endpointRecorder, endpointRequest)
+	require.Equal(t, http.StatusCreated, endpointRecorder.Code)
+
+	var endpointEnvelope struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(endpointRecorder.Body.Bytes(), &endpointEnvelope))
+
+	routeBody := `{"service_id":"` + env.service.ID + `","source_type":"k8s_stdout","agent_group_id":"` + env.group.ID + `","endpoint_id":"` + endpointEnvelope.Data.ID + `","k8s":{"cluster_id":"` + env.service.Cluster + `","namespace":"` + env.service.Namespace + `","workload_kind":"Deployment","workload_name":"` + env.service.Name + `"}}`
+	routeRecorder := httptest.NewRecorder()
+	routeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes", bytes.NewBufferString(routeBody))
+	routeRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(routeRecorder, routeRequest)
+	require.Equal(t, http.StatusCreated, routeRecorder.Code)
+
+	var routeEnvelope struct {
+		Data logs.LogRouteView `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(routeRecorder.Body.Bytes(), &routeEnvelope))
+	return routeEnvelope.Data
+}
+
+func createVMService(t *testing.T, env testEnv) servicecatalog.Service {
+	t.Helper()
+	repo := servicecatalog.NewRepository(env.store.Services())
+	service, err := repo.Create(context.Background(), servicecatalog.Service{
+		Name:         "billing-api",
+		DisplayName:  "billing-api",
+		Environment:  "production",
+		OwnerTeam:    "billing-team",
+		IdentityType: "host_process",
+		ServiceType:  "VM/物理机业务",
+		Status:       "active",
+		Source:       "manual",
+		SyncStatus:   "local",
+	})
+	require.NoError(t, err)
+	return service
 }
 
 func TestRouterPreviewsLogsParseRulesHandlesInvalidAndDisabledRules(t *testing.T) {

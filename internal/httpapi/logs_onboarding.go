@@ -57,7 +57,7 @@ func createLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body logs.LogEndpoint
 		if err := ctx.ShouldBindJSON(&body); err != nil {
-			writeError(ctx, apperr.InvalidRequest("VictoriaLogs 端点请求无效"))
+			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
 			return
 		}
 		endpoint, err := service.CreateEndpoint(ctx.Request.Context(), body)
@@ -125,6 +125,22 @@ func createLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 			return
 		}
 		response.Created(ctx, route)
+	}
+}
+
+func updateLogsRouteHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body logs.UpsertRouteRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("日志接入路由请求无效"))
+			return
+		}
+		route, err := service.UpdateRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")), body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, route, gin.H{})
 	}
 }
 

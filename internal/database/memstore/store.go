@@ -645,6 +645,30 @@ func (st *logRouteStore) FindAll(ctx context.Context, results interface{}) error
 	return copyAll(st.s.lgrs, results)
 }
 
+func (st *logRouteStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.lgrs {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *logRouteStore) FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.lgrs {
+		if extractStringField(value, "AgentGroupID") == agentGroupID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
 func (st *logRouteStore) FindByID(ctx context.Context, id string, result interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()

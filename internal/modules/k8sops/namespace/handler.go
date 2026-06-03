@@ -33,7 +33,7 @@ func ListHandler(service Service) gin.HandlerFunc {
 				response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
 				return
 			}
-			response.Error(ctx, http.StatusInternalServerError, "k8s_namespace_list_failed", "命名空间列表查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_namespace_list_failed", "命名空间列表查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -86,7 +86,7 @@ func writeNamespaceError(ctx *gin.Context, err error) {
 	case errors.Is(err, cluster.ErrCredentialNotFound):
 		response.Error(ctx, http.StatusConflict, "k8s_cluster_credential_required", "当前集群尚未录入可用 kubeconfig")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_namespace_operation_failed", "命名空间操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_namespace_operation_failed", "命名空间操作失败", err)
 	}
 }
 

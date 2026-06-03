@@ -6,6 +6,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	ErrorStatusKey  = "novaobs.error.status"
+	ErrorCodeKey    = "novaobs.error.code"
+	ErrorMessageKey = "novaobs.error.message"
+)
+
 type Envelope struct {
 	Success bool       `json:"success"`
 	Data    any        `json:"data"`
@@ -37,6 +43,9 @@ func Created(ctx *gin.Context, data any) {
 }
 
 func Error(ctx *gin.Context, status int, code string, message string) {
+	ctx.Set(ErrorStatusKey, status)
+	ctx.Set(ErrorCodeKey, code)
+	ctx.Set(ErrorMessageKey, message)
 	ctx.JSON(status, Envelope{
 		Success: false,
 		Data:    nil,
@@ -46,4 +55,11 @@ func Error(ctx *gin.Context, status int, code string, message string) {
 		},
 		Meta: gin.H{},
 	})
+}
+
+func ErrorWithCause(ctx *gin.Context, status int, code string, message string, cause error) {
+	if cause != nil {
+		_ = ctx.Error(cause)
+	}
+	Error(ctx, status, code, message)
 }

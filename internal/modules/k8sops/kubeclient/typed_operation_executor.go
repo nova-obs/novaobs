@@ -9,12 +9,13 @@ import (
 )
 
 type typedOperationExecutor struct {
-	clientset    kubernetes.Interface
-	fieldManager string
+	clientset      kubernetes.Interface
+	fieldManager   string
+	forceConflicts bool
 }
 
-func newTypedOperationExecutor(clientset kubernetes.Interface, fieldManager string) typedOperationExecutor {
-	return typedOperationExecutor{clientset: clientset, fieldManager: fieldManager}
+func newTypedOperationExecutor(clientset kubernetes.Interface, fieldManager string, forceConflicts bool) typedOperationExecutor {
+	return typedOperationExecutor{clientset: clientset, fieldManager: fieldManager, forceConflicts: forceConflicts}
 }
 
 func (e typedOperationExecutor) Apply(ctx context.Context, object operationApplyObject, mode OperationMode) (bool, error) {
@@ -22,6 +23,9 @@ func (e typedOperationExecutor) Apply(ctx context.Context, object operationApply
 		return false, nil
 	}
 	opts := metav1.PatchOptions{FieldManager: e.fieldManager}
+	if e.forceConflicts {
+		opts.Force = boolPtr(true)
+	}
 	if mode == OperationModeDryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	}
@@ -38,6 +42,10 @@ func (e typedOperationExecutor) Apply(ctx context.Context, object operationApply
 	default:
 		return false, nil
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func (e typedOperationExecutor) Delete(ctx context.Context, object operationDeleteObject, mode OperationMode) (bool, error) {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"novaobs/internal/modules/k8sops/kubeclient"
 )
 
 type PreviewPlan struct {
@@ -47,6 +49,51 @@ func buildPreviewPlan(clusterID string, identities []ResourceIdentity, warnings 
 	return PreviewPlan{
 		ID:                id,
 		ConfirmationToken: token,
+		Resources:         resources,
+		Diffs:             diffs,
+		Warnings:          append([]string{}, warnings...),
+	}
+}
+
+func buildPreviewPlanFromOperationObjects(clusterID string, objects []kubeclient.OperationObject, warnings []string) PreviewPlan {
+	resources := make([]ResourceIdentity, 0, len(objects))
+	diffs := make([]ResourceDiff, 0, len(objects))
+	for _, object := range objects {
+		identity := normalizeIdentity(ResourceIdentity{
+			ClusterID:  clusterID,
+			Namespace:  object.Namespace,
+			APIVersion: object.APIVersion,
+			Kind:       object.Kind,
+			Name:       object.Name,
+		})
+		resources = append(resources, identity)
+		operation := strings.TrimSpace(object.Operation)
+		if operation == "" {
+			operation = "apply"
+		}
+		afterHash := strings.TrimSpace(object.AfterHash)
+		if afterHash == "" {
+			afterHash = resourceAfterHash(identity)
+		}
+		diffs = append(diffs, ResourceDiff{
+			ClusterID:  identity.ClusterID,
+			Namespace:  identity.Namespace,
+			APIVersion: identity.APIVersion,
+			Kind:       identity.Kind,
+			Name:       identity.Name,
+			Operation:  operation,
+			BeforeHash: strings.TrimSpace(object.BeforeHash),
+			AfterHash:  afterHash,
+		})
+	}
+	resources = cloneAndSortIdentities(clusterID, resources)
+	sort.SliceStable(diffs, func(left, right int) bool {
+		return diffSortKey(diffs[left]) < diffSortKey(diffs[right])
+	})
+	source := previewPlanSource(diffs)
+	return PreviewPlan{
+		ID:                shortDigest("preview:" + source),
+		ConfirmationToken: digest("confirm:" + source),
 		Resources:         resources,
 		Diffs:             diffs,
 		Warnings:          append([]string{}, warnings...),
@@ -111,6 +158,10 @@ func resourceAfterHash(identity ResourceIdentity) string {
 
 func identitySortKey(identity ResourceIdentity) string {
 	return fmt.Sprintf("%s/%s/%s/%s/%s", identity.ClusterID, identity.Namespace, identity.Kind, identity.Name, identity.APIVersion)
+}
+
+func diffSortKey(diff ResourceDiff) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s", diff.ClusterID, diff.Namespace, diff.Kind, diff.Name, diff.APIVersion)
 }
 
 func digest(value string) string {

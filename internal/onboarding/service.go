@@ -303,8 +303,8 @@ func (s Service) validateUpsertRequest(ctx context.Context, service servicecatal
 	if req.Mode != "shared_gateway" && req.Mode != "dedicated_collector" {
 		return apperr.InvalidRequest("mode 只支持 shared_gateway 或 dedicated_collector")
 	}
-	if req.IdentityType != "k8s_workload" && req.IdentityType != "host_process" && req.IdentityType != "syslog_device" {
-		return apperr.InvalidRequest("identity_type 只支持 k8s_workload、host_process 或 syslog_device")
+	if req.IdentityType != "k8s_workload" && req.IdentityType != "host_process" {
+		return apperr.InvalidRequest("identity_type 只支持 k8s_workload 或 host_process")
 	}
 	if req.IdentityType == "k8s_workload" && (strings.TrimSpace(req.K8sNamespace) == "" || strings.TrimSpace(req.K8sWorkload) == "") {
 		return apperr.InvalidRequest("k8s_workload 身份必须包含 namespace 和 workload")
@@ -433,7 +433,7 @@ func (s Service) evaluateChecklist(ctx context.Context, service servicecatalog.S
 		check("collector_group_available", "Collector Group 可用", "目标 Collector Group 处于 active 状态", target.GroupID != "" && target.Status == "active", true),
 		check("collector_instance_online", "Collector 实例在线", "目标 Collector Group 至少有一个在线实例", target.OnlineInstances > 0, true),
 		check("resource_attributes_complete", "资源属性完整", "接入配置包含 service、environment、cmdb、cluster 和 namespace", resourceAttributesComplete(config.ResourceAttributes), true),
-		{Key: "log_signal_seen", Name: "日志信号", Description: "服务日志已带标准资源属性进入查询链路", Status: "warning", Blocking: false, Message: "日志查询验证尚未接入 VictoriaLogs", Passed: false},
+		{Key: "log_signal_seen", Name: "日志信号", Description: "服务日志已带标准资源属性进入查询链路", Status: "warning", Blocking: false, Message: "日志查询验证尚未接入日志下游", Passed: false},
 	}
 }
 

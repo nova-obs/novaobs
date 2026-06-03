@@ -140,6 +140,8 @@ type LogSourceStore interface {
 type LogRouteStore interface {
 	Upsert(ctx context.Context, id string, route interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, route interface{}) error
 }

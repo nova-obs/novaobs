@@ -24,7 +24,7 @@ func TestServiceCreatesAndListsGroups(t *testing.T) {
 	require.Equal(t, "draft", group.Status)
 	require.Equal(t, "shared", group.IsolationLevel)
 	require.Equal(t, "mixed", group.ReceiverProfile)
-	require.Equal(t, "otlphttp/victorialogs", group.ExporterProfile)
+	require.Equal(t, "logs/downstream", group.ExporterProfile)
 	require.Equal(t, "none", group.LastPublishStatus)
 	require.Equal(t, 1, group.DesiredReplicas)
 

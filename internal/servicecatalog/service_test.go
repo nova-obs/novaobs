@@ -56,6 +56,20 @@ func TestRepositoryRejectsDuplicateServiceIdentity(t *testing.T) {
 	require.Contains(t, err.Error(), "服务已存在")
 }
 
+func TestRepositoryRejectsUnsupportedServiceIdentityType(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	_, err := repo.Create(ctx, Service{
+		Name:         "syslog-device",
+		Environment:  "production",
+		IdentityType: "syslog_device",
+	})
+
+	require.ErrorContains(t, err, "服务身份类型只能是 k8s_workload 或 host_process")
+}
+
 func TestRepositoryFiltersServices(t *testing.T) {
 	store := memstore.NewStore()
 	repo := NewRepository(store.Services())
@@ -93,6 +107,47 @@ func TestRepositoryUpdatesManualService(t *testing.T) {
 	require.True(t, updated.UpdatedAt.After(svc.UpdatedAt) || updated.UpdatedAt.Equal(svc.UpdatedAt))
 }
 
+func TestRepositorySoftDeletesServiceWhenNoBlockingDependencies(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	require.NoError(t, err)
+
+	deleted, err := repo.Delete(ctx, svc.ID, DeleteDependencies{})
+	require.NoError(t, err)
+	require.Equal(t, "deleted", deleted.Status)
+
+	services, err := repo.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, services)
+
+	services, err = repo.List(ctx, ListFilter{Status: "deleted"})
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+	require.Equal(t, svc.ID, services[0].ID)
+
+	recreated, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	require.NoError(t, err)
+	require.NotEqual(t, svc.ID, recreated.ID)
+}
+
+func TestRepositoryRejectsDeletingServiceWithBlockingDependencies(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	ctx := context.Background()
+
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	require.NoError(t, err)
+
+	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{LogRouteRefs: 1})
+	require.ErrorContains(t, err, "日志路由")
+
+	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{AgentRefs: 1})
+	require.ErrorContains(t, err, "采集 Agent")
+}
+
 func TestRepositoryGetsService(t *testing.T) {
 	store := memstore.NewStore()
 	repo := NewRepository(store.Services())
@@ -126,7 +181,7 @@ func TestRepositoryPersistsAllFields(t *testing.T) {
 		ApplicationID: "app-001",
 		OwnerTeam:     "platform-team",
 		AlertRoute:    "pagerduty-team-a",
-		IdentityType:  "syslog_device",
+		IdentityType:  "host_process",
 	})
 	require.NoError(t, err)
 
@@ -138,7 +193,7 @@ func TestRepositoryPersistsAllFields(t *testing.T) {
 	require.Equal(t, "default", got.Namespace)
 	require.Equal(t, "biz-001", got.BusinessID)
 	require.Equal(t, "app-001", got.ApplicationID)
-	require.Equal(t, "syslog_device", got.IdentityType)
+	require.Equal(t, "host_process", got.IdentityType)
 }
 
 func TestTargetRepositoryCreatesHostProcessWithoutNamespace(t *testing.T) {

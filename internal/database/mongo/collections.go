@@ -451,6 +451,22 @@ func (s *logRouteStore) FindAll(ctx context.Context, results interface{}) error 
 	return cursor.All(ctx, results)
 }
 
+func (s *logRouteStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logRouteStore) FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"agent_group_id": agentGroupID}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 func (s *logRouteStore) FindByID(ctx context.Context, id string, result interface{}) error {
 	oid, _ := objectID(id)
 	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)

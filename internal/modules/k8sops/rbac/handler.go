@@ -122,7 +122,7 @@ func writeRBACError(ctx *gin.Context, err error) {
 	case errors.Is(err, cluster.ErrClusterReadOnly):
 		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，已阻断 K8s RBAC 写操作")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_rbac_operation_failed", "K8s RBAC 操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_rbac_operation_failed", "K8s RBAC 操作失败", err)
 	}
 }
 

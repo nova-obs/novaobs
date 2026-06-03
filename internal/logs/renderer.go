@@ -1,12 +1,20 @@
 package logs
 
 import (
+	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
+	"text/template"
 )
+
+//go:embed templates/collector_daemonset_manifest.yaml
+var k8sDaemonSetBundleTemplateSource string
+
+var k8sDaemonSetBundleTemplate = template.Must(template.New("k8s-daemonset-bundle").Parse(k8sDaemonSetBundleTemplateSource))
 
 type renderInput struct {
 	ServiceName string
@@ -14,6 +22,13 @@ type renderInput struct {
 	Source      LogSource
 	Endpoint    LogEndpoint
 	Route       LogRoute
+}
+
+type k8sDaemonSetBundleTemplateData struct {
+	AgentNamespace       string
+	AgentName            string
+	CollectorConfigBlock string
+	ConfigHash           string
 }
 
 func renderAgentConfig(input renderInput) (string, string) {
@@ -38,116 +53,17 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
 	agentName := "novaobs-logs-agent"
 	collectorConfig := renderK8sCollectorConfig(inputs)
-	collectorConfigBlock := indentYAMLBlock(collectorConfig, "    ")
-	yaml := fmt.Sprintf(`apiVersion: v1
-kind: Namespace
-metadata:
-  name: %s
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: %s
-  namespace: %s
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: %s
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "namespaces", "nodes"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: %s
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: %s
-subjects:
-  - kind: ServiceAccount
-    name: %s
-    namespace: %s
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: %s-config
-  namespace: %s
-data:
-  collector.yaml: |
-%s
----
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    app.kubernetes.io/name: %s
-    app.kubernetes.io/part-of: novaobs
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: %s
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: %s
-        app.kubernetes.io/part-of: novaobs
-      annotations:
-        novaobs.io/config-hash: %s
-    spec:
-      serviceAccountName: %s
-      containers:
-        - name: otelcol
-          image: otel/opentelemetry-collector-contrib:0.102.1
-          args: ["--config=/conf/collector.yaml"]
-          env:
-            - name: KUBE_NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-          volumeMounts:
-            - name: config
-              mountPath: /conf
-              readOnly: true
-            - name: pod-logs
-              mountPath: /var/log/pods
-              readOnly: true
-      volumes:
-        - name: config
-          configMap:
-            name: %s-config
-        - name: pod-logs
-          hostPath:
-            path: /var/log/pods
-            type: DirectoryOrCreate
-`,
-		agentNamespace,
-		agentName,
-		agentNamespace,
-		agentName,
-		agentName,
-		agentName,
-		agentName,
-		agentNamespace,
-		agentName,
-		agentNamespace,
-		collectorConfigBlock,
-		agentName,
-		agentNamespace,
-		agentName,
-		agentName,
-		agentName,
-		yamlQuote(configHash),
-		agentName,
-		agentName,
-	)
-	return yaml
+	data := k8sDaemonSetBundleTemplateData{
+		AgentNamespace:       agentNamespace,
+		AgentName:            agentName,
+		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
+		ConfigHash:           yamlQuote(configHash),
+	}
+	var buffer bytes.Buffer
+	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
+		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
+	}
+	return buffer.String()
 }
 
 func renderK8sCollectorConfig(inputs []renderInput) string {
@@ -157,13 +73,25 @@ func renderK8sCollectorConfig(inputs []renderInput) string {
 		}
 	}
 	source := inputs[0].Source
-	return fmt.Sprintf(`receivers:
-  filelog/k8s:
+	exporterName, exporterYAML := renderDownstreamExporter(inputs[0].Endpoint)
+	return fmt.Sprintf(`extensions:
+  file_storage/filelog_offsets:
+    directory: /var/lib/otelcol/filelog_offsets
+    create_directory: true
+receivers:
+  file_log/k8s:
     include:
 %s
+    poll_interval: 5s
     include_file_path: true
     include_file_name: false
     start_at: end
+    storage: file_storage/filelog_offsets
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0
     operators:
       - type: container
 processors:
@@ -200,19 +128,20 @@ processors:
         action: upsert
   batch:
 exporters:
-  otlphttp/victorialogs:
-    logs_endpoint: %s
+%s
 service:
+  extensions: [file_storage/filelog_offsets]
   pipelines:
     logs:
-      receivers: [filelog/k8s]
+      receivers: [file_log/k8s]
       processors: [k8sattributes, filter/workload, transform/novaobs_routes, resource/novaobs, batch]
-      exporters: [otlphttp/victorialogs]`,
+      exporters: [%s]`,
 		renderK8sIncludes(inputs),
 		renderFilterExpressions(inputs),
 		renderTransformStatements(inputs),
 		yamlQuote(source.SourceType),
-		yamlQuote(inputs[0].Endpoint.WriteURL),
+		exporterYAML,
+		exporterName,
 	)
 }
 
@@ -220,7 +149,7 @@ func renderK8sIncludes(inputs []renderInput) string {
 	seen := map[string]bool{}
 	lines := []string{}
 	for _, input := range inputs {
-		include := "/var/log/pods/*_*_*/*/*.log"
+		include := k8sStdoutInclude(input.Source)
 		if input.Source.SourceType == SourceTypeK8sHostPath && strings.TrimSpace(input.Source.PathPattern) != "" {
 			include = input.Source.PathPattern
 		}
@@ -232,6 +161,18 @@ func renderK8sIncludes(inputs []renderInput) string {
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+func k8sStdoutInclude(source LogSource) string {
+	namespace := strings.TrimSpace(source.Namespace)
+	workloadName := strings.TrimSpace(source.WorkloadName)
+	if namespace != "" && workloadName != "" {
+		return fmt.Sprintf("/var/log/pods/%s_%s*_*/*/*.log", namespace, workloadName)
+	}
+	if namespace != "" {
+		return fmt.Sprintf("/var/log/pods/%s_*_*/*/*.log", namespace)
+	}
+	return "/var/log/pods/*_*_*/*/*.log"
 }
 
 func renderFilterExpressions(inputs []renderInput) string {
@@ -284,6 +225,7 @@ func renderVMFileConfig(input renderInput) (string, string) {
 		yaml := strings.TrimSpace(source.CollectorYAML) + "\n"
 		return yaml, hashYAML(yaml)
 	}
+	exporterName, exporterYAML := renderDownstreamExporter(input.Endpoint)
 	parseProcessor := ""
 	pipelineProcessors := "resource/novaobs, batch"
 	if len(source.ParseRules) > 0 {
@@ -291,7 +233,7 @@ func renderVMFileConfig(input renderInput) (string, string) {
 		pipelineProcessors = "transform/novaobs_parse, resource/novaobs, batch"
 	}
 	yaml := fmt.Sprintf(`receivers:
-  filelog/vm:
+  file_log/vm:
     include:
       - %s
     include_file_path: true
@@ -315,14 +257,13 @@ processors:
         action: upsert
   batch:
 exporters:
-  otlphttp/victorialogs:
-    logs_endpoint: %s
+%s
 service:
   pipelines:
     logs:
-      receivers: [filelog/vm]
+      receivers: [file_log/vm]
       processors: [%s]
-      exporters: [otlphttp/victorialogs]
+      exporters: [%s]
 `,
 		yamlQuote(source.PathPattern),
 		parseProcessor,
@@ -330,10 +271,43 @@ service:
 		yamlQuote(input.Environment),
 		yamlQuote(input.Route.ID),
 		yamlQuote(source.HostGroup),
-		yamlQuote(input.Endpoint.WriteURL),
+		exporterYAML,
 		pipelineProcessors,
+		exporterName,
 	)
 	return yaml, hashYAML(yaml)
+}
+
+func renderDownstreamExporter(endpoint LogEndpoint) (string, string) {
+	endpoint = normalizeEndpoint(endpoint)
+	switch endpoint.SinkType {
+	case EndpointSinkES:
+		lines := []string{
+			"  elasticsearch/logs_downstream:",
+			"    endpoints:",
+			"      - " + yamlQuote(endpoint.WriteURL),
+		}
+		if endpoint.StreamName != "" {
+			lines = append(lines, "    logs_index: "+yamlQuote(endpoint.StreamName))
+		}
+		return "elasticsearch/logs_downstream", strings.Join(lines, "\n")
+	case EndpointSinkKafka:
+		lines := []string{
+			"  kafka/logs_downstream:",
+			"    brokers:",
+		}
+		for _, broker := range splitEndpointList(endpoint.WriteURL) {
+			lines = append(lines, "      - "+yamlQuote(broker))
+		}
+		topic := firstNonEmpty(endpoint.StreamName, "novaobs-logs")
+		lines = append(lines, "    topic: "+yamlQuote(topic))
+		return "kafka/logs_downstream", strings.Join(lines, "\n")
+	default:
+		return "otlp_http/logs_downstream", strings.Join([]string{
+			"  otlp_http/logs_downstream:",
+			"    logs_endpoint: " + yamlQuote(endpoint.WriteURL),
+		}, "\n")
+	}
 }
 
 func renderVMParseProcessor(rules []LogParseRule) string {

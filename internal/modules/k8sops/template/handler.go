@@ -22,7 +22,7 @@ func ListHandler(service Service) gin.HandlerFunc {
 		}
 		items, err := service.List(ctx.Request.Context(), filter)
 		if err != nil {
-			response.Error(ctx, http.StatusInternalServerError, "k8s_template_list_failed", "模板列表查询失败")
+			response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_template_list_failed", "模板列表查询失败", err)
 			return
 		}
 		response.OK(ctx, items, gin.H{"total": len(items), "page": filter.Page, "page_size": filter.PageSize})
@@ -110,7 +110,7 @@ func writeTemplateError(ctx *gin.Context, err error) {
 	case errors.Is(err, ErrAlreadyExists):
 		response.Error(ctx, http.StatusConflict, "already_exists", "模板已存在")
 	default:
-		response.Error(ctx, http.StatusInternalServerError, "k8s_template_operation_failed", "模板操作失败")
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "k8s_template_operation_failed", "模板操作失败", err)
 	}
 }
 

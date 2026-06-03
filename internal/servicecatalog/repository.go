@@ -25,7 +25,7 @@ func (r Repository) List(ctx context.Context, filters ...ListFilter) ([]Service,
 		return nil, err
 	}
 	if len(filters) == 0 {
-		return services, nil
+		return applyFilter(services, ListFilter{}), nil
 	}
 	return applyFilter(services, filters[0]), nil
 }
@@ -81,6 +81,31 @@ func (r Repository) Update(ctx context.Context, id string, req UpdateRequest) (S
 	return updated, nil
 }
 
+func (r Repository) Delete(ctx context.Context, id string, deps DeleteDependencies) (Service, error) {
+	current, err := r.Get(ctx, id)
+	if err != nil {
+		return Service{}, err
+	}
+	if deps.LogRouteRefs > 0 {
+		return Service{}, apperr.Conflict("服务仍有关联日志路由，不能删除")
+	}
+	if deps.AgentRefs > 0 {
+		return Service{}, apperr.Conflict("服务仍有关联采集 Agent，不能删除")
+	}
+	if deps.OnboardingRefs > 0 {
+		return Service{}, apperr.Conflict("服务仍有关联接入配置，不能删除")
+	}
+	if current.Status == "deleted" {
+		return current, nil
+	}
+	current.Status = "deleted"
+	current.UpdatedAt = time.Now().UTC()
+	if err := r.store.Update(ctx, id, current); err != nil {
+		return Service{}, err
+	}
+	return current, nil
+}
+
 func (r Repository) ensureUnique(ctx context.Context, service Service) error {
 	services, err := r.List(ctx)
 	if err != nil {
@@ -88,6 +113,9 @@ func (r Repository) ensureUnique(ctx context.Context, service Service) error {
 	}
 	for _, existing := range services {
 		if existing.ID == service.ID {
+			continue
+		}
+		if existing.Status == "deleted" {
 			continue
 		}
 		if service.CMDBServiceID != "" && existing.CMDBServiceID == service.CMDBServiceID {
@@ -110,14 +138,14 @@ func validateService(service Service) error {
 	if service.Source != "" && service.Source != "manual" && service.Source != "cmdb" && service.Source != "k8s" {
 		return apperr.InvalidRequest("服务来源只能是 manual、cmdb 或 k8s")
 	}
-	if service.Status != "" && service.Status != "pending" && service.Status != "active" && service.Status != "degraded" {
-		return apperr.InvalidRequest("服务状态只能是 pending、active 或 degraded")
+	if service.Status != "" && service.Status != "pending" && service.Status != "active" && service.Status != "degraded" && service.Status != "deleted" {
+		return apperr.InvalidRequest("服务状态只能是 pending、active、degraded 或 deleted")
 	}
 	if service.SyncStatus != "" && service.SyncStatus != "local" && service.SyncStatus != "synced" && service.SyncStatus != "stale" {
 		return apperr.InvalidRequest("服务同步状态只能是 local、synced 或 stale")
 	}
-	if service.IdentityType != "" && service.IdentityType != "k8s_workload" && service.IdentityType != "host_process" && service.IdentityType != "syslog_device" {
-		return apperr.InvalidRequest("服务身份类型只能是 k8s_workload、host_process 或 syslog_device")
+	if service.IdentityType != "" && service.IdentityType != "k8s_workload" && service.IdentityType != "host_process" {
+		return apperr.InvalidRequest("服务身份类型只能是 k8s_workload 或 host_process")
 	}
 	return nil
 }
@@ -223,6 +251,9 @@ func applyFilter(services []Service, filter ListFilter) []Service {
 	out := make([]Service, 0, len(services))
 	query := strings.ToLower(strings.TrimSpace(filter.Query))
 	for _, service := range services {
+		if filter.Status == "" && service.Status == "deleted" {
+			continue
+		}
 		if filter.Environment != "" && service.Environment != filter.Environment {
 			continue
 		}

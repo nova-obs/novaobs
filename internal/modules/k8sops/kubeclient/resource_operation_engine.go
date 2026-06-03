@@ -51,13 +51,15 @@ type OperationObject struct {
 }
 
 type DryRunApplyRequest struct {
-	YAMLContent string
+	YAMLContent    string
+	ForceConflicts bool
 }
 
 type ClusterDryRunApplyRequest struct {
-	ClusterID    string
-	YAMLContent  string
-	FieldManager string
+	ClusterID      string
+	YAMLContent    string
+	FieldManager   string
+	ForceConflicts bool
 }
 
 type DryRunApplyResult struct {
@@ -113,7 +115,7 @@ func (e ProviderBackedResourceOperationEngine) DryRunApply(ctx context.Context, 
 		fieldManager = trimmed
 	}
 	engine := NewResourceOperationEngine(bundle, snapshot, WithFieldManager(fieldManager))
-	result, err := engine.PreviewApply(ctx, DryRunApplyRequest{YAMLContent: req.YAMLContent})
+	result, err := engine.PreviewApply(ctx, DryRunApplyRequest{YAMLContent: req.YAMLContent, ForceConflicts: req.ForceConflicts})
 	return DryRunApplyResult{Objects: result.Objects, Warnings: result.Warnings}, err
 }
 
@@ -138,7 +140,7 @@ func (e ProviderBackedResourceOperationEngine) Apply(ctx context.Context, req Cl
 		fieldManager = trimmed
 	}
 	engine := NewResourceOperationEngine(bundle, snapshot, WithFieldManager(fieldManager))
-	return engine.Apply(ctx, ApplyRequest{Mode: req.Mode, YAMLContent: req.YAMLContent})
+	return engine.Apply(ctx, ApplyRequest{Mode: req.Mode, YAMLContent: req.YAMLContent, ForceConflicts: req.ForceConflicts})
 }
 
 func (e ProviderBackedResourceOperationEngine) Delete(ctx context.Context, req ClusterDeleteRequest) (ResourceOperationResult, error) {
@@ -176,9 +178,10 @@ func (e ResourceOperationEngine) PreviewApply(ctx context.Context, req DryRunApp
 		return PreviewApplyResult{}, err
 	}
 	resolver := NewResourceVersionResolver(e.snapshot)
-	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
-	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager, req.ForceConflicts)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager, req.ForceConflicts)
 	result := PreviewApplyResult{Objects: make([]OperationObject, 0, len(objects)), Warnings: append([]string{}, e.snapshot.Warnings...)}
+	plannedNamespaces := namespacesPlannedByApply(objects)
 	for _, object := range objects {
 		resolved, err := resolver.Resolve(ResourceVersionRequest{APIVersion: object.GetAPIVersion(), Kind: object.GetKind()})
 		if err != nil {
@@ -206,25 +209,25 @@ func (e ResourceOperationEngine) PreviewApply(ctx context.Context, req DryRunApp
 		executor := OperationExecutorTyped
 		handled, err := typedExecutor.Apply(ctx, operationObject, OperationModeDryRun)
 		if err != nil {
+			if shouldDeferDryRunForPlannedNamespace(err, resolved, object.GetNamespace(), plannedNamespaces) {
+				result.Warnings = append(result.Warnings, plannedNamespaceDryRunWarning(object.GetNamespace(), resolved.Kind, object.GetName()))
+				result.Objects = append(result.Objects, previewOperationObject(resolved, object, OperationExecutorDeferredDryRun, operation, beforeHash))
+				continue
+			}
 			return PreviewApplyResult{}, resourceOperationError(err)
 		}
 		if !handled {
 			executor = OperationExecutorDynamic
 			if err := dynamicExecutor.Apply(ctx, operationObject, OperationModeDryRun); err != nil {
+				if shouldDeferDryRunForPlannedNamespace(err, resolved, object.GetNamespace(), plannedNamespaces) {
+					result.Warnings = append(result.Warnings, plannedNamespaceDryRunWarning(object.GetNamespace(), resolved.Kind, object.GetName()))
+					result.Objects = append(result.Objects, previewOperationObject(resolved, object, OperationExecutorDeferredDryRun, operation, beforeHash))
+					continue
+				}
 				return PreviewApplyResult{}, resourceOperationError(err)
 			}
 		}
-		result.Objects = append(result.Objects, OperationObject{
-			APIVersion: resolved.APIVersion,
-			Kind:       resolved.Kind,
-			Namespace:  object.GetNamespace(),
-			Name:       object.GetName(),
-			Resolved:   resolved,
-			Executor:   executor,
-			Operation:  operation,
-			BeforeHash: beforeHash,
-			AfterHash:  operationObjectHash(object),
-		})
+		result.Objects = append(result.Objects, previewOperationObject(resolved, object, executor, operation, beforeHash))
 	}
 	return result, nil
 }
@@ -239,8 +242,8 @@ func (e ResourceOperationEngine) Apply(ctx context.Context, req ApplyRequest) (R
 		return ResourceOperationResult{}, err
 	}
 	resolver := NewResourceVersionResolver(e.snapshot)
-	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
-	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager, req.ForceConflicts)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager, req.ForceConflicts)
 	result := ResourceOperationResult{Objects: make([]OperationObject, 0, len(objects)), Warnings: append([]string{}, e.snapshot.Warnings...)}
 	for _, object := range objects {
 		resolved, err := resolver.Resolve(ResourceVersionRequest{APIVersion: object.GetAPIVersion(), Kind: object.GetKind()})
@@ -306,8 +309,8 @@ func (e ResourceOperationEngine) Delete(ctx context.Context, req DeleteRequest) 
 		Namespace: identity.Namespace,
 		Resolved:  resolved,
 	}
-	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager)
-	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager)
+	typedExecutor := newTypedOperationExecutor(e.bundle.Clientset, e.fieldManager, false)
+	dynamicExecutor := newDynamicOperationExecutor(e.bundle.Dynamic, e.fieldManager, false)
 	executor := OperationExecutorTyped
 	handled, err := typedExecutor.Delete(ctx, operationObject, mode)
 	if err != nil {
@@ -436,4 +439,42 @@ func resourceOperationError(err error) error {
 		return fmt.Errorf("%w: %v", ErrResourceOperationInvalid, err)
 	}
 	return err
+}
+
+func namespacesPlannedByApply(objects []*unstructured.Unstructured) map[string]bool {
+	out := map[string]bool{}
+	for _, object := range objects {
+		group, _ := parseAPIVersion(object.GetAPIVersion())
+		if group == "" && strings.EqualFold(object.GetKind(), "Namespace") {
+			if name := strings.TrimSpace(object.GetName()); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
+func shouldDeferDryRunForPlannedNamespace(err error, resolved ResolvedResourceVersion, namespace string, plannedNamespaces map[string]bool) bool {
+	return resolved.Namespaced &&
+		strings.TrimSpace(namespace) != "" &&
+		plannedNamespaces[strings.TrimSpace(namespace)] &&
+		apierrors.IsNotFound(err)
+}
+
+func plannedNamespaceDryRunWarning(namespace string, kind string, name string) string {
+	return fmt.Sprintf("namespace %q 会在同一批清单中创建，已延后 %s/%s 的 server-side dry-run 校验", namespace, kind, name)
+}
+
+func previewOperationObject(resolved ResolvedResourceVersion, object *unstructured.Unstructured, executor string, operation string, beforeHash string) OperationObject {
+	return OperationObject{
+		APIVersion: resolved.APIVersion,
+		Kind:       resolved.Kind,
+		Namespace:  object.GetNamespace(),
+		Name:       object.GetName(),
+		Resolved:   resolved,
+		Executor:   executor,
+		Operation:  operation,
+		BeforeHash: beforeHash,
+		AfterHash:  operationObjectHash(object),
+	}
 }

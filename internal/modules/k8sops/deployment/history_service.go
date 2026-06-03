@@ -152,7 +152,7 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 	}
 	warnings := []string{}
 	if s.dryRunner != nil {
-		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent})
+		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent, ForceConflicts: req.ForceConflicts})
 		if err != nil {
 			return OperationResult{}, deploymentOperationError(err)
 		}
@@ -161,6 +161,27 @@ func (s Service) Preview(ctx context.Context, subject platformrbac.Subject, req 
 		if !s.allowedAll(subject, "preview", identities) {
 			return OperationResult{}, ErrPermissionDenied
 		}
+		plan := buildPreviewPlanFromOperationObjects(req.ClusterID, dryRun.Objects, warnings)
+		event, err := s.record(ctx, subject, "preview", req.ClusterID, identities, map[string]any{
+			"cluster_id": req.ClusterID,
+			"preview_id": plan.ID,
+			"resources":  identitySummaries(plan.Resources),
+			"diff_count": len(plan.Diffs),
+			"yaml_bytes": len(req.YAMLContent),
+		})
+		if err != nil {
+			return OperationResult{}, err
+		}
+		return OperationResult{
+			Status:            "previewed",
+			Message:           "部署预览已生成",
+			AuditID:           event.ID,
+			Resources:         plan.Resources,
+			PreviewID:         plan.ID,
+			ConfirmationToken: plan.ConfirmationToken,
+			Diffs:             plan.Diffs,
+			Warnings:          plan.Warnings,
+		}, nil
 	} else {
 		identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
 		if err != nil {
@@ -243,9 +264,10 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 			return OperationResult{}, fmt.Errorf("%w: %w", ErrInvalidRequest, ErrConfirmationMismatch)
 		}
 		applied, err := s.applier.Apply(ctx, kubeclient.ClusterApplyRequest{
-			ClusterID:   req.ClusterID,
-			Mode:        kubeclient.OperationModeApply,
-			YAMLContent: req.YAMLContent,
+			ClusterID:      req.ClusterID,
+			Mode:           kubeclient.OperationModeApply,
+			YAMLContent:    req.YAMLContent,
+			ForceConflicts: req.ForceConflicts,
 		})
 		if err != nil {
 			return OperationResult{}, deploymentOperationError(err)
@@ -646,7 +668,7 @@ func parseResourceIdentities(req OperationRequest) ([]ResourceIdentity, error) {
 			Name:       parsed.Metadata.Name,
 			UID:        parsed.Metadata.UID,
 		})
-		if identity.Namespace == "" || identity.APIVersion == "" || identity.Kind == "" || identity.Name == "" {
+		if !completeResourceIdentity(identity) {
 			return nil, ErrInvalidRequest
 		}
 		identities = append(identities, identity)
@@ -690,7 +712,7 @@ func (s Service) resolveResourceVersions(ctx context.Context, clusterID string, 
 func (s Service) previewPlanForRequest(ctx context.Context, subject platformrbac.Subject, req OperationRequest, action string, identities []ResourceIdentity) (PreviewPlan, error) {
 	warnings := []string{}
 	if s.dryRunner != nil {
-		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent})
+		dryRun, err := s.dryRunner.DryRunApply(ctx, kubeclient.ClusterDryRunApplyRequest{ClusterID: req.ClusterID, YAMLContent: req.YAMLContent, ForceConflicts: req.ForceConflicts})
 		if err != nil {
 			return PreviewPlan{}, deploymentOperationError(err)
 		}
@@ -699,6 +721,7 @@ func (s Service) previewPlanForRequest(ctx context.Context, subject platformrbac
 		if !s.allowedAll(subject, action, identities) {
 			return PreviewPlan{}, ErrPermissionDenied
 		}
+		return buildPreviewPlanFromOperationObjects(req.ClusterID, dryRun.Objects, warnings), nil
 	} else {
 		var err error
 		identities, err = s.resolveResourceVersions(ctx, req.ClusterID, identities)
@@ -897,8 +920,58 @@ func normalizeIdentity(identity ResourceIdentity) ResourceIdentity {
 	return identity
 }
 
+func completeResourceIdentity(identity ResourceIdentity) bool {
+	return identity.ClusterID != "" &&
+		identity.APIVersion != "" &&
+		identity.Kind != "" &&
+		identity.Name != "" &&
+		(identity.Namespace != "" || clusterScopedKind(identity.APIVersion, identity.Kind))
+}
+
 func completeDestructiveIdentity(identity ResourceIdentity) bool {
-	return identity.ClusterID != "" && identity.Namespace != "" && identity.APIVersion != "" && identity.Kind != "" && identity.Name != "" && identity.UID != ""
+	return completeResourceIdentity(identity) && identity.UID != ""
+}
+
+func clusterScopedKind(apiVersion string, kind string) bool {
+	group := apiGroup(apiVersion)
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace", "node", "persistentvolume":
+		return group == ""
+	case "clusterrole", "clusterrolebinding":
+		return group == "rbac.authorization.k8s.io"
+	case "customresourcedefinition":
+		return group == "apiextensions.k8s.io"
+	case "mutatingwebhookconfiguration", "validatingwebhookconfiguration":
+		return group == "admissionregistration.k8s.io"
+	case "apiservice":
+		return group == "apiregistration.k8s.io"
+	case "certificatesigningrequest":
+		return group == "certificates.k8s.io"
+	case "storageclass", "csidriver", "csinode", "volumeattachment":
+		return group == "storage.k8s.io"
+	case "priorityclass":
+		return group == "scheduling.k8s.io"
+	case "runtimeclass":
+		return group == "node.k8s.io"
+	case "podsecuritypolicy":
+		return group == "policy"
+	case "gatewayclass":
+		return group == "gateway.networking.k8s.io"
+	case "meshpolicy":
+		return group == "authentication.istio.io"
+	case "clusterrbacconfig":
+		return group == "rbac.istio.io"
+	default:
+		return false
+	}
+}
+
+func apiGroup(apiVersion string) string {
+	group, _, ok := strings.Cut(strings.TrimSpace(apiVersion), "/")
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(group)
 }
 
 func identitySummaries(identities []ResourceIdentity) []map[string]string {
