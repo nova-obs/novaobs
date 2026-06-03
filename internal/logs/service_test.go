@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -74,12 +75,28 @@ func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T)
 			Namespace:    "logplatform",
 			WorkloadKind: "Deployment",
 			WorkloadName: "utrace-api",
+			RuntimeLogPaths: []string{
+				"/data/docker/containers",
+			},
 		},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, endpoint.ID, preview.Endpoint.ID)
 	require.Contains(t, preview.AgentYAML, "logs_endpoint: \"http://vl.test03:9428/insert/opentelemetry/v1/logs\"")
+}
+
+func TestCreateVLEndpointRejectsRootWriteURL(t *testing.T) {
+	fixture := newLogsFixture(t, nil)
+
+	_, err := fixture.service.CreateEndpoint(context.Background(), LogEndpoint{
+		Name:     "vl-root",
+		WriteURL: "http://vl.test03:9428/",
+		QueryURL: "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:  "http://vl.test03:9428/select/vmui",
+	})
+
+	require.ErrorContains(t, err, "/insert/opentelemetry/v1/logs")
 }
 
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
@@ -104,6 +121,9 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 			Namespace:    "logplatform",
 			WorkloadKind: "Deployment",
 			WorkloadName: "utrace-api",
+			RuntimeLogPaths: []string{
+				"/data/docker/containers",
+			},
 		},
 	})
 
@@ -133,6 +153,60 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	require.Equal(t, route.Route.AgentGroupID, secondRoute.Route.AgentGroupID)
 }
 
+func TestCreateK8sRouteAcceptsCollectorYAMLWithMultipleNamedPipelines(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "mtu-test")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://10.86.11.30:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://10.86.11.30:9428/select/logsql/query",
+		VMUIURL:   "http://10.86.11.30:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "mtu-test",
+			WorkloadKind: "DaemonSet",
+			WorkloadName: "mtu-ds",
+			RuntimeLogPaths: []string{
+				"/data/docker/containers",
+			},
+			CollectorYAML: validMultiServiceK8sCollectorYAML(endpoint.WriteURL),
+		},
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, route.Source.CollectorYAML, "logs/mtu-test-mtu-ds")
+	require.Contains(t, route.Source.CollectorYAML, "logs/logplatform-prometheus")
+}
+
+func TestK8sHostPathSourceTypeIsRetired(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+
+	_, err := fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: "k8s_hostpath",
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+			PathPattern:  "/data/logs/*.log",
+		},
+	})
+
+	require.ErrorContains(t, err, "日志来源类型只支持 k8s_stdout、vm_file")
+}
+
 func TestPreviewAndUpdateK8sRouteWithCollectorYAMLExcludeCurrentRoute(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -154,6 +228,9 @@ func TestPreviewAndUpdateK8sRouteWithCollectorYAMLExcludeCurrentRoute(t *testing
 			Namespace:    "logplatform",
 			WorkloadKind: "Deployment",
 			WorkloadName: "utrace-api",
+			RuntimeLogPaths: []string{
+				"/data/docker/containers",
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -169,7 +246,7 @@ func TestPreviewAndUpdateK8sRouteWithCollectorYAMLExcludeCurrentRoute(t *testing
 			AgentNamespace: "novaobs-system",
 			WorkloadKind:   "Deployment",
 			WorkloadName:   "utrace-api",
-			CollectorYAML:  validCollectorYAML(endpoint.WriteURL, ""),
+			CollectorYAML:  validK8sCollectorYAML(endpoint.WriteURL, "logplatform", "utrace-api"),
 		},
 	}
 	preview, err := fixture.service.PreviewRoute(ctx, updateReq)
@@ -303,6 +380,68 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 	require.ErrorContains(t, err, "Kafka 下游端点必须填写 topic")
 }
 
+func TestUpdateEndpointKeepsIDAndValidatesUniqueness(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ScopeType: EndpointScopeK8sCluster,
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	_, err = fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-prod",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:   "http://vl.prod:9428/select/vmui",
+		ScopeType: EndpointScopeGlobal,
+	})
+	require.NoError(t, err)
+
+	updated, err := fixture.service.UpdateEndpoint(ctx, endpoint.ID, LogEndpoint{
+		Name:        "vl-test03-fixed",
+		Description: "fixed write path",
+		SinkType:    EndpointSinkVL,
+		WriteURL:    "http://vl-fixed.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:    "http://vl-fixed.test03:9428/select/logsql/query",
+		VMUIURL:     "http://vl-fixed.test03:9428/select/vmui",
+		ScopeType:   EndpointScopeK8sCluster,
+		ClusterID:   "test03",
+	})
+	require.NoError(t, err)
+	require.Equal(t, endpoint.ID, updated.ID)
+	require.Equal(t, endpoint.CreatedAt, updated.CreatedAt)
+	require.Equal(t, "vl-test03-fixed", updated.Name)
+	require.Equal(t, "http://vl-fixed.test03:9428/insert/opentelemetry/v1/logs", updated.WriteURL)
+
+	_, err = fixture.service.UpdateEndpoint(ctx, endpoint.ID, LogEndpoint{
+		Name:      "vl-prod",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl-fixed.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl-fixed.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl-fixed.test03:9428/select/vmui",
+		ScopeType: EndpointScopeK8sCluster,
+		ClusterID: "test03",
+	})
+	require.ErrorContains(t, err, "日志下游端点名称已存在")
+
+	_, err = fixture.service.UpdateEndpoint(ctx, endpoint.ID, LogEndpoint{
+		Name:      "vl-root",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl-fixed.test03:9428/",
+		QueryURL:  "http://vl-fixed.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl-fixed.test03:9428/select/vmui",
+		ScopeType: EndpointScopeK8sCluster,
+		ClusterID: "test03",
+	})
+	require.ErrorContains(t, err, "/insert/opentelemetry/v1/logs")
+}
+
 func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -326,7 +465,7 @@ func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 			CollectorYAML: "receivers:\n  file_log/custom:\n",
 		},
 	})
-	require.ErrorContains(t, err, "collector_yaml 必须包含 service.pipelines.logs")
+	require.ErrorContains(t, err, "collector_yaml 必须包含 logs pipeline")
 
 	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  service.ID,
@@ -365,6 +504,18 @@ func TestValidateCollectorYAMLSupportsESAndKafkaExporters(t *testing.T) {
 
 	err := validateCollectorYAML(validKafkaCollectorYAML([]string{"kafka-other.prod:9092"}), kafkaEndpoint)
 	require.ErrorContains(t, err, "collector_yaml exporter 写入地址必须与当前日志下游端点一致")
+}
+
+func TestValidateCollectorYAMLSupportsNamedLogsPipelines(t *testing.T) {
+	endpoint := LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"}
+	raw := strings.Replace(validK8sCollectorYAML(endpoint.WriteURL, "logplatform", "utrace-api"), "    logs:\n", "    logs/logplatform-utrace-api:\n", 1)
+	require.NoError(t, validateCollectorYAML(raw, endpoint))
+}
+
+func TestValidateCollectorYAMLSupportsMultipleNamedLogsPipelines(t *testing.T) {
+	endpoint := LogEndpoint{WriteURL: "http://10.86.11.30:9428/insert/opentelemetry/v1/logs"}
+
+	require.NoError(t, validateCollectorYAML(validMultiServiceK8sCollectorYAML(endpoint.WriteURL), endpoint))
 }
 
 func TestK8sCollectorYAMLRejectsGlobalPodLogInclude(t *testing.T) {
@@ -413,7 +564,65 @@ func TestK8sCollectorYAMLRejectsGlobalPodLogInclude(t *testing.T) {
 	require.ErrorContains(t, err, "不能使用全局 Pod 日志路径")
 }
 
-func TestK8sRouteRejectsCustomCollectorYAMLWhenBundleHasMultipleRoutes(t *testing.T) {
+func TestK8sCollectorYAMLRejectsUnsafeNodeLogIncludes(t *testing.T) {
+	for _, include := range []string{
+		"/var/log",
+		"/var/log/*.log",
+		"/var/log/containers/*.log",
+		"/var/log/pods/*/*/*.log",
+		"/var/log/pods/*_*_*/*/*.log",
+		"/var/lib/kubelet/pods/*/volumes/*",
+		"/var/lib/docker/containers/*/*.log",
+	} {
+		err := validateK8sCollectorYAMLRuntimeScope(validCollectorYAMLWithInclude("http://vl.test03:9428/insert/opentelemetry/v1/logs", include, ""))
+		require.Error(t, err, include)
+	}
+
+	err := validateK8sCollectorYAMLRuntimeScope(validK8sCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", "logplatform", "utrace-api"))
+	require.NoError(t, err)
+}
+
+func TestRuntimeLogPathsRejectWideSystemDirectories(t *testing.T) {
+	require.NoError(t, validateRuntimeLogPaths([]string{"/data/docker/containers"}))
+	require.ErrorContains(t, validateRuntimeLogPaths([]string{"data/docker/containers"}), "绝对路径")
+	require.ErrorContains(t, validateRuntimeLogPaths([]string{"/var/log/pods"}), "宽泛系统目录")
+	require.ErrorContains(t, validateRuntimeLogPaths([]string{"/data/docker/containers/*"}), "不支持 glob")
+}
+
+func TestK8sCollectorYAMLRequiresFilelogSafetyDefaults(t *testing.T) {
+	raw := `receivers:
+  file_log/novaobs:
+    include:
+      - /var/log/pods/logplatform_*_*/*/*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+processors:
+  resource/novaobs:
+    attributes:
+      - key: service.name
+        value: logplatform
+        action: upsert
+  batch:
+exporters:
+  otlp_http/logs_downstream:
+    logs_endpoint: http://vl.test03:9428/insert/opentelemetry/v1/logs
+service:
+  pipelines:
+    logs:
+      receivers: [file_log/novaobs]
+      processors: [resource/novaobs, batch]
+      exporters: [otlp_http/logs_downstream]
+`
+	err := validateK8sCollectorYAMLRuntimeScope(raw)
+	require.ErrorContains(t, err, "poll_interval")
+
+	aliasReceiver := strings.Replace(raw, "file_log/novaobs", "filelog/novaobs", 1)
+	err = validateK8sCollectorYAMLRuntimeScope(aliasReceiver)
+	require.ErrorContains(t, err, "不支持 filelog alias")
+}
+
+func TestK8sRouteAllowsCollectorDomainConfigWhenBundleHasMultipleRoutes(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
@@ -436,7 +645,7 @@ func TestK8sRouteRejectsCustomCollectorYAMLWhenBundleHasMultipleRoutes(t *testin
 			Namespace:     "logplatform",
 			WorkloadKind:  "Deployment",
 			WorkloadName:  "utrace-api",
-			CollectorYAML: validCollectorYAML(endpoint.WriteURL, ""),
+			CollectorYAML: validK8sCollectorYAML(endpoint.WriteURL, "logplatform", "utrace-api"),
 		},
 	})
 	require.NoError(t, err)
@@ -452,7 +661,7 @@ func TestK8sRouteRejectsCustomCollectorYAMLWhenBundleHasMultipleRoutes(t *testin
 			WorkloadName: "payment-api",
 		},
 	})
-	require.ErrorContains(t, err, "同一 K8s 采集域包含多条日志路由")
+	require.NoError(t, err)
 }
 
 func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
@@ -498,11 +707,23 @@ func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
 	}
 	req.EndpointID = globalEndpoint.ID
 	_, err = fixture.service.PreviewRoute(ctx, req)
-	require.ErrorContains(t, err, "当前集群已有绑定的日志下游端点")
+	require.NoError(t, err)
 
 	req.EndpointID = vmEndpoint.ID
 	_, err = fixture.service.PreviewRoute(ctx, req)
 	require.ErrorContains(t, err, "K8s 日志路由不能选择 VM 专用日志下游端点")
+
+	_, err = fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03-secondary",
+		WriteURL:  "http://vl-secondary.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl-secondary.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl-secondary.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	req.EndpointID = ""
+	_, err = fixture.service.PreviewRoute(ctx, req)
+	require.ErrorContains(t, err, "请显式选择端点")
 }
 
 func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T) {
@@ -568,6 +789,78 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 	require.Contains(t, deploy.lastPreviewYAML, "payment-api")
 	require.Contains(t, deploy.lastPreviewYAML, "ExtractPatterns(body,")
 	require.Contains(t, deploy.lastPreviewYAML, "payment-text")
+}
+
+func TestPublishK8sRouteCombinesSameClusterRoutesWithDifferentEndpoints(t *testing.T) {
+	ctx := context.Background()
+	deploy := &fakeDeploymentService{}
+	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	firstEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-logplatform",
+		WriteURL:  "http://vl-logplatform:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl-logplatform:9428/select/logsql/query",
+		VMUIURL:   "http://vl-logplatform:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	secondEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-mtu",
+		WriteURL:  "http://vl-mtu:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl-mtu:9428/select/logsql/query",
+		VMUIURL:   "http://vl-mtu:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	firstService := fixture.createService(t, "prometheus")
+	secondService := fixture.createService(t, "mtu-api")
+
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+		ServiceID:  firstService.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: firstEndpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "prometheus",
+		},
+	})
+	require.NoError(t, err)
+	secondRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+		ServiceID:  secondService.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: secondEndpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "mtu-test",
+			WorkloadKind: "Deployment",
+			WorkloadName: "mtu-api",
+			ParseRules: []LogParseRule{{
+				Name:     "mtu-json",
+				RuleType: ParseRuleJSON,
+				Enabled:  true,
+			}},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), secondRoute.Route.ID, PublishRouteRequest{})
+
+	require.NoError(t, err)
+	require.True(t, result.RequiresConfirmation)
+	require.Equal(t, 1, strings.Count(deploy.lastPreviewYAML, "kind: DaemonSet"))
+	require.Contains(t, deploy.lastPreviewYAML, "/var/log/pods/logplatform_prometheus*_*/*/*.log")
+	require.Contains(t, deploy.lastPreviewYAML, "/var/log/pods/mtu-test_mtu-api*_*/*/*.log")
+	require.Contains(t, deploy.lastPreviewYAML, "logs_endpoint: \"http://vl-logplatform:9428/insert/opentelemetry/v1/logs\"")
+	require.Contains(t, deploy.lastPreviewYAML, "logs_endpoint: \"http://vl-mtu:9428/insert/opentelemetry/v1/logs\"")
+	require.Contains(t, deploy.lastPreviewYAML, "file_log/logplatform-prometheus")
+	require.Contains(t, deploy.lastPreviewYAML, "file_log/mtu-test-mtu-api")
+	require.Contains(t, deploy.lastPreviewYAML, "logs/logplatform-prometheus")
+	require.Contains(t, deploy.lastPreviewYAML, "logs/mtu-test-mtu-api")
+	require.Contains(t, deploy.lastPreviewYAML, "otlp_http/endpoint_vl-logplatform")
+	require.Contains(t, deploy.lastPreviewYAML, "otlp_http/endpoint_vl-mtu")
+	require.NotContains(t, deploy.lastPreviewYAML, "logs/route_")
+	require.Contains(t, deploy.lastPreviewYAML, "ParseJSON(body)")
 }
 
 func TestPublishK8sRouteApplyForcesManagedFieldConflicts(t *testing.T) {
@@ -674,11 +967,12 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 		ServiceName: "utrace-api",
 		Environment: "prod",
 		Source: LogSource{
-			SourceType:   SourceTypeK8sStdout,
-			ClusterID:    "test03",
-			Namespace:    "logplatform",
-			WorkloadKind: "Deployment",
-			WorkloadName: "utrace-api",
+			SourceType:      SourceTypeK8sStdout,
+			ClusterID:       "test03",
+			Namespace:       "logplatform",
+			WorkloadKind:    "Deployment",
+			WorkloadName:    "utrace-api",
+			RuntimeLogPaths: []string{"/data/docker/containers"},
 		},
 		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
 		Route:    LogRoute{ID: "route-001"},
@@ -689,11 +983,21 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.NotEmpty(t, hash)
 	require.Contains(t, yaml, `- "/var/log/pods/logplatform_utrace-api*_*/*/*.log"`)
 	require.NotContains(t, yaml, `- "/var/log/pods/*_*_*/*/*.log"`)
-	require.Contains(t, yaml, "file_log/k8s")
-	require.Contains(t, yaml, "otlp_http/logs_downstream")
+	require.Contains(t, yaml, "file_log/logplatform-utrace-api")
+	require.Contains(t, yaml, "mountPath: /data/docker/containers")
+	require.Contains(t, yaml, "path: /data/docker/containers")
+	require.NotContains(t, yaml, `- "/data/docker/containers`)
+	require.Contains(t, yaml, "otlp_http/endpoint_")
 	require.Contains(t, yaml, "file_storage/filelog_offsets")
-	require.Contains(t, yaml, "poll_interval: 5s")
+	require.Contains(t, yaml, "poll_interval: 10s")
+	require.Contains(t, yaml, "max_concurrent_files: 64")
+	require.Contains(t, yaml, "max_batches: 2")
+	require.Contains(t, yaml, "file_cache_advise: true")
+	require.Contains(t, yaml, `- "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"`)
+	require.Contains(t, yaml, `- "/var/log/pods/*/*/*.gz"`)
+	require.Contains(t, yaml, "memory_limiter")
 	require.Contains(t, yaml, "storage: file_storage/filelog_offsets")
+	require.Contains(t, yaml, "processors: [memory_limiter, k8s_attributes, resource/logplatform-utrace-api, batch]")
 	require.Contains(t, yaml, `novaobs.io/config-hash: "`)
 	require.Contains(t, yaml, hash)
 }
@@ -708,6 +1012,9 @@ func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 			Namespace:    "logplatform",
 			WorkloadKind: "Deployment",
 			WorkloadName: "utrace-api",
+			RuntimeLogPaths: []string{
+				"/data/docker/containers",
+			},
 		},
 		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
 		Route:    LogRoute{ID: "route-001"},
@@ -717,8 +1024,17 @@ func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 
 	require.Contains(t, k8sDaemonSetBundleTemplateSource, "kind: DaemonSet")
 	require.Contains(t, rendered, "mountPath: /var/log/pods")
-	require.Contains(t, rendered, "mountPath: /var/log/containers")
-	require.Contains(t, rendered, "mountPath: /var/lib/docker/containers")
+	require.Contains(t, rendered, "mountPath: /data/docker/containers")
+	require.NotContains(t, rendered, "mountPath: /var/log/containers")
+	require.NotContains(t, rendered, "mountPath: /var/lib/docker/containers")
+	require.NotContains(t, rendered, "DirectoryOrCreate")
+	require.Contains(t, rendered, "type: Directory")
+	require.Contains(t, rendered, "requests:")
+	require.Contains(t, rendered, "limits:")
+	require.Contains(t, rendered, "runAsUser: 0")
+	require.Contains(t, rendered, "runAsGroup: 0")
+	require.Contains(t, rendered, `drop: ["ALL"]`)
+	require.Contains(t, rendered, "readOnlyRootFilesystem: true")
 	require.Contains(t, rendered, "mountPath: /var/lib/otelcol")
 	require.Contains(t, rendered, "name: offset-storage")
 	require.Equal(t, []string{
@@ -741,7 +1057,7 @@ func TestK8sDaemonSetEmbedsCustomCollectorYAML(t *testing.T) {
 			Namespace:     "logplatform",
 			WorkloadKind:  "Deployment",
 			WorkloadName:  "utrace-api",
-			CollectorYAML: validCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", ""),
+			CollectorYAML: validK8sCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", "logplatform", "utrace-api"),
 		},
 		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
 		Route:    LogRoute{ID: "route-001"},
@@ -911,9 +1227,139 @@ func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGrou
 }
 
 func validCollectorYAML(writeURL string, exporterExtras string) string {
+	return validCollectorYAMLWithInclude(writeURL, "/data/app.log", exporterExtras)
+}
+
+func validK8sCollectorYAML(writeURL string, namespace string, workload string) string {
+	include := fmt.Sprintf("/var/log/pods/%s_%s*_*/*/*.log", namespace, workload)
+	return `extensions:
+  file_storage/filelog_offsets:
+    directory: /var/lib/otelcol/filelog_offsets
+    create_directory: true
+receivers:
+  file_log/custom:
+    include: [` + include + `]
+    exclude:
+      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*/*/*.gz
+      - /var/log/pods/*/*/*.tmp
+      - /var/log/pods/*/*/*.log.*
+    poll_interval: 10s
+    max_concurrent_files: 128
+    max_batches: 2
+    max_log_size: 1MiB
+    file_cache_advise: true
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    storage: file_storage/filelog_offsets
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  k8s_attributes:
+    auth_type: serviceAccount
+    passthrough: false
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+  batch:
+exporters:
+  otlp_http/victorialogs:
+    logs_endpoint: "` + writeURL + `"
+service:
+  extensions: [file_storage/filelog_offsets]
+  pipelines:
+    logs:
+      receivers: [file_log/custom]
+      processors: [memory_limiter, k8s_attributes, batch]
+      exporters: [otlp_http/victorialogs]
+`
+}
+
+func validMultiServiceK8sCollectorYAML(writeURL string) string {
+	return `extensions:
+  file_storage/filelog_offsets:
+    directory: /var/lib/otelcol/filelog_offsets
+    create_directory: true
+receivers:
+  file_log/logplatform-prometheus:
+    include:
+      - /var/log/pods/logplatform_prometheus*_*/*/*.log
+    exclude:
+      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*/*/*.gz
+      - /var/log/pods/*/*/*.tmp
+      - /var/log/pods/*/*/*.log.*
+    poll_interval: 10s
+    max_concurrent_files: 128
+    max_batches: 2
+    max_log_size: 1MiB
+    file_cache_advise: true
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    storage: file_storage/filelog_offsets
+  file_log/mtu-test-mtu-ds:
+    include:
+      - /var/log/pods/mtu-test_mtu-ds*_*/*/*.log
+    exclude:
+      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*/*/*.gz
+      - /var/log/pods/*/*/*.tmp
+      - /var/log/pods/*/*/*.log.*
+    poll_interval: 10s
+    max_concurrent_files: 128
+    max_batches: 2
+    max_log_size: 1MiB
+    file_cache_advise: true
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    storage: file_storage/filelog_offsets
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  k8s_attributes:
+    auth_type: serviceAccount
+    passthrough: false
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+  resource/logplatform-prometheus:
+    attributes:
+      - key: service.name
+        value: logplatform
+        action: upsert
+  resource/mtu-test-mtu-ds:
+    attributes:
+      - key: service.name
+        value: mtu-test
+        action: upsert
+  batch:
+    timeout: 1s
+exporters:
+  otlp_http/logs_downstream:
+    logs_endpoint: ` + writeURL + `
+service:
+  extensions: [file_storage/filelog_offsets]
+  pipelines:
+    logs/logplatform-prometheus:
+      receivers: [file_log/logplatform-prometheus]
+      processors: [memory_limiter, k8s_attributes, resource/logplatform-prometheus, batch]
+      exporters: [otlp_http/logs_downstream]
+    logs/mtu-test-mtu-ds:
+      receivers: [file_log/mtu-test-mtu-ds]
+      processors: [memory_limiter, k8s_attributes, resource/mtu-test-mtu-ds, batch]
+      exporters: [otlp_http/logs_downstream]
+`
+}
+
+func validCollectorYAMLWithInclude(writeURL string, include string, exporterExtras string) string {
 	return `receivers:
   file_log/custom:
-    include: [/data/app.log]
+    include: [` + include + `]
 exporters:
   otlp_http/victorialogs:
     logs_endpoint: "` + writeURL + `"

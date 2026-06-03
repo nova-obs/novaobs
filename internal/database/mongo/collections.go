@@ -392,7 +392,12 @@ func (s *logEndpointStore) FindByID(ctx context.Context, id string, result inter
 
 func (s *logEndpointStore) Update(ctx context.Context, id string, endpoint interface{}) error {
 	oid, _ := objectID(id)
-	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, endpoint)
+	setDoc, err := toBSONMap(endpoint)
+	if err != nil {
+		return err
+	}
+	delete(setDoc, "_id")
+	result, err := s.col.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": setDoc})
 	if err != nil {
 		return err
 	}

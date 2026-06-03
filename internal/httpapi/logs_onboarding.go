@@ -80,6 +80,22 @@ func listLogsEndpointsHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func updateLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body logs.LogEndpoint
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
+			return
+		}
+		endpoint, err := service.UpdateEndpoint(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")), body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, endpoint, gin.H{})
+	}
+}
+
 func previewLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body logs.UpsertRouteRequest

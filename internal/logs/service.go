@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,9 +130,6 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 		if strings.EqualFold(item.Name, endpoint.Name) {
 			return LogEndpoint{}, apperr.Conflict("日志下游端点名称已存在")
 		}
-		if endpoint.ScopeType == EndpointScopeK8sCluster && item.ScopeType == EndpointScopeK8sCluster && item.ClusterID == endpoint.ClusterID {
-			return LogEndpoint{}, apperr.Conflict("该 K8s 集群已绑定日志下游端点")
-		}
 	}
 	if endpoint.ID == "" {
 		endpoint.ID = primitive.NewObjectID().Hex()
@@ -143,6 +141,49 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 		endpoint.Status = "active"
 	}
 	if err := s.endpoints.Insert(ctx, endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
+	return endpoint, nil
+}
+
+func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndpoint) (LogEndpoint, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return LogEndpoint{}, apperr.InvalidRequest("日志下游端点 ID 不能为空")
+	}
+	var existing LogEndpoint
+	if err := s.endpoints.FindByID(ctx, id, &existing); err != nil {
+		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
+	}
+	endpoint = normalizeEndpoint(endpoint)
+	endpoint.ID = id
+	if err := validateEndpoint(endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
+	if endpoint.ScopeType != EndpointScopeGlobal && endpoint.ScopeType != EndpointScopeK8sCluster && endpoint.ScopeType != EndpointScopeVM {
+		return LogEndpoint{}, apperr.InvalidRequest("日志下游端点 scope_type 只支持 global、k8s_cluster 或 vm")
+	}
+	if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == "" {
+		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级日志下游端点必须填写 cluster_id")
+	}
+	all, err := s.ListEndpoints(ctx)
+	if err != nil {
+		return LogEndpoint{}, err
+	}
+	for _, item := range all {
+		if item.ID == id {
+			continue
+		}
+		if strings.EqualFold(item.Name, endpoint.Name) {
+			return LogEndpoint{}, apperr.Conflict("日志下游端点名称已存在")
+		}
+	}
+	endpoint.CreatedAt = existing.CreatedAt
+	endpoint.UpdatedAt = time.Now().UTC()
+	if endpoint.Status == "" {
+		endpoint.Status = firstNonEmpty(existing.Status, "active")
+	}
+	if err := s.endpoints.Update(ctx, id, endpoint); err != nil {
 		return LogEndpoint{}, err
 	}
 	return endpoint, nil
@@ -700,7 +741,7 @@ func validateServiceSourceMatch(service servicecatalog.Service, sourceType strin
 		if service.IdentityType != "host_process" {
 			return apperr.InvalidRequest("VM 日志接入只能选择 VM/物理机服务")
 		}
-	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
+	case SourceTypeK8sStdout:
 		if service.IdentityType != "" && service.IdentityType != "k8s_workload" {
 			return apperr.InvalidRequest("K8s 日志接入只能选择 K8s 服务")
 		}
@@ -831,7 +872,13 @@ func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error
 	if err := s.endpoints.FindByID(ctx, strings.TrimSpace(id), &endpoint); err != nil {
 		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
-	return normalizeEndpoint(endpoint), nil
+	endpoint = normalizeEndpoint(endpoint)
+	if endpoint.SinkType == EndpointSinkVL {
+		if err := validateVLWriteURL(endpoint.WriteURL); err != nil {
+			return LogEndpoint{}, err
+		}
+	}
+	return endpoint, nil
 }
 
 func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (LogEndpoint, error) {
@@ -853,14 +900,6 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 			if endpoint.ClusterID != req.K8s.ClusterID {
 				return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由只能选择当前集群绑定的日志下游端点")
 			}
-		case EndpointScopeGlobal:
-			clusterEndpoint, ok, err := s.clusterEndpoint(ctx, req.K8s.ClusterID)
-			if err != nil {
-				return LogEndpoint{}, err
-			}
-			if ok && clusterEndpoint.ID != endpoint.ID {
-				return LogEndpoint{}, apperr.InvalidRequest("当前集群已有绑定的日志下游端点，请使用集群绑定端点")
-			}
 		}
 		return endpoint, nil
 	}
@@ -871,10 +910,17 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 	if err != nil {
 		return LogEndpoint{}, err
 	}
+	clusterEndpoints := []LogEndpoint{}
 	for _, endpoint := range endpoints {
 		if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == req.K8s.ClusterID {
-			return endpoint, nil
+			clusterEndpoints = append(clusterEndpoints, endpoint)
 		}
+	}
+	if len(clusterEndpoints) == 1 {
+		return clusterEndpoints[0], nil
+	}
+	if len(clusterEndpoints) > 1 {
+		return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群存在多个日志下游端点，请显式选择端点")
 	}
 	for _, endpoint := range endpoints {
 		if endpoint.ScopeType == EndpointScopeGlobal {
@@ -882,19 +928,6 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 		}
 	}
 	return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群未绑定日志下游端点")
-}
-
-func (s Service) clusterEndpoint(ctx context.Context, clusterID string) (LogEndpoint, bool, error) {
-	endpoints, err := s.ListEndpoints(ctx)
-	if err != nil {
-		return LogEndpoint{}, false, err
-	}
-	for _, endpoint := range endpoints {
-		if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == clusterID {
-			return endpoint, true, nil
-		}
-	}
-	return LogEndpoint{}, false, nil
 }
 
 func (s Service) getSource(ctx context.Context, id string) (LogSource, error) {
@@ -943,8 +976,7 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 			continue
 		}
 		if view.Source.ClusterID != current.Source.ClusterID ||
-			firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != firstNonEmpty(current.Source.AgentNamespace, "novaobs-system") ||
-			view.Endpoint.ID != current.Endpoint.ID {
+			firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != firstNonEmpty(current.Source.AgentNamespace, "novaobs-system") {
 			continue
 		}
 		service, err := s.services.Get(ctx, view.Route.ServiceID)
@@ -996,6 +1028,7 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 	source.WorkloadName = req.K8s.WorkloadName
 	source.Container = req.K8s.Container
 	source.WorkloadSelector = copyStringMap(req.K8s.WorkloadSelector)
+	source.RuntimeLogPaths = copyStringSlice(req.K8s.RuntimeLogPaths)
 	source.PathPattern = req.K8s.PathPattern
 	source.ParseRules = normalizeParseRules(req.K8s.ParseRules)
 	source.CollectorYAML = req.K8s.CollectorYAML
@@ -1015,6 +1048,7 @@ func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
 	req.K8s.WorkloadKind = strings.TrimSpace(req.K8s.WorkloadKind)
 	req.K8s.WorkloadName = strings.TrimSpace(req.K8s.WorkloadName)
 	req.K8s.Container = strings.TrimSpace(req.K8s.Container)
+	req.K8s.RuntimeLogPaths = normalizeRuntimeLogPaths(req.K8s.RuntimeLogPaths)
 	req.K8s.PathPattern = strings.TrimSpace(req.K8s.PathPattern)
 	req.K8s.CollectorYAML = strings.TrimSpace(req.K8s.CollectorYAML)
 	req.K8s.ParseRules = normalizeParseRules(req.K8s.ParseRules)
@@ -1030,16 +1064,12 @@ func validateRouteRequest(req UpsertRouteRequest) error {
 		return apperr.InvalidRequest("service_id 和 source_type 不能为空")
 	}
 	if !validSourceType(req.SourceType) {
-		return apperr.InvalidRequest("日志来源类型只支持 k8s_stdout、k8s_hostpath、vm_file")
+		return apperr.InvalidRequest("日志来源类型只支持 k8s_stdout、vm_file")
 	}
 	switch req.SourceType {
 	case SourceTypeK8sStdout:
 		if req.K8s.ClusterID == "" || req.K8s.Namespace == "" || req.K8s.WorkloadKind == "" || req.K8s.WorkloadName == "" {
 			return apperr.InvalidRequest("K8s 标准输出接入必须选择集群、namespace 和 workload")
-		}
-	case SourceTypeK8sHostPath:
-		if req.K8s.ClusterID == "" || req.K8s.Namespace == "" || req.K8s.WorkloadKind == "" || req.K8s.WorkloadName == "" || req.K8s.PathPattern == "" {
-			return apperr.InvalidRequest("K8s hostPath 接入必须选择集群、namespace、workload 并填写日志路径")
 		}
 	case SourceTypeVMFile:
 		if req.EndpointID == "" {
@@ -1055,11 +1085,14 @@ func validateRouteRequest(req UpsertRouteRequest) error {
 	if err := validateParseRules(req.VM.ParseRules); err != nil {
 		return err
 	}
+	if err := validateRuntimeLogPaths(req.K8s.RuntimeLogPaths); err != nil {
+		return err
+	}
 	return nil
 }
 
 func validSourceType(value string) bool {
-	return value == SourceTypeK8sStdout || value == SourceTypeK8sHostPath || value == SourceTypeVMFile
+	return value == SourceTypeK8sStdout || value == SourceTypeVMFile
 }
 
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
@@ -1098,6 +1131,9 @@ func validateEndpoint(endpoint LogEndpoint) error {
 	case EndpointSinkVL:
 		if endpoint.QueryURL == "" || endpoint.VMUIURL == "" {
 			return apperr.InvalidRequest("VL 下游端点必须填写写入地址、查询地址和 VMUI 地址")
+		}
+		if err := validateVLWriteURL(endpoint.WriteURL); err != nil {
+			return err
 		}
 		for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
 			if err := validateHTTPURL(rawURL, "VL 下游端点地址"); err != nil {
@@ -1138,6 +1174,17 @@ func validateHTTPURL(raw string, label string) error {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return apperr.InvalidRequest(label + "只支持 http/https")
+	}
+	return nil
+}
+
+func validateVLWriteURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return apperr.InvalidRequest("VL 下游端点写入地址必须是完整的 http/https 地址")
+	}
+	if strings.TrimRight(parsed.Path, "/") != "/insert/opentelemetry/v1/logs" {
+		return apperr.InvalidRequest("VL 下游端点写入地址必须指向 /insert/opentelemetry/v1/logs")
 	}
 	return nil
 }
@@ -1225,6 +1272,17 @@ func copyStringMap(input map[string]string) map[string]string {
 	return out
 }
 
+func copyStringSlice(input []string) []string {
+	out := make([]string, 0, len(input))
+	for _, value := range input {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func previewMode(source LogSource) string {
 	if source.SourceType == SourceTypeVMFile {
 		return "vm-agent-config"
@@ -1234,9 +1292,6 @@ func previewMode(source LogSource) string {
 
 func previewWarnings(source LogSource, endpoint LogEndpoint) []string {
 	warnings := []string{}
-	if source.SourceType == SourceTypeK8sHostPath {
-		warnings = append(warnings, "K8s hostPath 接入依赖业务写宿主机目录，请确认日志轮转和磁盘配额")
-	}
 	for _, rule := range source.ParseRules {
 		if rule.RuleType == ParseRuleRegex {
 			warnings = append(warnings, "正则解析规则会在 OTel Collector transform processor 中按 workload 条件执行，请先通过预览确认字段映射")
@@ -1268,6 +1323,35 @@ func normalizeParseRules(rules []LogParseRule) []LogParseRule {
 	return out
 }
 
+func normalizeRuntimeLogPaths(paths []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range paths {
+		path := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
+}
+
+func validateRuntimeLogPaths(paths []string) error {
+	for _, path := range paths {
+		if !strings.HasPrefix(path, "/") {
+			return apperr.InvalidRequest("K8s runtime_log_paths 必须使用宿主机绝对路径")
+		}
+		if path == "/" || path == "/var" || path == "/var/log" || path == "/var/log/pods" {
+			return apperr.InvalidRequest("K8s runtime_log_paths 只能填写容器运行时日志目标目录，不能填写宽泛系统目录")
+		}
+		if strings.ContainsAny(path, "*?[") {
+			return apperr.InvalidRequest("K8s runtime_log_paths 不支持 glob，请填写宿主机目录")
+		}
+	}
+	return nil
+}
+
 func validateParseRules(rules []LogParseRule) error {
 	for _, rule := range rules {
 		if !rule.Enabled {
@@ -1293,7 +1377,7 @@ func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint)
 	switch req.SourceType {
 	case SourceTypeVMFile:
 		return validateCollectorYAML(req.VM.CollectorYAML, endpoint)
-	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
+	case SourceTypeK8sStdout:
 		if err := validateCollectorYAML(req.K8s.CollectorYAML, endpoint); err != nil {
 			return err
 		}
@@ -1304,19 +1388,14 @@ func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint)
 }
 
 func validateK8sBundleCollectorYAML(inputs []renderInput) error {
-	customCount := 0
 	for _, input := range inputs {
 		raw := strings.TrimSpace(input.Source.CollectorYAML)
 		if raw == "" {
 			continue
 		}
-		customCount++
 		if err := validateK8sCollectorYAMLRuntimeScope(raw); err != nil {
 			return err
 		}
-	}
-	if len(inputs) > 1 && customCount > 0 {
-		return apperr.InvalidRequest("同一 K8s 采集域包含多条日志路由时，暂不支持完整 collector_yaml 覆盖，请使用解析规则或拆分采集域")
 	}
 	return nil
 }
@@ -1330,10 +1409,113 @@ func validateK8sCollectorYAMLRuntimeScope(raw string) error {
 	if err != nil {
 		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
 	}
-	for _, include := range collectorReceiverIncludes(root) {
-		if include == "/var/log/pods/*_*_*/*/*.log" {
+	receivers := collectorReceivers(root)
+	if len(receivers) == 0 {
+		return apperr.InvalidRequest("K8s collector_yaml 必须声明 file_log receiver")
+	}
+	hasFilelogReceiver := false
+	for name, receiver := range receivers {
+		if strings.HasPrefix(name, "filelog") {
+			return apperr.InvalidRequest("K8s collector_yaml receiver 类型必须使用 file_log，不支持 filelog alias")
+		}
+		includes := yamlStringValues(yamlMappingValue(receiver, "include"))
+		for _, include := range includes {
+			if err := validateK8sCollectorInclude(include); err != nil {
+				return err
+			}
+		}
+		if !collectorReceiverReadsPods(includes) {
+			continue
+		}
+		if !strings.HasPrefix(name, "file_log") {
+			return apperr.InvalidRequest("K8s collector_yaml 读取 Pod 标准日志时必须使用 file_log receiver")
+		}
+		hasFilelogReceiver = true
+		if err := validateK8sFilelogSafety(receiver); err != nil {
+			return err
+		}
+	}
+	if !hasFilelogReceiver {
+		return apperr.InvalidRequest("K8s collector_yaml 必须包含读取 /var/log/pods 的 file_log receiver")
+	}
+	if !collectorHasProcessor(root, "memory_limiter") {
+		return apperr.InvalidRequest("K8s collector_yaml 必须配置 memory_limiter 处理器，避免采集端内存失控")
+	}
+	if collectorHasProcessor(root, "k8sattributes") {
+		return apperr.InvalidRequest("K8s collector_yaml processor 必须使用 k8s_attributes，不支持 k8sattributes alias")
+	}
+	if !collectorHasProcessor(root, "k8s_attributes") {
+		return apperr.InvalidRequest("K8s collector_yaml 必须配置 k8s_attributes 处理器，并按节点过滤 Pod 元数据")
+	}
+	return nil
+}
+
+func validateK8sFilelogSafety(receiver *yaml.Node) error {
+	pollRaw := yamlScalarValue(yamlMappingValue(receiver, "poll_interval"))
+	if pollRaw == "" {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 poll_interval，且不小于 5s")
+	}
+	pollInterval, err := time.ParseDuration(pollRaw)
+	if err != nil || pollInterval < 5*time.Second {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 的 poll_interval 不能小于 5s")
+	}
+	if yamlMappingValue(receiver, "storage") == nil {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 storage 保存 offset")
+	}
+	if len(yamlStringValues(yamlMappingValue(receiver, "exclude"))) == 0 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 exclude，排除采集器自身和轮转文件")
+	}
+	maxConcurrent, ok := yamlPositiveInt(receiver, "max_concurrent_files")
+	if !ok || maxConcurrent > 256 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 max_concurrent_files，且不能大于 256")
+	}
+	maxBatches, ok := yamlPositiveInt(receiver, "max_batches")
+	if !ok || maxBatches > 4 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 max_batches，且不能大于 4")
+	}
+	return nil
+}
+
+func collectorReceiverReadsPods(includes []string) bool {
+	for _, include := range includes {
+		if strings.HasPrefix(strings.TrimSpace(include), "/var/log/pods/") {
+			return true
+		}
+	}
+	return false
+}
+
+func collectorHasProcessor(root *yaml.Node, processorType string) bool {
+	processors := yamlMappingValue(root, "processors")
+	if processors == nil || processors.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(processors.Content); i += 2 {
+		name := strings.TrimSpace(processors.Content[i].Value)
+		if name == processorType || strings.HasPrefix(name, processorType+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func validateK8sCollectorInclude(include string) error {
+	include = strings.TrimSpace(include)
+	if include == "" {
+		return nil
+	}
+	if strings.HasPrefix(include, "/var/log/pods/") {
+		podDirPattern, _, _ := strings.Cut(strings.TrimPrefix(include, "/var/log/pods/"), "/")
+		namespacePattern, _, _ := strings.Cut(podDirPattern, "_")
+		if podDirPattern == "" || strings.HasPrefix(podDirPattern, "*") || strings.ContainsAny(namespacePattern, "*?[") {
 			return apperr.InvalidRequest("K8s collector_yaml 不能使用全局 Pod 日志路径，请按 Namespace/Workload 生成采集路径后再发布")
 		}
+		return nil
+	}
+	if include == "/var/log" || strings.HasPrefix(include, "/var/log/") ||
+		include == "/var/lib/kubelet" || strings.HasPrefix(include, "/var/lib/kubelet/") ||
+		include == "/var/lib/docker" || strings.HasPrefix(include, "/var/lib/docker/") {
+		return apperr.InvalidRequest("K8s collector_yaml 只能读取 /var/log/pods 下按 Namespace/Workload 收窄后的容器标准日志")
 	}
 	return nil
 }
@@ -1347,8 +1529,8 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 	if err != nil {
 		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
 	}
-	if mappingValue(root, "service", "pipelines", "logs") == nil {
-		return apperr.InvalidRequest("collector_yaml 必须包含 service.pipelines.logs")
+	if !collectorHasLogsPipeline(root) {
+		return apperr.InvalidRequest("collector_yaml 必须包含 logs pipeline（service.pipelines.logs 或 service.pipelines.logs/<service>）")
 	}
 	exporters := yamlMappingValue(root, "exporters")
 	if exporters == nil || exporters.Kind != yaml.MappingNode {
@@ -1365,6 +1547,20 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
 	}
 	return nil
+}
+
+func collectorHasLogsPipeline(root *yaml.Node) bool {
+	pipelines := mappingValue(root, "service", "pipelines")
+	if pipelines == nil || pipelines.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(pipelines.Content); i += 2 {
+		name := strings.TrimSpace(pipelines.Content[i].Value)
+		if name == "logs" || strings.HasPrefix(name, "logs/") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCollectorYAML(raw string) (*yaml.Node, error) {
@@ -1415,17 +1611,44 @@ func yamlStringValues(node *yaml.Node) []string {
 	}
 }
 
-func collectorReceiverIncludes(root *yaml.Node) []string {
+func yamlScalarValue(node *yaml.Node) string {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return strings.TrimSpace(node.Value)
+}
+
+func yamlPositiveInt(mapping *yaml.Node, key string) (int, bool) {
+	raw := yamlScalarValue(yamlMappingValue(mapping, key))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func collectorReceivers(root *yaml.Node) map[string]*yaml.Node {
 	receivers := yamlMappingValue(root, "receivers")
 	if receivers == nil || receivers.Kind != yaml.MappingNode {
 		return nil
 	}
-	out := []string{}
+	out := map[string]*yaml.Node{}
 	for i := 0; i+1 < len(receivers.Content); i += 2 {
 		receiver := receivers.Content[i+1]
 		if receiver.Kind != yaml.MappingNode {
 			continue
 		}
+		out[strings.TrimSpace(receivers.Content[i].Value)] = receiver
+	}
+	return out
+}
+
+func collectorReceiverIncludes(root *yaml.Node) []string {
+	out := []string{}
+	for _, receiver := range collectorReceivers(root) {
 		includes := yamlMappingValue(receiver, "include")
 		out = append(out, yamlStringValues(includes)...)
 	}

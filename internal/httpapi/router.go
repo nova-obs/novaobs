@@ -132,6 +132,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/onboarding/k8s/sync-services", syncLogsK8sServicesHandler(deps.LogsService))
 	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
+	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))

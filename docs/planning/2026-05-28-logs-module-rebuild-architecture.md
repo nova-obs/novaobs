@@ -1,5 +1,7 @@
 # NovaObs Logs 模块重构架构草案
 
+> 状态说明：本文是 2026-05-28 的重构草案，部分内容已被当前实现演进替代。当前运行代码以 `K8s / VM` 两类接入来源、`VL / ES / Kafka` 日志下游端点、自动派生采集域、同一 K8s 采集域多服务命名 `logs/<service>` pipeline 为准；不要再按草案中的 `k8s_hostpath`、VL-only 或手选 AgentGroup 语义实现新功能。
+
 ## 目标
 
 这次 Logs 变动按“日志大模块重做”处理，不继续把旧 Pipeline 作为产品主心智，也不把所有能力塞进一个页面。

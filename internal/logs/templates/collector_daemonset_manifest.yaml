@@ -61,10 +61,25 @@ spec:
         novaobs.io/config-hash: {{ .ConfigHash }}
     spec:
       serviceAccountName: {{ .AgentName }}
+      terminationGracePeriodSeconds: 30
       containers:
         - name: otelcol
           image: hub-test.service.ucloud.cn/logsplatfrom/opentelemetry-collector-contrib:0.153.0
           args: ["--config=/conf/collector.yaml"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -77,12 +92,11 @@ spec:
             - name: pod-logs
               mountPath: /var/log/pods
               readOnly: true
-            - name: container-logs
-              mountPath: /var/log/containers
+            {{- range .RuntimeLogMounts }}
+            - name: {{ .Name }}
+              mountPath: {{ .Path }}
               readOnly: true
-            - name: docker-container-logs
-              mountPath: /var/lib/docker/containers
-              readOnly: true
+            {{- end }}
             - name: offset-storage
               mountPath: /var/lib/otelcol
       volumes:
@@ -92,14 +106,12 @@ spec:
         - name: pod-logs
           hostPath:
             path: /var/log/pods
-            type: DirectoryOrCreate
-        - name: container-logs
+            type: Directory
+        {{- range .RuntimeLogMounts }}
+        - name: {{ .Name }}
           hostPath:
-            path: /var/log/containers
-            type: DirectoryOrCreate
-        - name: docker-container-logs
-          hostPath:
-            path: /var/lib/docker/containers
-            type: DirectoryOrCreate
+            path: {{ .Path }}
+            type: Directory
+        {{- end }}
         - name: offset-storage
           emptyDir: {}

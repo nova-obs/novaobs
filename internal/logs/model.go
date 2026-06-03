@@ -3,9 +3,8 @@ package logs
 import "time"
 
 const (
-	SourceTypeK8sStdout   = "k8s_stdout"
-	SourceTypeK8sHostPath = "k8s_hostpath"
-	SourceTypeVMFile      = "vm_file"
+	SourceTypeK8sStdout = "k8s_stdout"
+	SourceTypeVMFile    = "vm_file"
 
 	EndpointScopeGlobal     = "global"
 	EndpointScopeK8sCluster = "k8s_cluster"
@@ -46,6 +45,7 @@ type LogSource struct {
 	WorkloadName     string            `json:"workload_name" bson:"workload_name"`
 	Container        string            `json:"container" bson:"container"`
 	WorkloadSelector map[string]string `json:"workload_selector" bson:"workload_selector"`
+	RuntimeLogPaths  []string          `json:"runtime_log_paths" bson:"runtime_log_paths"`
 	HostGroup        string            `json:"host_group" bson:"host_group"`
 	HostSelector     map[string]string `json:"host_selector" bson:"host_selector"`
 	PathPattern      string            `json:"path_pattern" bson:"path_pattern"`
@@ -123,6 +123,7 @@ type K8sSourceInput struct {
 	WorkloadName     string            `json:"workload_name"`
 	Container        string            `json:"container"`
 	WorkloadSelector map[string]string `json:"workload_selector"`
+	RuntimeLogPaths  []string          `json:"runtime_log_paths"`
 	PathPattern      string            `json:"path_pattern"`
 	ParseRules       []LogParseRule    `json:"parse_rules"`
 	CollectorYAML    string            `json:"collector_yaml"`

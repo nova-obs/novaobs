@@ -560,6 +560,32 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
 }
 
+func TestRouterUpdatesLogsEndpoint(t *testing.T) {
+	env := newTestRouter(t)
+	endpointBody := `{"name":"vl-prod","sink_type":"vl","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	createRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(createRecorder, createRequest)
+	require.Equal(t, http.StatusCreated, createRecorder.Code)
+
+	var created struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
+
+	updateBody := `{"name":"vl-prod-fixed","sink_type":"vl","write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs-fixed:9428/select/logsql/query","vmui_url":"http://victorialogs-fixed:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPatch, "/api/v1/logs/endpoints/"+created.Data.ID, bytes.NewBufferString(updateBody))
+	updateRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(updateRecorder, updateRequest)
+
+	require.Equal(t, http.StatusOK, updateRecorder.Code)
+	require.Contains(t, updateRecorder.Body.String(), `"id":"`+created.Data.ID+`"`)
+	require.Contains(t, updateRecorder.Body.String(), `"name":"vl-prod-fixed"`)
+	require.Contains(t, updateRecorder.Body.String(), `"write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs"`)
+}
+
 func TestRouterSoftDeletesServiceWithoutBlockingDependencies(t *testing.T) {
 	env := newTestRouter(t)
 
