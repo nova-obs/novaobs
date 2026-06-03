@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
@@ -10,6 +11,7 @@ import (
 type Config struct {
 	Server            ServerConfig   `mapstructure:"server"`
 	Database          DatabaseConfig `mapstructure:"database"`
+	Secret            SecretConfig   `mapstructure:"secret"`
 	CollectorTemplate string         `mapstructure:"collector_template"`
 }
 
@@ -24,6 +26,10 @@ type DatabaseConfig struct {
 	URI    string `mapstructure:"uri"`
 }
 
+type SecretConfig struct {
+	Key string `mapstructure:"key"`
+}
+
 func Load(path string) (Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -36,6 +42,9 @@ func Load(path string) (Config, error) {
 	}
 	if err := v.Unmarshal(&cfg); err != nil {
 		return cfg, err
+	}
+	if cfg.Secret.Key == "" {
+		cfg.Secret.Key = os.Getenv("NOVAOBS_SECRET_KEY")
 	}
 	return cfg, cfg.Validate()
 }
@@ -52,6 +61,12 @@ func (c Config) Validate() error {
 	}
 	if c.Database.URI == "" {
 		return fmt.Errorf("database.uri 不能为空")
+	}
+	if c.Secret.Key == "" {
+		return fmt.Errorf("NOVAOBS_SECRET_KEY 不能为空")
+	}
+	if len([]byte(c.Secret.Key)) != 32 {
+		return fmt.Errorf("NOVAOBS_SECRET_KEY 长度必须为 32 字节")
 	}
 	return nil
 }

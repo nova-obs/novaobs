@@ -28,7 +28,24 @@ type Store struct {
 	sppCol *mongo.Collection
 	iiCol  *mongo.Collection
 	onbCol *mongo.Collection
+	lgeCol *mongo.Collection
+	lgsCol *mongo.Collection
+	lgrCol *mongo.Collection
+	lgpCol *mongo.Collection
 	arCol  *mongo.Collection
+	rrCol  *mongo.Collection
+	rbCol  *mongo.Collection
+	psCol  *mongo.Collection
+	iuCol  *mongo.Collection
+	igCol  *mongo.Collection
+	imCol  *mongo.Collection
+	isaCol *mongo.Collection
+	secCol *mongo.Collection
+	aeCol  *mongo.Collection
+	kclCol *mongo.Collection
+	knsCol *mongo.Collection
+	kdiCol *mongo.Collection
+	kdhCol *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -57,7 +74,24 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		sppCol: db.Collection("service_pipeline_patches"),
 		iiCol:  db.Collection("ingestion_identities"),
 		onbCol: db.Collection("service_onboardings"),
+		lgeCol: db.Collection("log_endpoints"),
+		lgsCol: db.Collection("log_sources"),
+		lgrCol: db.Collection("log_routes"),
+		lgpCol: db.Collection("log_agent_plans"),
 		arCol:  db.Collection("alert_rules"),
+		rrCol:  db.Collection("rbac_roles"),
+		rbCol:  db.Collection("rbac_bindings"),
+		psCol:  db.Collection("platform_subjects"),
+		iuCol:  db.Collection("iam_users"),
+		igCol:  db.Collection("iam_groups"),
+		imCol:  db.Collection("iam_memberships"),
+		isaCol: db.Collection("iam_service_accounts"),
+		secCol: db.Collection("secrets"),
+		aeCol:  db.Collection("audit_events"),
+		kclCol: db.Collection("k8s_clusters"),
+		knsCol: db.Collection("k8s_namespaces"),
+		kdiCol: db.Collection("k8s_deployment_inventory"),
+		kdhCol: db.Collection("k8s_deployment_history"),
 	}, nil
 }
 
@@ -91,7 +125,32 @@ func (s *Store) ServicePipelinePatches() database.ServicePipelinePatchStore {
 }
 func (s *Store) IngestionIdentities() database.IngestionIdentityStore { return &iiStore{s.iiCol} }
 func (s *Store) Onboardings() database.OnboardingStore                { return &onbStore{s.onbCol} }
+func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s.lgeCol} }
+func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s.lgsCol} }
+func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s.lgrCol} }
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore            { return &logAgentPlanStore{s.lgpCol} }
 func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s.arCol} }
+func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
+func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
+func (s *Store) PlatformSubjects() database.PlatformSubjectStore {
+	return &platformSubjectStore{s.psCol}
+}
+func (s *Store) IAMUsers() database.IAMUserStore             { return &iamUserStore{s.iuCol} }
+func (s *Store) IAMGroups() database.IAMGroupStore           { return &iamGroupStore{s.igCol} }
+func (s *Store) IAMMemberships() database.IAMMembershipStore { return &iamMembershipStore{s.imCol} }
+func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
+	return &iamServiceAccountStore{s.isaCol}
+}
+func (s *Store) Secrets() database.SecretStore             { return &secretStore{s.secCol} }
+func (s *Store) AuditEvents() database.AuditEventStore     { return &auditEventStore{s.aeCol} }
+func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s.kclCol} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s.knsCol} }
+func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
+	return &k8sDeploymentInventoryStore{s.kdiCol}
+}
+func (s *Store) K8sDeploymentHistory() database.K8sDeploymentHistoryStore {
+	return &k8sDeploymentHistoryStore{s.kdhCol}
+}
 
 // ---------- helpers ----------
 

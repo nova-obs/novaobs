@@ -1,0 +1,1398 @@
+{
+  "version": "2026-05-19",
+  "source": {
+    "backend": "startorch",
+    "frontend": "u8s-front",
+    "route_prefix": "/api",
+    "novaobs_route_prefix": "/api/v1/k8s"
+  },
+  "identity_contract": {
+    "resource_identity": [
+      "cluster_id",
+      "namespace",
+      "api_version",
+      "kind",
+      "name",
+      "uid"
+    ],
+    "list_query": [
+      "page",
+      "page_size",
+      "q",
+      "sort",
+      "order"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "dashboard.stats",
+      "source_service": "startorch/internal/application/dashboard/service.go",
+      "source_method": "GetDashboardStats",
+      "source_route": "GET /api/dashboard/stats",
+      "request_sample": {
+        "cluster_name": "prod"
+      },
+      "response_sample": {
+        "cluster_name": "prod",
+        "node_count": 0,
+        "pod_count": 0,
+        "deployment_count": 0,
+        "warning_event_count": 0
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/dashboard?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.dashboard",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "cluster.list",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "ListClusters",
+      "source_route": "GET /api/cluster",
+      "request_sample": {
+        "cluster_name": "prod",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "version": "v1.29",
+            "region_cn_name": "上海",
+            "description": "production cluster"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "invalid_input",
+        "message": "invalid pagination"
+      },
+      "novaobs_api": "GET /api/v1/k8s/clusters?q=prod&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "read",
+        "scope": "global"
+      },
+      "audit": false
+    },
+    {
+      "id": "cluster.create",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "CreateCluster",
+      "source_route": "POST /api/cluster",
+      "request_sample": {
+        "cluster_name": "prod",
+        "version": "v1.29",
+        "region_cn_name": "上海",
+        "kube_config": "[redacted]"
+      },
+      "response_sample": {
+        "message": "cluster created"
+      },
+      "error_sample": {
+        "code": "invalid_kubeconfig",
+        "message": "cluster connectivity check failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/clusters",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "create",
+        "scope": "global"
+      },
+      "audit": true,
+      "secret": true
+    },
+    {
+      "id": "cluster.update",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "UpdateCluster",
+      "source_route": "PUT /api/cluster",
+      "request_sample": {
+        "cluster_name": "prod",
+        "version": "v1.30",
+        "region_cn_name": "上海",
+        "kube_config": "[redacted]"
+      },
+      "response_sample": {
+        "message": "cluster updated"
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "PATCH /api/v1/k8s/clusters/prod",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "update",
+        "scope": "cluster"
+      },
+      "audit": true,
+      "secret": true
+    },
+    {
+      "id": "cluster.delete",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "DeleteCluster",
+      "source_route": "DELETE /api/cluster",
+      "request_sample": {
+        "cluster_name": "prod"
+      },
+      "response_sample": {
+        "message": "cluster deleted"
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/clusters/prod",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "delete",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "cluster.connectivity-check",
+      "source_service": "startorch/internal/application/cluster/service.go",
+      "source_method": "InspectKubeconfig",
+      "source_route": "POST /api/cluster/test",
+      "request_sample": {
+        "kube_config": "[redacted]"
+      },
+      "response_sample": {
+        "success": true,
+        "server_version": "v1.29.0",
+        "cluster_name": "prod"
+      },
+      "error_sample": {
+        "code": "invalid_kubeconfig",
+        "message": "cluster connectivity check failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/clusters/connectivity-check",
+      "rbac": {
+        "resource": "k8s.cluster",
+        "action": "preview",
+        "scope": "global"
+      },
+      "audit": true,
+      "secret": true
+    },
+    {
+      "id": "namespace.list",
+      "source_service": "startorch/internal/application/namespace/service.go",
+      "source_method": "ListNamespaces",
+      "source_route": "GET /api/namespace",
+      "request_sample": {
+        "cluster_name": "prod",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/namespaces?cluster_id=prod&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.namespace",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "namespace.create",
+      "source_service": "startorch/internal/application/namespace/service.go",
+      "source_method": "CreateNamespace",
+      "source_route": "POST /api/namespace",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders"
+      },
+      "response_sample": {
+        "message": "namespace created"
+      },
+      "error_sample": {
+        "code": "namespace_exists",
+        "message": "namespace already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/namespaces",
+      "rbac": {
+        "resource": "k8s.namespace",
+        "action": "create",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "namespace.delete",
+      "source_service": "startorch/internal/application/namespace/service.go",
+      "source_method": "DeleteNamespace",
+      "source_route": "DELETE /api/namespace",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders"
+      },
+      "response_sample": {
+        "message": "namespace deleted"
+      },
+      "error_sample": {
+        "code": "namespace_not_found",
+        "message": "namespace not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/namespaces/orders?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.namespace",
+        "action": "delete",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "resource.list",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "ListK8sResources",
+      "source_route": "GET /api/k8s/resources",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_type": "Deployment",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "resource_type": "Deployment",
+            "resource_name": "orders-api",
+            "uid": "00000000-0000-0000-0000-000000000000"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "permission_denied",
+        "message": "permission denied"
+      },
+      "novaobs_api": "GET /api/v1/k8s/resources?cluster_id=prod&namespace=orders&kind=Deployment&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.resource",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "resource.yaml",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "GetK8sResourceYAML",
+      "source_route": "GET /api/k8s/resources/yaml",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_type": "Deployment",
+        "resource_name": "orders-api"
+      },
+      "response_sample": {
+        "yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n"
+      },
+      "error_sample": {
+        "code": "resource_not_found",
+        "message": "resource not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "rbac": {
+        "resource": "k8s.resource",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "pod.logs",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "GetPodLogs",
+      "source_route": "GET /api/k8s/pod/logs",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "pod_name": "orders-api-abc",
+        "container": "app",
+        "tail_lines": 200
+      },
+      "response_sample": {
+        "pod_name": "orders-api-abc",
+        "container": "app",
+        "logs": "..."
+      },
+      "error_sample": {
+        "code": "pod_not_found",
+        "message": "pod not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-abc&container=app",
+      "rbac": {
+        "resource": "k8s.resource",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "resource.delete",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "DeleteK8sResource",
+      "source_route": "DELETE /api/k8s/resources",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_type": "Deployment",
+        "resource_name": "orders-api"
+      },
+      "response_sample": {
+        "success": true,
+        "message": "resource deleted"
+      },
+      "error_sample": {
+        "code": "resource_not_found",
+        "message": "resource not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/resources?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "rbac": {
+        "resource": "k8s.resource",
+        "action": "delete",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "runtime-groups.list",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "ListRuntimeGroups",
+      "source_route": "GET /api/k8s/runtime-groups",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders"
+      },
+      "response_sample": {
+        "groups": [
+          {
+            "name": "orders-api",
+            "kind": "Deployment"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "permission_denied",
+        "message": "permission denied"
+      },
+      "novaobs_api": "GET /api/v1/k8s/runtime-groups?cluster_id=prod&namespace=orders",
+      "rbac": {
+        "resource": "k8s.resource",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "live-namespace.list",
+      "source_service": "startorch/internal/application/k8sresource/service.go",
+      "source_method": "ListK8sNamespaces",
+      "source_route": "GET /api/k8s/namespaces",
+      "request_sample": {
+        "cluster_name": "prod"
+      },
+      "response_sample": {
+        "items": [
+          "default",
+          "orders"
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/live-namespaces?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.namespace",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "serviceaccount.list",
+      "source_service": "startorch/internal/application/serviceaccount/service.go",
+      "source_method": "ListServiceAccounts",
+      "source_route": "GET /api/sa",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "account_name": "orders-reader"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.service-account",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "serviceaccount.create",
+      "source_service": "startorch/internal/application/serviceaccount/service.go",
+      "source_method": "CreateServiceAccount",
+      "source_route": "POST /api/sa",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "account_name": "orders-reader"
+      },
+      "response_sample": {
+        "message": "service account created"
+      },
+      "error_sample": {
+        "code": "service_account_exists",
+        "message": "service account already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/service-accounts",
+      "rbac": {
+        "resource": "k8s.service-account",
+        "action": "create",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "serviceaccount.delete",
+      "source_service": "startorch/internal/application/serviceaccount/service.go",
+      "source_method": "DeleteServiceAccount",
+      "source_route": "DELETE /api/sa",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "account_name": "orders-reader"
+      },
+      "response_sample": {
+        "message": "service account deleted"
+      },
+      "error_sample": {
+        "code": "service_account_not_found",
+        "message": "service account not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&name=orders-reader&uid=",
+      "rbac": {
+        "resource": "k8s.service-account",
+        "action": "delete",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.role.list",
+      "source_service": "startorch/internal/application/role/service.go",
+      "source_method": "ListRoles",
+      "source_route": "GET /api/role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "orders-reader",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "role_name": "orders-reader"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/rbac/roles?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "rbac.role.create",
+      "source_service": "startorch/internal/application/role/service.go",
+      "source_method": "CreateRole",
+      "source_route": "POST /api/role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "role_name": "orders-reader"
+      },
+      "response_sample": {
+        "message": "role created"
+      },
+      "error_sample": {
+        "code": "role_exists",
+        "message": "role already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/roles",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "create",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.role.update",
+      "source_service": "startorch/internal/application/role/service.go",
+      "source_method": "UpdateRole",
+      "source_route": "PUT /api/role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "role_name": "orders-reader"
+      },
+      "response_sample": {
+        "message": "role updated"
+      },
+      "error_sample": {
+        "code": "role_not_found",
+        "message": "role not found"
+      },
+      "novaobs_api": "PUT /api/v1/k8s/rbac/roles",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.rolebinding.list",
+      "source_service": "startorch/internal/application/rolebinding/service.go",
+      "source_method": "ListRoleBindings",
+      "source_route": "GET /api/role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "orders-reader"
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "binding_name": "orders-reader-binding"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "rbac.rolebinding.create",
+      "source_service": "startorch/internal/application/rolebinding/service.go",
+      "source_method": "CreateRoleBinding",
+      "source_route": "POST /api/role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "binding_name": "orders-reader-binding",
+        "role_name": "orders-reader"
+      },
+      "response_sample": {
+        "message": "role binding created"
+      },
+      "error_sample": {
+        "code": "role_binding_exists",
+        "message": "role binding already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "create",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.rolebinding.delete",
+      "source_service": "startorch/internal/application/rolebinding/service.go",
+      "source_method": "DeleteRoleBinding",
+      "source_route": "DELETE /api/role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "binding_name": "orders-reader-binding"
+      },
+      "response_sample": {
+        "message": "role binding deleted"
+      },
+      "error_sample": {
+        "code": "role_binding_not_found",
+        "message": "role binding not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders&kind=RoleBinding&name=orders-reader-binding&uid=",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "delete",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.rolebinding.bind",
+      "source_service": "startorch/internal/application/rolebinding/service.go",
+      "source_method": "BindServiceAccount",
+      "source_route": "POST /api/role_binding/bind",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "binding_name": "orders-reader-binding",
+        "service_accounts": [
+          "orders-reader"
+        ]
+      },
+      "response_sample": {
+        "message": "role binding bound"
+      },
+      "error_sample": {
+        "code": "role_binding_not_found",
+        "message": "role binding not found"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings/bind",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.rolebinding.unbind",
+      "source_service": "startorch/internal/application/rolebinding/service.go",
+      "source_method": "UnbindServiceAccount",
+      "source_route": "POST /api/role_binding/unbind",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "binding_name": "orders-reader-binding",
+        "service_accounts": [
+          "orders-reader"
+        ]
+      },
+      "response_sample": {
+        "message": "role binding unbound"
+      },
+      "error_sample": {
+        "code": "role_binding_not_found",
+        "message": "role binding not found"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings/unbind",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrole.list",
+      "source_service": "startorch/internal/application/clusterrole/service.go",
+      "source_method": "ListClusterRoles",
+      "source_route": "GET /api/cluster_role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "view"
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "role_name": "view"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/rbac/cluster-roles?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "rbac.clusterrole.create",
+      "source_service": "startorch/internal/application/clusterrole/service.go",
+      "source_method": "CreateClusterRole",
+      "source_route": "POST /api/cluster_role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "view"
+      },
+      "response_sample": {
+        "message": "cluster role created"
+      },
+      "error_sample": {
+        "code": "cluster_role_exists",
+        "message": "cluster role already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-roles",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "create",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrole.update",
+      "source_service": "startorch/internal/application/clusterrole/service.go",
+      "source_method": "UpdateClusterRole",
+      "source_route": "PUT /api/cluster_role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "view"
+      },
+      "response_sample": {
+        "message": "cluster role updated"
+      },
+      "error_sample": {
+        "code": "cluster_role_not_found",
+        "message": "cluster role not found"
+      },
+      "novaobs_api": "PUT /api/v1/k8s/rbac/cluster-roles",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrole.delete",
+      "source_service": "startorch/internal/application/clusterrole/service.go",
+      "source_method": "DeleteClusterRole",
+      "source_route": "DELETE /api/cluster_role",
+      "request_sample": {
+        "cluster_name": "prod",
+        "role_name": "view"
+      },
+      "response_sample": {
+        "message": "cluster role deleted"
+      },
+      "error_sample": {
+        "code": "cluster_role_not_found",
+        "message": "cluster role not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/rbac/cluster-roles?cluster_id=prod&kind=ClusterRole&name=view&uid=",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "delete",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrolebinding.list",
+      "source_service": "startorch/internal/application/clusterrolebinding/service.go",
+      "source_method": "ListClusterRoleBindings",
+      "source_route": "GET /api/cluster_role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "binding_name": "view-binding"
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "binding_name": "view-binding"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "rbac.clusterrolebinding.create",
+      "source_service": "startorch/internal/application/clusterrolebinding/service.go",
+      "source_method": "CreateClusterRoleBinding",
+      "source_route": "POST /api/cluster_role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "binding_name": "view-binding",
+        "role_name": "view"
+      },
+      "response_sample": {
+        "message": "cluster role binding created"
+      },
+      "error_sample": {
+        "code": "cluster_role_binding_exists",
+        "message": "cluster role binding already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "create",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrolebinding.delete",
+      "source_service": "startorch/internal/application/clusterrolebinding/service.go",
+      "source_method": "DeleteClusterRoleBinding",
+      "source_route": "DELETE /api/cluster_role_binding",
+      "request_sample": {
+        "cluster_name": "prod",
+        "binding_name": "view-binding"
+      },
+      "response_sample": {
+        "message": "cluster role binding deleted"
+      },
+      "error_sample": {
+        "code": "cluster_role_binding_not_found",
+        "message": "cluster role binding not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod&kind=ClusterRoleBinding&name=view-binding&uid=",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "delete",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrolebinding.bind",
+      "source_service": "startorch/internal/application/clusterrolebinding/service.go",
+      "source_method": "BindServiceAccount",
+      "source_route": "POST /api/cluster_role_binding/bind",
+      "request_sample": {
+        "cluster_name": "prod",
+        "binding_name": "view-binding",
+        "service_accounts": [
+          {
+            "namespace": "orders",
+            "name": "orders-reader"
+          }
+        ]
+      },
+      "response_sample": {
+        "message": "cluster role binding bound"
+      },
+      "error_sample": {
+        "code": "cluster_role_binding_not_found",
+        "message": "cluster role binding not found"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/bind",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "rbac.clusterrolebinding.unbind",
+      "source_service": "startorch/internal/application/clusterrolebinding/service.go",
+      "source_method": "UnbindServiceAccount",
+      "source_route": "POST /api/cluster_role_binding/unbind",
+      "request_sample": {
+        "cluster_name": "prod",
+        "binding_name": "view-binding",
+        "service_accounts": [
+          {
+            "namespace": "orders",
+            "name": "orders-reader"
+          }
+        ]
+      },
+      "response_sample": {
+        "message": "cluster role binding unbound"
+      },
+      "error_sample": {
+        "code": "cluster_role_binding_not_found",
+        "message": "cluster role binding not found"
+      },
+      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/unbind",
+      "rbac": {
+        "resource": "k8s.rbac",
+        "action": "update",
+        "scope": "cluster"
+      },
+      "audit": true
+    },
+    {
+      "id": "kubeconfig.generate",
+      "source_service": "startorch/internal/application/kubecfg/service.go",
+      "source_method": "GenerateKubeConfig",
+      "source_route": "POST /api/kubeconfig",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "service_account_name": "orders-reader",
+        "expiration_seconds": 3600
+      },
+      "response_sample": {
+        "secret_id": "secret-kubeconfig-orders-reader",
+        "fingerprint": "sha256",
+        "expires_at": "2026-05-19T12:00:00Z"
+      },
+      "error_sample": {
+        "code": "permission_denied",
+        "message": "permission denied"
+      },
+      "novaobs_api": "POST /api/v1/k8s/kubeconfigs",
+      "rbac": {
+        "resource": "k8s.kubeconfig",
+        "action": "export",
+        "scope": "namespace"
+      },
+      "audit": true,
+      "secret": true
+    },
+    {
+      "id": "template.list",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "ListTemplates",
+      "source_route": "GET /api/template/list",
+      "request_sample": {
+        "template_type": "Deployment",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "template_id": "tpl-deployment",
+            "template_type": "Deployment"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "invalid_input",
+        "message": "invalid template type"
+      },
+      "novaobs_api": "GET /api/v1/k8s/templates?template_type=Deployment&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "read",
+        "scope": "global"
+      },
+      "audit": false
+    },
+    {
+      "id": "template.create",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "CreateTemplate",
+      "source_route": "POST /api/template",
+      "request_sample": {
+        "template_type": "Deployment",
+        "name": "deployment-base",
+        "content": "apiVersion: apps/v1\nkind: Deployment\n"
+      },
+      "response_sample": {
+        "template_id": "tpl-deployment"
+      },
+      "error_sample": {
+        "code": "template_exists",
+        "message": "template already exists"
+      },
+      "novaobs_api": "POST /api/v1/k8s/templates",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "create",
+        "scope": "global"
+      },
+      "audit": true
+    },
+    {
+      "id": "template.get",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "GetTemplate",
+      "source_route": "GET /api/template",
+      "request_sample": {
+        "template_id": "tpl-deployment"
+      },
+      "response_sample": {
+        "template_id": "tpl-deployment",
+        "content": "apiVersion: apps/v1\nkind: Deployment\n"
+      },
+      "error_sample": {
+        "code": "template_not_found",
+        "message": "template not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/templates/tpl-deployment",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "read",
+        "scope": "global"
+      },
+      "audit": false
+    },
+    {
+      "id": "template.update",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "UpdateTemplate",
+      "source_route": "PUT /api/template",
+      "request_sample": {
+        "template_id": "tpl-deployment",
+        "content": "apiVersion: apps/v1\nkind: Deployment\n"
+      },
+      "response_sample": {
+        "message": "template updated"
+      },
+      "error_sample": {
+        "code": "template_not_found",
+        "message": "template not found"
+      },
+      "novaobs_api": "PATCH /api/v1/k8s/templates/tpl-deployment",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "update",
+        "scope": "global"
+      },
+      "audit": true
+    },
+    {
+      "id": "template.delete",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "DeleteTemplate",
+      "source_route": "DELETE /api/template",
+      "request_sample": {
+        "template_id": "tpl-deployment"
+      },
+      "response_sample": {
+        "message": "template deleted"
+      },
+      "error_sample": {
+        "code": "template_not_found",
+        "message": "template not found"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/templates/tpl-deployment",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "delete",
+        "scope": "global"
+      },
+      "audit": true
+    },
+    {
+      "id": "template.render",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "RenderTemplate",
+      "source_route": "POST /api/template/render",
+      "request_sample": {
+        "template_id": "tpl-deployment",
+        "variables": {
+          "name": "orders-api"
+        }
+      },
+      "response_sample": {
+        "content": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n"
+      },
+      "error_sample": {
+        "code": "render_failed",
+        "message": "template render failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/templates/render",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "preview",
+        "scope": "global"
+      },
+      "audit": true
+    },
+    {
+      "id": "template.base",
+      "source_service": "startorch/internal/application/template/service.go",
+      "source_method": "GetBaseTemplate",
+      "source_route": "GET /api/template/base",
+      "request_sample": {
+        "template_type": "Deployment"
+      },
+      "response_sample": {
+        "content": "apiVersion: apps/v1\nkind: Deployment\n"
+      },
+      "error_sample": {
+        "code": "invalid_input",
+        "message": "invalid template type"
+      },
+      "novaobs_api": "GET /api/v1/k8s/templates/base?template_type=Deployment",
+      "rbac": {
+        "resource": "k8s.template",
+        "action": "read",
+        "scope": "global"
+      },
+      "audit": false
+    },
+    {
+      "id": "deployment.apply",
+      "source_service": "startorch/internal/application/deploy/service.go",
+      "source_method": "DeployResource",
+      "source_route": "POST /api/deploy",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_type": "Deployment",
+        "resource_name": "orders-api",
+        "dry_run": false
+      },
+      "response_sample": {
+        "success": true,
+        "message": "deployment applied"
+      },
+      "error_sample": {
+        "code": "apply_failed",
+        "message": "deployment apply failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/deployments",
+      "rbac": {
+        "resource": "k8s.deployment",
+        "action": "deploy",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "deployment.delete",
+      "source_service": "startorch/internal/application/deploy/service.go",
+      "source_method": "DeleteResource",
+      "source_route": "DELETE /api/deploy",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_type": "Deployment",
+        "resource_name": "orders-api"
+      },
+      "response_sample": {
+        "success": true,
+        "message": "deployment resource deleted"
+      },
+      "error_sample": {
+        "code": "delete_failed",
+        "message": "deployment delete failed"
+      },
+      "novaobs_api": "DELETE /api/v1/k8s/deployments?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "rbac": {
+        "resource": "k8s.deployment",
+        "action": "delete",
+        "scope": "namespace"
+      },
+      "audit": true
+    },
+    {
+      "id": "deployment.history",
+      "source_service": "startorch/internal/application/deploy/service.go",
+      "source_method": "ListDeployHistory",
+      "source_route": "GET /api/deploy/history",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "resource_name": "orders-api",
+            "action": "deploy"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "invalid_input",
+        "message": "invalid pagination"
+      },
+      "novaobs_api": "GET /api/v1/k8s/deployment-history?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.deployment",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "deployment.history-detail",
+      "source_service": "startorch/internal/application/deploy/service.go",
+      "source_method": "GetDeployHistoryDetail",
+      "source_route": "GET /api/deploy/history/detail",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "resource_name": "orders-api"
+      },
+      "response_sample": {
+        "items": [
+          {
+            "resource_name": "orders-api",
+            "yaml_content": "apiVersion: apps/v1\nkind: Deployment\n"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "history_not_found",
+        "message": "deploy history not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/deployment-history/detail?cluster_id=prod&namespace=orders&name=orders-api",
+      "rbac": {
+        "resource": "k8s.deployment",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "deployment.audit",
+      "source_service": "startorch/internal/application/deploy/service.go",
+      "source_method": "ListDeployAudit",
+      "source_route": "GET /api/deploy/audit",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "page": 1,
+        "page_size": 20
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "operator": "alice",
+            "action": "deploy"
+          }
+        ],
+        "total": 1
+      },
+      "error_sample": {
+        "code": "invalid_input",
+        "message": "invalid pagination"
+      },
+      "novaobs_api": "GET /api/v1/k8s/audit-events?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "rbac": {
+        "resource": "k8s.audit",
+        "action": "read",
+        "scope": "namespace"
+      },
+      "audit": false
+    },
+    {
+      "id": "certificate.list",
+      "source_service": "startorch/internal/application/cert/service.go",
+      "source_method": "ListCertificates",
+      "source_route": "GET /api/certificates",
+      "request_sample": {
+        "cluster_name": "prod"
+      },
+      "response_sample": {
+        "items": [
+          {
+            "cluster_name": "prod",
+            "namespace": "orders",
+            "secret_name": "orders-tls",
+            "expires_at": "2026-12-31T00:00:00Z"
+          }
+        ]
+      },
+      "error_sample": {
+        "code": "cluster_not_found",
+        "message": "cluster not found"
+      },
+      "novaobs_api": "GET /api/v1/k8s/certificates?cluster_id=prod",
+      "rbac": {
+        "resource": "k8s.certificate",
+        "action": "read",
+        "scope": "cluster"
+      },
+      "audit": false
+    },
+    {
+      "id": "terminal.exec",
+      "source_service": "startorch/internal/application/kubectl/service.go",
+      "source_method": "ExecCommand",
+      "source_route": "POST /api/kubectl/exec",
+      "request_sample": {
+        "cluster_name": "prod",
+        "namespace": "orders",
+        "command": "kubectl get pod"
+      },
+      "response_sample": {
+        "stdout": "NAME READY STATUS\n",
+        "stderr": "",
+        "exit_code": 0
+      },
+      "error_sample": {
+        "code": "exec_failed",
+        "message": "kubectl command failed"
+      },
+      "novaobs_api": "POST /api/v1/k8s/terminal/exec",
+      "rbac": {
+        "resource": "k8s.terminal",
+        "action": "exec",
+        "scope": "namespace"
+      },
+      "audit": true
+    }
+  ]
+}

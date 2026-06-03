@@ -6,15 +6,31 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"novaobs/internal/alerting"
 	"novaobs/internal/collectorconfig"
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database"
-	"novaobs/internal/logquery"
+	"novaobs/internal/logs"
+	"novaobs/internal/modules/k8sops"
+	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
+	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
+	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
+	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	k8sopskubeconfig "novaobs/internal/modules/k8sops/kubeconfig"
+	k8sopsnamespace "novaobs/internal/modules/k8sops/namespace"
+	k8sopsplatformaccess "novaobs/internal/modules/k8sops/platformaccess"
+	k8sopsrbac "novaobs/internal/modules/k8sops/rbac"
+	k8sopsresource "novaobs/internal/modules/k8sops/resource"
+	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
+	k8sopstemplate "novaobs/internal/modules/k8sops/template"
+	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
+	platformauth "novaobs/internal/platform/auth"
+	"novaobs/internal/platform/authctx"
+	"novaobs/internal/platform/iam"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
 	"novaobs/pkg/response"
@@ -33,10 +49,14 @@ type Dependencies struct {
 	CollectorConfigService collectorconfig.Service
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
-	LogQueryService        logquery.Service
+	LogsService            logs.Service
 	AlertService           alerting.Service
+	PlatformIAMService     iam.Service
+	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
 	CollectorTemplate      string
+	PlatformAuthService    *platformauth.Service
+	DefaultSubject         platformrbac.Subject
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -65,6 +85,17 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	api := router.Group("/api/v1")
 	api.GET("/health", healthHandler)
+	api.POST("/auth/login", platformauth.LoginHandler(deps.PlatformAuthService))
+	api.POST("/auth/logout", platformauth.LogoutHandler())
+
+	api = router.Group("/api/v1")
+	if deps.PlatformAuthService != nil {
+		api.Use(platformauth.SessionMiddleware(deps.PlatformAuthService))
+	} else if deps.DefaultSubject.ID != "" && deps.DefaultSubject.Type != "" {
+		api.Use(defaultSubjectMiddleware(deps.DefaultSubject))
+	}
+
+	api.GET("/auth/session", platformauth.SessionHandler())
 	api.GET("/overview", overviewHandler(deps))
 	api.GET("/services", listServicesHandler(deps.ServiceRepo))
 	api.POST("/services", createServiceHandler(deps.ServiceRepo))
@@ -74,13 +105,6 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/services/:id/targets", listServiceTargetsHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.POST("/services/:id/targets", createServiceTargetHandler(deps.ServiceRepo, deps.ServiceTargetRepo))
 	api.GET("/services/:id/agents", listServiceAgentsHandler(deps.ServiceRepo, deps.CollectorService))
-	api.PUT("/services/:id/pipeline/base", putServicePipelineBaseHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/enrichment/regenerate", regenerateServicePipelineEnrichmentHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.PUT("/services/:id/pipeline/parser-rule", putServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/parser-rule/preview", previewServicePipelineParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/parser-rule/generate-patch", generateServicePipelineParserPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/services/:id/pipeline/sources", getServicePipelineSourcesHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/pipeline/publish", publishServicePipelineHandler(deps.ServiceRepo, deps.CollectorConfigService, deps.CollectorService, deps.OpAMPManager))
 	api.GET("/services/:id/onboarding", getOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding", upsertOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
 	api.POST("/services/:id/onboarding/check", checkOnboardingHandler(deps.ServiceRepo, deps.OnboardingService))
@@ -102,15 +126,92 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/collector-platform-templates/import-from-agent", importCollectorPlatformTemplateHandler(deps.CollectorConfigService, deps.OpAMPManager))
 	api.GET("/collector-platform-templates/:id", getCollectorPlatformTemplateHandler(deps.CollectorConfigService))
 	api.PUT("/collector-platform-templates/:id", updateCollectorPlatformTemplateHandler(deps.CollectorConfigService))
-	api.GET("/services/:id/enrichment-patch", getServiceEnrichmentPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/enrichment-patch/regenerate", regenerateServiceEnrichmentPatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/services/:id/parser-rule", getServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.PUT("/services/:id/parser-rule", putServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/parser-rule/preview", previewServiceParserRuleHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.POST("/services/:id/parser-rule/generate-patch", generateServicePipelinePatchHandler(deps.ServiceRepo, deps.CollectorConfigService))
-	api.GET("/logs", searchLogsHandler(deps.LogQueryService))
+	api.GET("/logs/onboarding/workspace", getLogsOnboardingWorkspaceHandler(deps.LogsService))
+	api.GET("/logs/onboarding/k8s/workloads", getLogsK8sWorkloadsHandler(deps.LogsService))
+	api.POST("/logs/onboarding/k8s/sync-services", syncLogsK8sServicesHandler(deps.LogsService))
+	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
+	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
+	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
+	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
+	api.GET("/platform/me", iam.MeHandler(deps.PlatformIAMService))
+	api.GET("/platform/subjects", iam.ListSubjectsHandler(deps.PlatformIAMService))
+	api.GET("/platform/users", iam.ListUsersHandler(deps.PlatformIAMService))
+	api.POST("/platform/users", iam.CreateUserHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/users/:id", iam.DeleteUserHandler(deps.PlatformIAMService))
+	api.GET("/platform/groups", iam.ListGroupsHandler(deps.PlatformIAMService))
+	api.POST("/platform/groups", iam.CreateGroupHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/groups/:id", iam.DeleteGroupHandler(deps.PlatformIAMService))
+	api.GET("/platform/group-memberships", iam.ListMembershipsHandler(deps.PlatformIAMService))
+	api.POST("/platform/group-memberships", iam.CreateMembershipHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/group-memberships/:id", iam.DeleteMembershipHandler(deps.PlatformIAMService))
+	api.GET("/platform/service-accounts", iam.ListServiceAccountsHandler(deps.PlatformIAMService))
+	api.POST("/platform/service-accounts", iam.CreateServiceAccountHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/service-accounts/:id", iam.DeleteServiceAccountHandler(deps.PlatformIAMService))
+	api.GET("/platform/roles", iam.ListRolesHandler(deps.PlatformIAMService))
+	api.POST("/platform/roles", iam.CreateRoleHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/roles/:id", iam.DeleteRoleHandler(deps.PlatformIAMService))
+	api.GET("/platform/bindings", iam.ListBindingsHandler(deps.PlatformIAMService))
+	api.POST("/platform/bindings", iam.CreateBindingHandler(deps.PlatformIAMService))
+	api.DELETE("/platform/bindings/:id", iam.DeleteBindingHandler(deps.PlatformIAMService))
+	api.GET("/platform/effective-permissions", iam.EffectivePermissionsHandler(deps.PlatformIAMService))
+	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
+	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
+	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))
+	api.GET("/k8s/clusters/:id/capabilities", k8sopscluster.CapabilityHandler(deps.K8sOpsModule.ClusterCaps))
+	api.POST("/k8s/clusters/:id/probe", k8sopscluster.ProbeHandler(deps.K8sOpsModule.Cluster, deps.K8sOpsModule.ClusterCaps))
+	api.DELETE("/k8s/clusters/:id", k8sopscluster.DeleteHandler(deps.K8sOpsModule.Cluster))
+	api.GET("/k8s/cluster-credentials", k8sopscluster.ListCredentialHandler(deps.K8sOpsModule.ClusterCred))
+	api.POST("/k8s/cluster-credentials", k8sopscluster.CreateCredentialHandler(deps.K8sOpsModule.ClusterCred))
+	api.POST("/k8s/cluster-credentials/rotate", k8sopscluster.RotateCredentialHandler(deps.K8sOpsModule.ClusterCred))
+	api.POST("/k8s/cluster-credentials/rollback", k8sopscluster.RollbackCredentialHandler(deps.K8sOpsModule.ClusterCred))
+	api.GET("/k8s/namespaces", k8sopsnamespace.ListHandler(deps.K8sOpsModule.Namespace))
+	api.POST("/k8s/namespaces", k8sopsnamespace.CreateHandler(deps.K8sOpsModule.Namespace))
+	api.DELETE("/k8s/namespaces", k8sopsnamespace.DeleteHandler(deps.K8sOpsModule.Namespace))
+	api.GET("/k8s/resources", k8sopsresource.ListHandler(deps.K8sOpsModule.Resource))
+	api.GET("/k8s/resources/detail", k8sopsresource.DetailHandler(deps.K8sOpsModule.Resource))
+	api.GET("/k8s/resources/yaml", k8sopsresource.YAMLHandler(deps.K8sOpsModule.Resource))
+	api.GET("/k8s/pod-logs", k8sopsresource.PodLogsHandler(deps.K8sOpsModule.Resource))
+	api.GET("/k8s/runtime-groups", k8sopsresource.RuntimeGroupsHandler(deps.K8sOpsModule.Resource))
+	api.GET("/k8s/platform-access/bindings", k8sopsplatformaccess.ListBindingsHandler(deps.K8sOpsModule.PlatformAccess))
+	api.POST("/k8s/platform-access/bindings", k8sopsplatformaccess.CreateBindingHandler(deps.K8sOpsModule.PlatformAccess))
+	api.DELETE("/k8s/platform-access/bindings/:id", k8sopsplatformaccess.DeleteBindingHandler(deps.K8sOpsModule.PlatformAccess))
+	api.GET("/k8s/platform-access/permissions", k8sopsplatformaccess.PermissionsHandler(deps.K8sOpsModule.PlatformAccess))
+	api.GET("/k8s/platform-access/profiles", k8sopsplatformaccess.ProfilesHandler(deps.K8sOpsModule.PlatformAccess))
+	api.GET("/k8s/platform-access/subjects", k8sopsplatformaccess.ListSubjectsHandler(deps.K8sOpsModule.PlatformAccess))
+	api.GET("/k8s/deployment-history", k8sopsdeployment.HistoryHandler(deps.K8sOpsModule.Deploy))
+	api.GET("/k8s/audit-events", k8sopsdeployment.AuditEventsHandler(deps.K8sOpsModule.Deploy))
+	api.POST("/k8s/deployments/preview", k8sopsdeployment.PreviewHandler(deps.K8sOpsModule.Deploy))
+	api.POST("/k8s/deployments/delete-preview", k8sopsdeployment.PreviewDeleteHandler(deps.K8sOpsModule.Deploy))
+	api.POST("/k8s/deployments", k8sopsdeployment.ApplyHandler(deps.K8sOpsModule.Deploy))
+	api.DELETE("/k8s/deployments", k8sopsdeployment.DeleteHandler(deps.K8sOpsModule.Deploy))
+	api.POST("/k8s/deployments/rollback", k8sopsdeployment.RollbackHandler(deps.K8sOpsModule.Deploy))
+	api.GET("/k8s/certificates", k8sopscertificate.ListHandler(deps.K8sOpsModule.Cert))
+	api.POST("/k8s/certificates", k8sopscertificate.CreateHandler(deps.K8sOpsModule.Cert))
+	api.DELETE("/k8s/certificates/:id", k8sopscertificate.DeleteHandler(deps.K8sOpsModule.Cert))
+	api.GET("/k8s/service-accounts", k8sopsserviceaccount.ListHandler(deps.K8sOpsModule.ServiceAccount))
+	api.POST("/k8s/service-accounts", k8sopsserviceaccount.CreateHandler(deps.K8sOpsModule.ServiceAccount))
+	api.DELETE("/k8s/service-accounts", k8sopsserviceaccount.DeleteHandler(deps.K8sOpsModule.ServiceAccount))
+	api.GET("/k8s/rbac/roles", k8sopsrbac.ListRolesHandler(deps.K8sOpsModule.RBAC))
+	api.POST("/k8s/rbac/roles", k8sopsrbac.CreateRoleHandler(deps.K8sOpsModule.RBAC))
+	api.PUT("/k8s/rbac/roles", k8sopsrbac.UpdateRoleHandler(deps.K8sOpsModule.RBAC))
+	api.DELETE("/k8s/rbac/roles", k8sopsrbac.DeleteRoleHandler(deps.K8sOpsModule.RBAC))
+	api.GET("/k8s/rbac/bindings", k8sopsrbac.ListBindingsHandler(deps.K8sOpsModule.RBAC))
+	api.POST("/k8s/rbac/bindings", k8sopsrbac.CreateBindingHandler(deps.K8sOpsModule.RBAC))
+	api.DELETE("/k8s/rbac/bindings", k8sopsrbac.DeleteBindingHandler(deps.K8sOpsModule.RBAC))
+	api.POST("/k8s/kubeconfigs", k8sopskubeconfig.CreateHandler(deps.K8sOpsModule.Kubeconfig))
+	api.POST("/k8s/kubeconfigs/export", k8sopskubeconfig.ExportHandler(deps.K8sOpsModule.Kubeconfig))
+	api.GET("/k8s/templates", k8sopstemplate.ListHandler(deps.K8sOpsModule.Template))
+	api.GET("/k8s/templates/base", k8sopstemplate.BaseTemplateHandler())
+	api.POST("/k8s/templates", k8sopstemplate.CreateHandler(deps.K8sOpsModule.Template))
+	api.PUT("/k8s/templates", k8sopstemplate.UpdateHandler(deps.K8sOpsModule.Template))
+	api.DELETE("/k8s/templates/:id", k8sopstemplate.DeleteHandler(deps.K8sOpsModule.Template))
+	api.POST("/k8s/templates/render", k8sopstemplate.RenderHandler(deps.K8sOpsModule.Template))
+	api.POST("/k8s/terminal/exec", k8sopsterminal.ExecHandler(deps.K8sOpsModule.Terminal))
 	api.GET("/opamp/agents", listOpAMPAgentsHandler(deps.OpAMPManager, deps.CollectorService))
 	api.GET("/opamp/agents/:uid", getOpAMPAgentDetailHandler(deps))
 	api.POST("/opamp/instances/:uid/group", registerOpAMPInstanceGroupHandler(deps.OpAMPManager, deps.CollectorService))
@@ -128,6 +229,28 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	return router
+}
+
+func defaultSubjectMiddleware(subject platformrbac.Subject) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if _, ok := authctx.SubjectFrom(ctx.Request.Context()); !ok {
+			ctx.Request = ctx.Request.WithContext(authctx.WithSubject(ctx.Request.Context(), subject))
+		}
+		ctx.Next()
+	}
+}
+
+func getK8sOpsDashboardHandler(service k8sopsdashboard.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		snapshot, err := service.Get(ctx.Request.Context(), k8sopsdashboard.Query{
+			ClusterID: strings.TrimSpace(ctx.Query("cluster_id")),
+		})
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, snapshot, gin.H{"source": "k8sops"})
+	}
 }
 
 func healthHandler(ctx *gin.Context) {
@@ -462,30 +585,6 @@ func getCollectorGroupLatestConfigYAMLHandler(service collectormanagement.Servic
 	}
 }
 
-func searchLogsHandler(service logquery.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		start, ok := parseOptionalTime(ctx, "start")
-		if !ok {
-			return
-		}
-		end, ok := parseOptionalTime(ctx, "end")
-		if !ok {
-			return
-		}
-		result := service.Search(logquery.Query{
-			Service:     ctx.Query("service"),
-			Environment: ctx.Query("environment"),
-			Level:       ctx.Query("level"),
-			Keyword:     ctx.Query("keyword"),
-			TraceID:     ctx.Query("trace_id"),
-			RequestID:   ctx.Query("request_id"),
-			Start:       start,
-			End:         end,
-		})
-		response.OK(ctx, result.Items, gin.H{"total": result.Total})
-	}
-}
-
 func registerOpAMPInstanceGroupHandler(manager *opamp.Manager, collectorService collectormanagement.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		uid := ctx.Param("uid")
@@ -649,19 +748,6 @@ func parseID(ctx *gin.Context) (string, bool) {
 		return "", false
 	}
 	return id, true
-}
-
-func parseOptionalTime(ctx *gin.Context, key string) (*time.Time, bool) {
-	value := ctx.Query(key)
-	if value == "" {
-		return nil, true
-	}
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		writeError(ctx, apperr.InvalidRequest(fmt.Sprintf("%s 必须是 RFC3339 时间", key)))
-		return nil, false
-	}
-	return &parsed, true
 }
 
 func normalizeNotFound(err error, message string) error {

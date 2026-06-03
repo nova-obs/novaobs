@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"novaobs/internal/collectormanagement"
+	"novaobs/internal/modules/k8sops/cluster"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -18,6 +19,22 @@ func TestObjectIDFilterUsesStringID(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, id, value)
+}
+
+func TestDecodeK8sClusterDocumentNormalizesObjectID(t *testing.T) {
+	doc := bson.M{
+		"_id":    primitive.NewObjectID(),
+		"name":   "stage-core",
+		"region": "cn-beijing",
+		"status": "active",
+	}
+
+	var item cluster.Cluster
+	require.NoError(t, decodeBSONDocument(doc, &item))
+
+	require.NotEmpty(t, item.ID)
+	require.Equal(t, "stage-core", item.Name)
+	require.Equal(t, "active", item.Status)
 }
 
 func TestDecodeCollectorInstanceDocumentNormalizesObjectID(t *testing.T) {

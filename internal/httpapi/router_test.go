@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +14,14 @@ import (
 	"novaobs/internal/collectorconfig"
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database/memstore"
-	"novaobs/internal/logquery"
+	"novaobs/internal/logs"
+	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
+	"novaobs/internal/platform/audit"
+	platformauth "novaobs/internal/platform/auth"
+	"novaobs/internal/platform/iam"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +35,10 @@ type testEnv struct {
 	service servicecatalog.Service
 	group   collectormanagement.CollectorGroup
 	manager *opamp.Manager
+}
+
+func testRouterLoginCredential() string {
+	return strings.Join([]string{"test", "login", "credential"}, "-")
 }
 
 func newTestRouter(t *testing.T) testEnv {
@@ -67,6 +77,27 @@ func newTestRouter(t *testing.T) testEnv {
 		svcRepo,
 	)
 	manager := opamp.NewManager()
+	admin := platformrbac.DevAdminSubject()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsurePlatformDefaults(rbacRepo, admin))
+	iamSvc := iam.NewService(
+		iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts()),
+		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
+		platformrbac.NewService(rbacRepo),
+	)
+	k8sModule := k8sops.NewModule()
+	logsSvc := logs.NewService(
+		store.LogEndpoints(),
+		store.LogSources(),
+		store.LogRoutes(),
+		store.LogAgentPlans(),
+		svcRepo,
+		servicecatalog.NewTargetRepository(store.ServiceTargets()),
+		collectorSvc,
+		k8sModule.Cluster,
+		k8sModule.Resource,
+		k8sModule.Deploy,
+	)
 	router := NewRouter(Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
@@ -74,11 +105,97 @@ func newTestRouter(t *testing.T) testEnv {
 		CollectorConfigService: configSvc,
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
-		LogQueryService:        logquery.NewService(),
+		LogsService:            logsSvc,
 		AlertService:           alerting.NewService(store.AlertRules()),
+		PlatformIAMService:     iamSvc,
+		K8sOpsModule:           k8sModule,
 		OpAMPManager:           manager,
+		DefaultSubject:         admin,
 	})
 	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
+}
+
+func TestRouterInjectsDefaultSubjectForK8sOpsWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := memstore.NewStore()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsureK8sOpsDefaults(rbacRepo, platformrbac.DevAdminSubject(), platformrbac.DevK8sOpsScope()))
+	rbacSvc := platformrbac.NewService(rbacRepo)
+	auditSvc := audit.NewService(audit.NewMemoryStore())
+	router := NewRouter(Dependencies{
+		Store:          store,
+		K8sOpsModule:   k8sops.NewModuleWithSecurity(rbacSvc, auditSvc, nil),
+		DefaultSubject: platformrbac.DevAdminSubject(),
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/terminal/exec", strings.NewReader(`{"cluster_id":"prod","namespace":"orders","command":"get pods -n orders"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"accepted"`)
+	require.Contains(t, recorder.Body.String(), `"audit_id"`)
+}
+
+func TestRouterLogoutClearsSessionCookie(t *testing.T) {
+	env := newTestRouter(t)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"logged_out"`)
+	require.Contains(t, recorder.Header().Get("Set-Cookie"), "novaobs_session=")
+	require.Contains(t, recorder.Header().Get("Set-Cookie"), "Max-Age=0")
+}
+
+func TestRouterUsesPlatformAuthSessionForProtectedAPIs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := memstore.NewStore()
+	ctx := context.Background()
+	admin := platformrbac.DevAdminSubject()
+	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
+	require.NoError(t, platformrbac.EnsurePlatformDefaults(rbacRepo, admin))
+	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
+	iamSvc := iam.NewService(
+		iamRepo,
+		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
+		platformrbac.NewService(rbacRepo),
+	)
+	_, err := iamSvc.CreateUser(ctx, admin, iam.CreateUserRequest{
+		Username:    "operator",
+		DisplayName: "一线运维",
+		Password:    testRouterLoginCredential(),
+	})
+	require.NoError(t, err)
+	router := NewRouter(Dependencies{
+		Store:               store,
+		PlatformIAMService:  iamSvc,
+		K8sOpsModule:        k8sops.NewModule(),
+		PlatformAuthService: platformauth.NewService(iamRepo, []byte("12345678901234567890123456789012"), platformauth.WithPasswordlessLocalUsers(true)),
+	})
+
+	unauthorized := httptest.NewRecorder()
+	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/platform/me", nil))
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+	require.Contains(t, unauthorized.Body.String(), `"code":"unauthorized"`)
+
+	login := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"operator"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(login, loginRequest)
+	require.Equal(t, http.StatusOK, login.Code)
+	require.Contains(t, login.Header().Get("Set-Cookie"), platformauth.SessionCookieName+"=")
+
+	me := httptest.NewRecorder()
+	meRequest := httptest.NewRequest(http.MethodGet, "/api/v1/platform/me", nil)
+	meRequest.Header.Set("Cookie", login.Header().Get("Set-Cookie"))
+	router.ServeHTTP(me, meRequest)
+	require.Equal(t, http.StatusOK, me.Code)
+	require.Contains(t, me.Body.String(), `"subject_id":"operator"`)
 }
 
 func TestRouterServesCoreAPIs(t *testing.T) {
@@ -90,9 +207,28 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/services/" + env.service.ID,
 		"/api/v1/services/" + env.service.ID + "/observability-graph",
 		"/api/v1/services/" + env.service.ID + "/onboarding",
-		"/api/v1/logs?service=orders-api&level=error",
+		"/api/v1/logs/onboarding/workspace",
+		"/api/v1/logs/endpoints",
+		"/api/v1/k8sops/dashboard?cluster_id=prod",
+		"/api/v1/k8s/clusters?q=prod",
+		"/api/v1/k8s/namespaces?cluster_id=prod",
+		"/api/v1/k8s/resources?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/runtime-groups?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/deployment-history?cluster_id=prod",
+		"/api/v1/k8s/audit-events?cluster_id=prod",
+		"/api/v1/k8s/certificates?cluster_id=prod",
+		"/api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/rbac/roles?cluster_id=prod&namespace=orders",
+		"/api/v1/k8s/rbac/bindings?cluster_id=prod&namespace=orders",
 		"/api/v1/opamp/agents",
 		"/api/v1/alert-rules",
+		"/api/v1/platform/me",
+		"/api/v1/platform/subjects",
+		"/api/v1/platform/users",
+		"/api/v1/platform/groups",
+		"/api/v1/platform/service-accounts",
+		"/api/v1/platform/roles",
+		"/api/v1/platform/bindings",
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -100,6 +236,19 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 
 		require.Equal(t, http.StatusOK, recorder.Code, path)
 		require.Contains(t, recorder.Body.String(), `"success":true`, path)
+	}
+
+	for _, path := range []string{
+		"/api/v1/k8s/resources/detail?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=uid-orders-api",
+		"/api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-6f7d&container=app",
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		env.router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusNotFound, recorder.Code, path)
+		require.Contains(t, recorder.Body.String(), `"success":false`, path)
 	}
 }
 
@@ -148,7 +297,7 @@ func TestRouterReturnsServiceObservabilityGraph(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"target_type":"host_process"`)
 	require.Contains(t, recorder.Body.String(), `"agents"`)
 	require.Contains(t, recorder.Body.String(), `"instance_uid":"collector-orders"`)
-	require.Contains(t, recorder.Body.String(), `"pipelines"`)
+	require.Contains(t, recorder.Body.String(), `"log_routes"`)
 	require.Contains(t, recorder.Body.String(), `"alert_rules"`)
 	require.Contains(t, recorder.Body.String(), `"orders-error-count"`)
 	require.NotContains(t, recorder.Body.String(), `"dashboard_panels"`)
@@ -175,7 +324,7 @@ func TestRouterCreatesServiceTarget(t *testing.T) {
 	require.Contains(t, listRecorder.Body.String(), `"display_name":"edge-fw-01"`)
 }
 
-func TestRouterImportsTemplateConfiguresServiceAndPublishesGroup(t *testing.T) {
+func TestRouterImportsCollectorTemplate(t *testing.T) {
 	env := newTestRouter(t)
 
 	env.manager.RegisterInstanceGroup("collector-a", env.group.ID)
@@ -194,42 +343,10 @@ func TestRouterImportsTemplateConfiguresServiceAndPublishesGroup(t *testing.T) {
 	importRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(importRecorder, importRequest)
 	require.Equal(t, http.StatusCreated, importRecorder.Code)
-
-	enrichmentBody := `{"collector_group_id":"` + env.group.ID + `"}`
-	enrichmentRecorder := httptest.NewRecorder()
-	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/enrichment-patch/regenerate", bytes.NewBufferString(enrichmentBody))
-	enrichmentRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
-	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
-
-	parserBody := `{"collector_group_id":"` + env.group.ID + `","parse_mode":"regex","regex_pattern":"order_id=(?P<order_id>[\\w-]+)","sample_log":"INFO order_id=o-1","enabled":true}`
-	parserRecorder := httptest.NewRecorder()
-	parserRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/parser-rule", bytes.NewBufferString(parserBody))
-	parserRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(parserRecorder, parserRequest)
-	require.Equal(t, http.StatusOK, parserRecorder.Code)
-
-	patchRecorder := httptest.NewRecorder()
-	patchRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/parser-rule/generate-patch", nil)
-	env.router.ServeHTTP(patchRecorder, patchRequest)
-	require.Equal(t, http.StatusOK, patchRecorder.Code)
-
-	validateRecorder := httptest.NewRecorder()
-	validateRequest := httptest.NewRequest(http.MethodPost, "/api/v1/collector-groups/"+env.group.ID+"/config/validate", nil)
-	env.router.ServeHTTP(validateRecorder, validateRequest)
-	require.Equal(t, http.StatusOK, validateRecorder.Code)
-	require.Contains(t, validateRecorder.Body.String(), "transform/enrich")
-	require.Contains(t, validateRecorder.Body.String(), "ExtractPatterns")
-	require.NotContains(t, validateRecorder.Body.String(), "filelog/")
-
-	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/collector-groups/"+env.group.ID+"/config/publish", nil)
-	env.router.ServeHTTP(publishRecorder, publishRequest)
-	require.Equal(t, http.StatusOK, publishRecorder.Code)
-	require.Contains(t, publishRecorder.Body.String(), `"status":"pending"`)
+	require.Contains(t, importRecorder.Body.String(), `"name":"platform-prod"`)
 }
 
-func TestRouterActivatesCollectorGroupAfterReadinessChecks(t *testing.T) {
+func TestRouterRejectsCollectorGroupActivationWithoutConfig(t *testing.T) {
 	env := newTestRouter(t)
 	draft := "draft"
 	err := env.store.CollectorGroups().Update(context.Background(), env.group.ID, collectormanagement.CollectorGroup{
@@ -249,19 +366,11 @@ func TestRouterActivatesCollectorGroupAfterReadinessChecks(t *testing.T) {
 			"collector.yaml": {Body: []byte("receivers:\n  otlp:\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n")},
 		}}},
 	})
-	enrichmentBody := `{"collector_group_id":"` + env.group.ID + `"}`
-	enrichmentRecorder := httptest.NewRecorder()
-	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/enrichment-patch/regenerate", bytes.NewBufferString(enrichmentBody))
-	enrichmentRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
-	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
-
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/collector-groups/"+env.group.ID+"/activate", nil)
 	env.router.ServeHTTP(recorder, request)
 
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Contains(t, recorder.Body.String(), `"status":"active"`)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
 func TestRouterReturnsOpAMPAgentDetailWithConfigSources(t *testing.T) {
@@ -304,7 +413,7 @@ func TestRouterReturnsOpAMPAgentDetailWithConfigSources(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"name":"orders-api"`)
 }
 
-func TestRouterRejectsInvalidParserPreview(t *testing.T) {
+func TestRouterRemovesServiceParserPreviewEndpoint(t *testing.T) {
 	env := newTestRouter(t)
 
 	recorder := httptest.NewRecorder()
@@ -312,7 +421,7 @@ func TestRouterRejectsInvalidParserPreview(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(recorder, request)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
 func TestRouterCreatesResources(t *testing.T) {
@@ -337,68 +446,115 @@ func TestRouterCreatesResources(t *testing.T) {
 	}
 }
 
-func TestRouterPublishesServicePipelineToBoundAgents(t *testing.T) {
+func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	env := newTestRouter(t)
-	env.manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
-		InstanceUid:  []byte("collector-a"),
-		Capabilities: uint64(protobufs.AgentCapabilities_AgentCapabilities_AcceptsRemoteConfig | protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig),
-		Health:       &protobufs.ComponentHealth{Healthy: true, StartTimeUnixNano: uint64(time.Now().UnixNano())},
-		EffectiveConfig: &protobufs.EffectiveConfig{ConfigMap: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
-			"collector.yaml": {Body: []byte("receivers:\n  otlp:\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n")},
-		}}},
-	})
 
-	assignRecorder := httptest.NewRecorder()
-	assignRequest := httptest.NewRequest(http.MethodPost, "/api/v1/opamp/instances/collector-a/service", bytes.NewBufferString(`{"service_id":"`+env.service.ID+`"}`))
-	assignRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(assignRecorder, assignRequest)
-	require.Equal(t, http.StatusOK, assignRecorder.Code)
-	require.Contains(t, assignRecorder.Body.String(), `"service_id":"`+env.service.ID+`"`)
+	endpointRecorder := httptest.NewRecorder()
+	endpointBody := `{"name":"vl-prod","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
+	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	endpointRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(endpointRecorder, endpointRequest)
+	require.Equal(t, http.StatusCreated, endpointRecorder.Code)
 
-	agentsRecorder := httptest.NewRecorder()
-	agentsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/agents", nil)
-	env.router.ServeHTTP(agentsRecorder, agentsRequest)
-	require.Equal(t, http.StatusOK, agentsRecorder.Code)
-	require.Contains(t, agentsRecorder.Body.String(), `"instance_uid":"collector-a"`)
+	var endpointEnvelope struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(endpointRecorder.Body.Bytes(), &endpointEnvelope))
 
-	baseBody := `{"base_yaml":""}`
-	baseRecorder := httptest.NewRecorder()
-	baseRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/base", bytes.NewBufferString(baseBody))
-	baseRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(baseRecorder, baseRequest)
-	require.Equal(t, http.StatusOK, baseRecorder.Code)
+	routeBody := `{"service_id":"` + env.service.ID + `","source_type":"vm_file","agent_group_id":"` + env.group.ID + `","endpoint_id":"` + endpointEnvelope.Data.ID + `","vm":{"host_group":"billing-vms","path_pattern":"/data/logs/*.log"}}`
+	previewRecorder := httptest.NewRecorder()
+	previewRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/preview", bytes.NewBufferString(routeBody))
+	previewRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(previewRecorder, previewRequest)
+	require.Equal(t, http.StatusOK, previewRecorder.Code)
+	require.Contains(t, previewRecorder.Body.String(), `"source_type":"vm_file"`)
+	require.Contains(t, previewRecorder.Body.String(), "filelog/vm")
 
-	enrichmentRecorder := httptest.NewRecorder()
-	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/enrichment/regenerate", nil)
-	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
-	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
-	require.Contains(t, enrichmentRecorder.Body.String(), "transform/enrich")
+	routeRecorder := httptest.NewRecorder()
+	routeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes", bytes.NewBufferString(routeBody))
+	routeRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(routeRecorder, routeRequest)
+	require.Equal(t, http.StatusCreated, routeRecorder.Code)
+	var routeEnvelope struct {
+		Data logs.LogRouteView `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(routeRecorder.Body.Bytes(), &routeEnvelope))
 
-	parserRecorder := httptest.NewRecorder()
-	parserRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/parser-rule", bytes.NewBufferString(`{"parse_mode":"regex","regex_pattern":"order_id=(?P<order_id>[\\w-]+)","sample_log":"INFO order_id=o-1","enabled":true}`))
-	parserRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(parserRecorder, parserRequest)
-	require.Equal(t, http.StatusOK, parserRecorder.Code)
-
-	patchRecorder := httptest.NewRecorder()
-	patchRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/parser-rule/generate-patch", nil)
-	env.router.ServeHTTP(patchRecorder, patchRequest)
-	require.Equal(t, http.StatusOK, patchRecorder.Code)
-
-	sourcesRecorder := httptest.NewRecorder()
-	sourcesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/services/"+env.service.ID+"/pipeline/sources", nil)
-	env.router.ServeHTTP(sourcesRecorder, sourcesRequest)
-	require.Equal(t, http.StatusOK, sourcesRecorder.Code)
-	require.Contains(t, sourcesRecorder.Body.String(), `"enrichment"`)
-	require.Contains(t, sourcesRecorder.Body.String(), `"parser"`)
-	require.Contains(t, sourcesRecorder.Body.String(), `"rendered_yaml"`)
+	probeRecorder := httptest.NewRecorder()
+	probeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/probe", nil)
+	env.router.ServeHTTP(probeRecorder, probeRequest)
+	require.Equal(t, http.StatusOK, probeRecorder.Code)
+	require.Contains(t, probeRecorder.Body.String(), `"status":"ready"`)
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/publish", nil)
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/publish", bytes.NewBufferString(`{}`))
+	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 	require.Equal(t, http.StatusOK, publishRecorder.Code)
-	require.Contains(t, publishRecorder.Body.String(), `"service_id":"`+env.service.ID+`"`)
-	require.Contains(t, publishRecorder.Body.String(), `"active_delivery_count":1`)
+	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
+	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+}
+
+func TestRouterPreviewsLogsParseRules(t *testing.T) {
+	env := newTestRouter(t)
+
+	recorder := httptest.NewRecorder()
+	body := `{"sample":"WARN payment timeout","parse_rules":[{"name":"text","rule_type":"regex","pattern":"^(?P<level>[A-Z]+)\\s+(?P<message>.*)$","enabled":true}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"status":"ok"`)
+	require.Contains(t, recorder.Body.String(), `"level":"WARN"`)
+	require.Contains(t, recorder.Body.String(), `"message":"payment timeout"`)
+}
+
+func TestRouterPreviewsLogsParseRulesHandlesInvalidAndDisabledRules(t *testing.T) {
+	env := newTestRouter(t)
+
+	invalidJSONRecorder := httptest.NewRecorder()
+	invalidJSONRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(`{"sample":`))
+	invalidJSONRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(invalidJSONRecorder, invalidJSONRequest)
+	require.Equal(t, http.StatusBadRequest, invalidJSONRecorder.Code)
+
+	invalidRegexRecorder := httptest.NewRecorder()
+	invalidRegexBody := `{"sample":"WARN payment timeout","parse_rules":[{"name":"broken","rule_type":"regex","pattern":"^([A-Z]+)\\s+(.*)$","enabled":true}]}`
+	invalidRegexRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(invalidRegexBody))
+	invalidRegexRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(invalidRegexRecorder, invalidRegexRequest)
+	require.Equal(t, http.StatusOK, invalidRegexRecorder.Code)
+	require.Contains(t, invalidRegexRecorder.Body.String(), `"status":"error"`)
+
+	disabledRecorder := httptest.NewRecorder()
+	disabledBody := `{"sample":"WARN payment timeout","parse_rules":[{"name":"disabled","rule_type":"regex","pattern":"^(?P<level>[A-Z]+)\\s+(?P<message>.*)$","enabled":false}]}`
+	disabledRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/parse-preview", bytes.NewBufferString(disabledBody))
+	disabledRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(disabledRecorder, disabledRequest)
+	require.Equal(t, http.StatusOK, disabledRecorder.Code)
+	require.Contains(t, disabledRecorder.Body.String(), `"body":"WARN payment timeout"`)
+	require.NotContains(t, disabledRecorder.Body.String(), `"level"`)
+}
+
+func TestRouterRemovesOldServicePipelineRoutes(t *testing.T) {
+	env := newTestRouter(t)
+
+	for _, item := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/logs?service=orders-api"},
+		{method: http.MethodPut, path: "/api/v1/services/" + env.service.ID + "/pipeline/base", body: `{"base_yaml":""}`},
+		{method: http.MethodPost, path: "/api/v1/services/" + env.service.ID + "/pipeline/publish"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(item.method, item.path, bytes.NewBufferString(item.body))
+		request.Header.Set("Content-Type", "application/json")
+		env.router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusNotFound, recorder.Code, item.path)
+	}
 }
 
 func TestRouterReturnsServiceBoundAgentDetail(t *testing.T) {
@@ -421,17 +577,6 @@ func TestRouterReturnsServiceBoundAgentDetail(t *testing.T) {
 	assignRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(assignRecorder, assignRequest)
 	require.Equal(t, http.StatusOK, assignRecorder.Code)
-
-	baseRecorder := httptest.NewRecorder()
-	baseRequest := httptest.NewRequest(http.MethodPut, "/api/v1/services/"+env.service.ID+"/pipeline/base", bytes.NewBufferString(`{"base_yaml":""}`))
-	baseRequest.Header.Set("Content-Type", "application/json")
-	env.router.ServeHTTP(baseRecorder, baseRequest)
-	require.Equal(t, http.StatusOK, baseRecorder.Code)
-
-	enrichmentRecorder := httptest.NewRecorder()
-	enrichmentRequest := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/pipeline/enrichment/regenerate", nil)
-	env.router.ServeHTTP(enrichmentRecorder, enrichmentRequest)
-	require.Equal(t, http.StatusOK, enrichmentRecorder.Code)
 
 	detailRecorder := httptest.NewRecorder()
 	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/opamp/agents/collector-service-a", nil)
