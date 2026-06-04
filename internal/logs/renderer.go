@@ -24,6 +24,15 @@ type renderInput struct {
 	Route       LogRoute
 }
 
+type renderedRouteConfig struct {
+	ManifestYAML           string
+	CollectorYAML          string
+	CollectorConfigHash    string
+	DeploymentManifestYAML string
+	DeploymentManifestHash string
+	RouteIDs               []string
+}
+
 type k8sDaemonSetBundleTemplateData struct {
 	AgentNamespace       string
 	AgentName            string
@@ -44,10 +53,59 @@ func renderAgentConfig(input renderInput) (string, string) {
 	return renderK8sDaemonSetBundle([]renderInput{input})
 }
 
+func renderK8sCollectorYAML(inputs []renderInput) (string, string) {
+	yaml := renderK8sCollectorConfig(inputs)
+	return yaml, hashYAML(yaml)
+}
+
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
-	yaml := renderK8sDaemonSetBundleYAML(inputs, "")
-	hash := hashYAML(yaml)
-	return renderK8sDaemonSetBundleYAML(inputs, hash), hash
+	rendered := renderK8sDaemonSetBundleWithHashes(inputs)
+	return rendered.ManifestYAML, rendered.CollectorConfigHash
+}
+
+func renderK8sDaemonSetBundleWithHashes(inputs []renderInput) renderedRouteConfig {
+	collectorYAML, collectorHash := renderK8sCollectorYAML(inputs)
+	deploymentManifest := renderK8sDeploymentManifestYAML(inputs)
+	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorHash)
+	return renderedRouteConfig{
+		ManifestYAML:           yaml,
+		CollectorYAML:          collectorYAML,
+		CollectorConfigHash:    collectorHash,
+		DeploymentManifestYAML: deploymentManifest,
+		DeploymentManifestHash: hashYAML(deploymentManifest),
+		RouteIDs:               renderRouteIDs(inputs),
+	}
+}
+
+func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
+	if len(inputs) == 0 {
+		return ""
+	}
+	first := inputs[0]
+	source := first.Source
+	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
+	agentName := "novaobs-logs-agent"
+	data := k8sDaemonSetBundleTemplateData{
+		AgentNamespace:       agentNamespace,
+		AgentName:            agentName,
+		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
+		ConfigHash:           yamlQuote("<collector-config-hash>"),
+		RuntimeLogMounts:     []k8sRuntimeLogMount{},
+	}
+	var buffer bytes.Buffer
+	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
+		panic(fmt.Sprintf("render k8s deployment manifest template: %v", err))
+	}
+	return buffer.String()
+}
+
+func renderRouteIDs(inputs []renderInput) []string {
+	ids := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		ids = append(ids, input.Route.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) string {
@@ -64,7 +122,7 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 		AgentName:            agentName,
 		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
 		ConfigHash:           yamlQuote(configHash),
-		RuntimeLogMounts:     renderRuntimeLogMounts(inputs),
+		RuntimeLogMounts:     []k8sRuntimeLogMount{},
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -73,29 +131,7 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 	return buffer.String()
 }
 
-func renderRuntimeLogMounts(inputs []renderInput) []k8sRuntimeLogMount {
-	seen := map[string]bool{}
-	mounts := []k8sRuntimeLogMount{}
-	for _, input := range inputs {
-		for _, raw := range input.Source.RuntimeLogPaths {
-			path := strings.TrimSpace(raw)
-			if path == "" || seen[path] {
-				continue
-			}
-			seen[path] = true
-			mounts = append(mounts, k8sRuntimeLogMount{
-				Name: fmt.Sprintf("runtime-logs-%d", len(mounts)),
-				Path: path,
-			})
-		}
-	}
-	return mounts
-}
-
 func renderK8sCollectorConfig(inputs []renderInput) string {
-	if len(inputs) > 0 && strings.TrimSpace(inputs[0].Source.CollectorYAML) != "" {
-		return strings.TrimSpace(inputs[0].Source.CollectorYAML)
-	}
 	suffixes := routeComponentSuffixes(inputs)
 	return fmt.Sprintf(`extensions:
   file_storage/filelog_offsets:
@@ -377,8 +413,8 @@ func renderTransformStatements(inputs []renderInput) string {
 
 func renderVMFileConfig(input renderInput) (string, string) {
 	source := input.Source
-	if strings.TrimSpace(source.CollectorYAML) != "" {
-		yaml := strings.TrimSpace(source.CollectorYAML) + "\n"
+	if strings.TrimSpace(source.CustomCollectorYAML) != "" {
+		yaml := strings.TrimSpace(source.CustomCollectorYAML) + "\n"
 		return yaml, hashYAML(yaml)
 	}
 	exporterName, exporterYAML := renderDownstreamExporter(input.Endpoint)

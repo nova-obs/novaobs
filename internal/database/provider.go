@@ -19,6 +19,8 @@ type Store interface {
 	LogEndpoints() LogEndpointStore
 	LogSources() LogSourceStore
 	LogRoutes() LogRouteStore
+	LogCollectorConfigVersions() LogCollectorConfigVersionStore
+	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
 	LogAgentPlans() LogAgentPlanStore
 	AlertRules() AlertRuleStore
 	RBACRoles() RBACRoleStore
@@ -144,6 +146,16 @@ type LogRouteStore interface {
 	FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, route interface{}) error
+}
+
+type LogCollectorConfigVersionStore interface {
+	Upsert(ctx context.Context, hash string, version interface{}) error
+	FindByHash(ctx context.Context, hash string, result interface{}) error
+}
+
+type LogDeploymentManifestVersionStore interface {
+	Upsert(ctx context.Context, hash string, version interface{}) error
+	FindByHash(ctx context.Context, hash string, result interface{}) error
 }
 
 type LogAgentPlanStore interface {

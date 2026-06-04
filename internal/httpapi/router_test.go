@@ -167,6 +167,8 @@ func newTestRouter(t *testing.T) testEnv {
 		store.LogEndpoints(),
 		store.LogSources(),
 		store.LogRoutes(),
+		store.LogCollectorConfigVersions(),
+		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
 		svcRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
@@ -558,6 +560,25 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	require.Equal(t, http.StatusOK, publishRecorder.Code)
 	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
 	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+}
+
+func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
+	env := newTestRouter(t)
+	route := createK8sLogRoute(t, env)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/logs/routes/"+route.Route.ID+"/collector-config", nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), `"config_hash"`)
+	require.Contains(t, recorder.Body.String(), `"deployment_manifest_hash":"`+route.Source.DeploymentManifestHash+`"`)
+	require.Contains(t, recorder.Body.String(), `"collector_config_hash":"`+route.Route.CollectorConfigHash+`"`)
+	require.Contains(t, recorder.Body.String(), `"collector_yaml"`)
+	require.Contains(t, recorder.Body.String(), "receivers:")
+	require.Contains(t, recorder.Body.String(), "file_log/orders-orders-api")
+	require.NotContains(t, recorder.Body.String(), "kind: DaemonSet")
+	require.NotContains(t, recorder.Body.String(), "collector.yaml: |")
 }
 
 func TestRouterUpdatesLogsEndpoint(t *testing.T) {

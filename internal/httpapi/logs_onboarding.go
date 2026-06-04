@@ -160,6 +160,17 @@ func updateLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func getLogsRouteCollectorConfigHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		config, err := service.RouteCollectorConfig(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")))
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, config, gin.H{})
+	}
+}
+
 func probeLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		result, err := service.ProbeRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")))

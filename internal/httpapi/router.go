@@ -137,6 +137,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
 	api.PATCH("/logs/routes/:id", updateLogsRouteHandler(deps.LogsService))
+	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))

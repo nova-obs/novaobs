@@ -12,73 +12,77 @@ import (
 // Store is a thread-safe in-memory implementation of database.Store.
 // Useful for tests and local development without MongoDB.
 type Store struct {
-	mu   sync.RWMutex
-	svcs map[string]interface{}
-	stgs map[string]interface{}
-	cgs  map[string]interface{}
-	cis  map[string]interface{}
-	ccvs map[string]interface{}
-	cpts map[string]interface{}
-	cgos map[string]interface{}
-	seps map[string]interface{}
-	sprs map[string]interface{}
-	spps map[string]interface{}
-	cacs map[string]interface{}
-	iis  map[string]interface{}
-	onbs map[string]interface{}
-	lges map[string]interface{}
-	lgss map[string]interface{}
-	lgrs map[string]interface{}
-	lgps map[string]interface{}
-	ars  map[string]interface{}
-	rrs  map[string]interface{}
-	rbs  map[string]interface{}
-	pss  map[string]interface{}
-	iums map[string]interface{}
-	igns map[string]interface{}
-	imbs map[string]interface{}
-	isas map[string]interface{}
-	secs map[string]interface{}
-	aes  map[string]interface{}
-	kcls map[string]interface{}
-	knss map[string]interface{}
-	kdis map[string]interface{}
-	kdhs map[string]interface{}
+	mu    sync.RWMutex
+	svcs  map[string]interface{}
+	stgs  map[string]interface{}
+	cgs   map[string]interface{}
+	cis   map[string]interface{}
+	ccvs  map[string]interface{}
+	cpts  map[string]interface{}
+	cgos  map[string]interface{}
+	seps  map[string]interface{}
+	sprs  map[string]interface{}
+	spps  map[string]interface{}
+	cacs  map[string]interface{}
+	iis   map[string]interface{}
+	onbs  map[string]interface{}
+	lges  map[string]interface{}
+	lgss  map[string]interface{}
+	lgrs  map[string]interface{}
+	lgcvs map[string]interface{}
+	lgdvs map[string]interface{}
+	lgps  map[string]interface{}
+	ars   map[string]interface{}
+	rrs   map[string]interface{}
+	rbs   map[string]interface{}
+	pss   map[string]interface{}
+	iums  map[string]interface{}
+	igns  map[string]interface{}
+	imbs  map[string]interface{}
+	isas  map[string]interface{}
+	secs  map[string]interface{}
+	aes   map[string]interface{}
+	kcls  map[string]interface{}
+	knss  map[string]interface{}
+	kdis  map[string]interface{}
+	kdhs  map[string]interface{}
 }
 
 func NewStore() *Store {
 	return &Store{
-		svcs: map[string]interface{}{},
-		stgs: map[string]interface{}{},
-		cgs:  map[string]interface{}{},
-		cis:  map[string]interface{}{},
-		ccvs: map[string]interface{}{},
-		cpts: map[string]interface{}{},
-		cgos: map[string]interface{}{},
-		seps: map[string]interface{}{},
-		sprs: map[string]interface{}{},
-		spps: map[string]interface{}{},
-		cacs: map[string]interface{}{},
-		iis:  map[string]interface{}{},
-		onbs: map[string]interface{}{},
-		lges: map[string]interface{}{},
-		lgss: map[string]interface{}{},
-		lgrs: map[string]interface{}{},
-		lgps: map[string]interface{}{},
-		ars:  map[string]interface{}{},
-		rrs:  map[string]interface{}{},
-		rbs:  map[string]interface{}{},
-		pss:  map[string]interface{}{},
-		iums: map[string]interface{}{},
-		igns: map[string]interface{}{},
-		imbs: map[string]interface{}{},
-		isas: map[string]interface{}{},
-		secs: map[string]interface{}{},
-		aes:  map[string]interface{}{},
-		kcls: map[string]interface{}{},
-		knss: map[string]interface{}{},
-		kdis: map[string]interface{}{},
-		kdhs: map[string]interface{}{},
+		svcs:  map[string]interface{}{},
+		stgs:  map[string]interface{}{},
+		cgs:   map[string]interface{}{},
+		cis:   map[string]interface{}{},
+		ccvs:  map[string]interface{}{},
+		cpts:  map[string]interface{}{},
+		cgos:  map[string]interface{}{},
+		seps:  map[string]interface{}{},
+		sprs:  map[string]interface{}{},
+		spps:  map[string]interface{}{},
+		cacs:  map[string]interface{}{},
+		iis:   map[string]interface{}{},
+		onbs:  map[string]interface{}{},
+		lges:  map[string]interface{}{},
+		lgss:  map[string]interface{}{},
+		lgrs:  map[string]interface{}{},
+		lgcvs: map[string]interface{}{},
+		lgdvs: map[string]interface{}{},
+		lgps:  map[string]interface{}{},
+		ars:   map[string]interface{}{},
+		rrs:   map[string]interface{}{},
+		rbs:   map[string]interface{}{},
+		pss:   map[string]interface{}{},
+		iums:  map[string]interface{}{},
+		igns:  map[string]interface{}{},
+		imbs:  map[string]interface{}{},
+		isas:  map[string]interface{}{},
+		secs:  map[string]interface{}{},
+		aes:   map[string]interface{}{},
+		kcls:  map[string]interface{}{},
+		knss:  map[string]interface{}{},
+		kdis:  map[string]interface{}{},
+		kdhs:  map[string]interface{}{},
 	}
 }
 
@@ -113,14 +117,20 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s} }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore            { return &logAgentPlanStore{s} }
-func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s} }
-func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s} }
-func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s} }
-func (s *Store) PlatformSubjects() database.PlatformSubjectStore      { return &platformSubjectStore{s} }
-func (s *Store) IAMUsers() database.IAMUserStore                      { return &iamUserStore{s} }
-func (s *Store) IAMGroups() database.IAMGroupStore                    { return &iamGroupStore{s} }
-func (s *Store) IAMMemberships() database.IAMMembershipStore          { return &iamMembershipStore{s} }
+func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
+	return &logCollectorConfigVersionStore{s}
+}
+func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
+	return &logDeploymentManifestVersionStore{s}
+}
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore       { return &logAgentPlanStore{s} }
+func (s *Store) AlertRules() database.AlertRuleStore             { return &arStore{s} }
+func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
+func (s *Store) RBACBindings() database.RBACBindingStore         { return &rbacBindingStore{s} }
+func (s *Store) PlatformSubjects() database.PlatformSubjectStore { return &platformSubjectStore{s} }
+func (s *Store) IAMUsers() database.IAMUserStore                 { return &iamUserStore{s} }
+func (s *Store) IAMGroups() database.IAMGroupStore               { return &iamGroupStore{s} }
+func (s *Store) IAMMemberships() database.IAMMembershipStore     { return &iamMembershipStore{s} }
 func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
 	return &iamServiceAccountStore{s}
 }
@@ -687,6 +697,56 @@ func (st *logRouteStore) Update(ctx context.Context, id string, v interface{}) e
 	}
 	st.s.lgrs[id] = v
 	return nil
+}
+
+type logCollectorConfigVersionStore struct{ s *Store }
+
+func (st *logCollectorConfigVersionStore) Upsert(ctx context.Context, hash string, v interface{}) error {
+	return upsertLogArtifact(ctx, st.s, st.s.lgcvs, hash, v)
+}
+
+func (st *logCollectorConfigVersionStore) FindByHash(ctx context.Context, hash string, result interface{}) error {
+	return findLogArtifactByHash(ctx, st.s, st.s.lgcvs, hash, result)
+}
+
+type logDeploymentManifestVersionStore struct{ s *Store }
+
+func (st *logDeploymentManifestVersionStore) Upsert(ctx context.Context, hash string, v interface{}) error {
+	return upsertLogArtifact(ctx, st.s, st.s.lgdvs, hash, v)
+}
+
+func (st *logDeploymentManifestVersionStore) FindByHash(ctx context.Context, hash string, result interface{}) error {
+	return findLogArtifactByHash(ctx, st.s, st.s.lgdvs, hash, result)
+}
+
+func upsertLogArtifact(ctx context.Context, store *Store, items map[string]interface{}, hash string, v interface{}) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := strings.TrimSpace(hash)
+	if key == "" {
+		key = extractConfigHash(v)
+	}
+	if key == "" {
+		key = extractStringField(v, "DeploymentManifestHash")
+	}
+	if key == "" {
+		key = extractID(v)
+	}
+	if key == "" {
+		key = newID()
+	}
+	items[key] = v
+	return nil
+}
+
+func findLogArtifactByHash(ctx context.Context, store *Store, items map[string]interface{}, hash string, result interface{}) error {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	value, ok := items[strings.TrimSpace(hash)]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
 }
 
 type logAgentPlanStore struct{ s *Store }

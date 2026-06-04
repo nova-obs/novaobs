@@ -489,6 +489,45 @@ func (s *logRouteStore) Update(ctx context.Context, id string, route interface{}
 	return nil
 }
 
+type logCollectorConfigVersionStore struct{ col *mongo.Collection }
+
+func (s *logCollectorConfigVersionStore) Upsert(ctx context.Context, hash string, version interface{}) error {
+	return upsertLogArtifactByHash(ctx, s.col, hash, "collector_config_hash", version)
+}
+
+func (s *logCollectorConfigVersionStore) FindByHash(ctx context.Context, hash string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"collector_config_hash": hash}).Decode(result)
+}
+
+type logDeploymentManifestVersionStore struct{ col *mongo.Collection }
+
+func (s *logDeploymentManifestVersionStore) Upsert(ctx context.Context, hash string, version interface{}) error {
+	return upsertLogArtifactByHash(ctx, s.col, hash, "deployment_manifest_hash", version)
+}
+
+func (s *logDeploymentManifestVersionStore) FindByHash(ctx context.Context, hash string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"deployment_manifest_hash": hash}).Decode(result)
+}
+
+func upsertLogArtifactByHash(ctx context.Context, col *mongo.Collection, hash string, hashField string, artifact interface{}) error {
+	setDoc, err := toBSONMap(artifact)
+	if err != nil {
+		return err
+	}
+	insertID := hash
+	if insertID == "" {
+		if raw, ok := setDoc[hashField].(string); ok {
+			insertID = raw
+		}
+	}
+	delete(setDoc, "_id")
+	_, err = col.UpdateOne(ctx, bson.M{hashField: insertID}, bson.M{
+		"$set":         setDoc,
+		"$setOnInsert": bson.M{"_id": insertID},
+	}, options.Update().SetUpsert(true))
+	return err
+}
+
 type logAgentPlanStore struct{ col *mongo.Collection }
 
 func (s *logAgentPlanStore) Insert(ctx context.Context, plan interface{}) error {
