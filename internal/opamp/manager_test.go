@@ -99,6 +99,67 @@ func TestManagerReportsAgentStateToSink(t *testing.T) {
 	require.True(t, got.RemoteConfigCapable)
 }
 
+func TestManagerDerivesK8sRuntimeIdentityFromAgentDescription(t *testing.T) {
+	manager := NewManager()
+	var got AgentState
+	manager.SetStateSink(func(_ context.Context, state AgentState) {
+		got = state
+	})
+
+	manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
+		InstanceUid: []byte("opamp-uid-a"),
+		AgentDescription: &protobufs.AgentDescription{
+			NonIdentifyingAttributes: []*protobufs.KeyValue{
+				{Key: "novaobs.cluster.id", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "test03"}}},
+				{Key: "novaobs.collector.group_id", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "group-001"}}},
+				{Key: "k8s.namespace.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "novaobs-system"}}},
+				{Key: "k8s.pod.uid", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "pod-uid-a"}}},
+				{Key: "k8s.pod.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "novaobs-logs-agent-a"}}},
+				{Key: "k8s.node.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "node-01"}}},
+				{Key: "k8s.pod.ip", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "10.0.0.11"}}},
+			},
+		},
+		Health: &protobufs.ComponentHealth{Healthy: true},
+	})
+
+	require.Equal(t, "opamp-uid-a", got.InstanceUID)
+	require.Equal(t, "opamp-uid-a", got.OpAMPInstanceUID)
+	require.Equal(t, "group-001", got.CollectorGroupID)
+	require.Equal(t, "test03", got.ClusterID)
+	require.Equal(t, "novaobs-system", got.Namespace)
+	require.Equal(t, "novaobs-system", got.AgentNamespace)
+	require.Equal(t, "pod-uid-a", got.PodUID)
+	require.Equal(t, "novaobs-logs-agent-a", got.PodName)
+	require.Equal(t, "node-01", got.NodeName)
+	require.Equal(t, "10.0.0.11", got.PodIP)
+	require.Equal(t, "k8s:test03:group-001:node-01", got.RuntimeIdentity)
+}
+
+func TestManagerKeepsRegisteredCollectorGroupWhenAgentDescriptionOmitsGroup(t *testing.T) {
+	manager := NewManager()
+	manager.RegisterInstanceGroup("collector-a", "group-001")
+	var got AgentState
+	manager.SetStateSink(func(_ context.Context, state AgentState) {
+		got = state
+	})
+
+	manager.HandleMessage(context.Background(), &protobufs.AgentToServer{
+		InstanceUid: []byte("collector-a"),
+		AgentDescription: &protobufs.AgentDescription{
+			IdentifyingAttributes: []*protobufs.KeyValue{
+				{Key: "service.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "otelcol-contrib"}}},
+			},
+			NonIdentifyingAttributes: []*protobufs.KeyValue{
+				{Key: "novaobs.cluster.id", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "test03"}}},
+				{Key: "k8s.node.name", Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: "node-01"}}},
+			},
+		},
+	})
+
+	require.Equal(t, "group-001", got.CollectorGroupID)
+	require.Equal(t, "k8s:test03:group-001:node-01", got.RuntimeIdentity)
+}
+
 func TestManagerReportsEffectiveConfigHashToSink(t *testing.T) {
 	manager := NewManager()
 	var got AgentState

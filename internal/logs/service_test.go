@@ -1150,6 +1150,13 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.NotContains(t, yaml, `- "/data/docker/containers`)
 	require.Contains(t, yaml, "otlp_http/endpoint_")
 	require.Contains(t, yaml, "file_storage/filelog_offsets")
+	require.Contains(t, yaml, "opamp:")
+	require.Contains(t, yaml, "endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}")
+	require.Contains(t, yaml, "health_check:")
+	require.Contains(t, yaml, "endpoint: 0.0.0.0:13133")
+	require.Contains(t, yaml, "service:")
+	require.Contains(t, yaml, "metrics:")
+	require.Contains(t, yaml, "port: 8888")
 	require.Contains(t, yaml, "poll_interval: 10s")
 	require.Contains(t, yaml, "max_concurrent_files: 64")
 	require.Contains(t, yaml, "max_batches: 2")
@@ -1159,6 +1166,16 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, "memory_limiter")
 	require.Contains(t, yaml, "storage: file_storage/filelog_offsets")
 	require.Contains(t, yaml, "processors: [memory_limiter, k8s_attributes, resource/logplatform-utrace-api, batch]")
+	require.Contains(t, yaml, "service:")
+	require.Contains(t, yaml, "name: metrics")
+	require.Contains(t, yaml, "containerPort: 8888")
+	require.Contains(t, yaml, "name: health")
+	require.Contains(t, yaml, "containerPort: 13133")
+	require.Contains(t, yaml, "readinessProbe:")
+	require.Contains(t, yaml, "livenessProbe:")
+	require.Contains(t, yaml, "NOVAOBS_CLUSTER_ID")
+	require.Contains(t, yaml, "NOVAOBS_COLLECTOR_GROUP_ID")
+	require.Contains(t, yaml, "NOVAOBS_OPAMP_ENDPOINT")
 	require.Contains(t, yaml, `novaobs.io/config-hash: "`)
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
 }
@@ -1283,6 +1300,7 @@ func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 		"ClusterRole",
 		"ClusterRoleBinding",
 		"ConfigMap",
+		"Service",
 		"DaemonSet",
 	}, renderedKinds(t, rendered))
 }

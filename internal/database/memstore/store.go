@@ -283,6 +283,14 @@ type ciStore struct{ s *Store }
 func (st *ciStore) Upsert(ctx context.Context, instanceUID string, groupID string, v interface{}) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
+	runtimeIdentity := extractStringField(v, "RuntimeIdentity")
+	if runtimeIdentity != "" {
+		for key, value := range st.s.cis {
+			if key != instanceUID && extractStringField(value, "RuntimeIdentity") == runtimeIdentity {
+				delete(st.s.cis, key)
+			}
+		}
+	}
 	st.s.cis[instanceUID] = v
 	return nil
 }
@@ -310,6 +318,16 @@ func (st *ciStore) FindByUID(ctx context.Context, instanceUID string, result int
 		return errNotFound
 	}
 	return copyValue(v, result)
+}
+func (st *ciStore) FindByRuntimeIdentity(ctx context.Context, runtimeIdentity string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	for _, value := range st.s.cis {
+		if extractStringField(value, "RuntimeIdentity") == runtimeIdentity {
+			return copyValue(value, result)
+		}
+	}
+	return errNotFound
 }
 func (st *ciStore) Update(ctx context.Context, instanceUID string, v interface{}) error {
 	st.s.mu.Lock()

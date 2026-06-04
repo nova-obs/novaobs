@@ -36,6 +36,9 @@ type renderedRouteConfig struct {
 type k8sDaemonSetBundleTemplateData struct {
 	AgentNamespace       string
 	AgentName            string
+	ClusterID            string
+	CollectorGroupID     string
+	OpAMPEndpoint        string
 	CollectorConfigBlock string
 	ConfigHash           string
 	RuntimeLogMounts     []k8sRuntimeLogMount
@@ -88,6 +91,9 @@ func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
 	data := k8sDaemonSetBundleTemplateData{
 		AgentNamespace:       agentNamespace,
 		AgentName:            agentName,
+		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
+		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
+		OpAMPEndpoint:        defaultOpAMPEndpoint(agentNamespace),
 		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
 		ConfigHash:           yamlQuote("<collector-config-hash>"),
 		RuntimeLogMounts:     []k8sRuntimeLogMount{},
@@ -120,6 +126,9 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 	data := k8sDaemonSetBundleTemplateData{
 		AgentNamespace:       agentNamespace,
 		AgentName:            agentName,
+		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
+		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
+		OpAMPEndpoint:        defaultOpAMPEndpoint(agentNamespace),
 		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
 		ConfigHash:           yamlQuote(configHash),
 		RuntimeLogMounts:     []k8sRuntimeLogMount{},
@@ -132,11 +141,34 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 }
 
 func renderK8sCollectorConfig(inputs []renderInput) string {
+	if len(inputs) == 0 {
+		return ""
+	}
+	first := inputs[0]
+	agentNamespace := firstNonEmpty(first.Source.AgentNamespace, "novaobs-system")
 	suffixes := routeComponentSuffixes(inputs)
 	return fmt.Sprintf(`extensions:
   file_storage/filelog_offsets:
     directory: /var/lib/otelcol/filelog_offsets
     create_directory: true
+  health_check:
+    endpoint: 0.0.0.0:13133
+  opamp:
+    server:
+      ws:
+        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
+    instance_uid: ${env:KUBE_POD_UID}
+    agent_description:
+      include_resource_attributes: true
+      non_identifying_attributes:
+        novaobs.cluster.id: ${env:NOVAOBS_CLUSTER_ID}
+        novaobs.collector.group_id: ${env:NOVAOBS_COLLECTOR_GROUP_ID}
+        novaobs.agent.namespace: ${env:NOVAOBS_AGENT_NAMESPACE}
+        k8s.namespace.name: ${env:NOVAOBS_AGENT_NAMESPACE}
+        k8s.pod.uid: ${env:KUBE_POD_UID}
+        k8s.pod.name: ${env:KUBE_POD_NAME}
+        k8s.node.name: ${env:KUBE_NODE_NAME}
+        k8s.pod.ip: ${env:KUBE_POD_IP}
 receivers:
 %s
 processors:
@@ -164,14 +196,33 @@ processors:
 exporters:
 %s
 service:
-  extensions: [file_storage/filelog_offsets]
+  extensions: [file_storage/filelog_offsets, health_check, opamp]
+  telemetry:
+    resource:
+      service.name: novaobs-logs-agent
+      novaobs.cluster.id: ${env:NOVAOBS_CLUSTER_ID}
+      novaobs.collector.group_id: ${env:NOVAOBS_COLLECTOR_GROUP_ID}
+      novaobs.agent.namespace: %s
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
   pipelines:
 %s`,
 		renderK8sReceivers(inputs, suffixes),
 		renderK8sRouteProcessors(inputs, suffixes),
 		renderK8sExporters(inputs),
+		yamlQuote(agentNamespace),
 		renderK8sPipelines(inputs, suffixes),
 	)
+}
+
+func defaultOpAMPEndpoint(agentNamespace string) string {
+	return "ws://novaobs-control-plane." + firstNonEmpty(agentNamespace, "novaobs-system") + ".svc.cluster.local:8080/v1/opamp"
 }
 
 func renderK8sReceivers(inputs []renderInput, suffixes map[string]string) string {
@@ -225,9 +276,18 @@ func renderK8sRouteProcessors(inputs []renderInput, suffixes map[string]string) 
       - key: novaobs.route.id
         value: %s
         action: upsert
+      - key: novaobs.cluster.id
+        value: %s
+        action: upsert
+      - key: novaobs.collector.group_id
+        value: %s
+        action: upsert
+      - key: novaobs.agent.namespace
+        value: %s
+        action: upsert
       - key: novaobs.source.type
         value: %s
-        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment), yamlQuote(input.Route.ID), yamlQuote(input.Source.SourceType)))
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment), yamlQuote(input.Route.ID), yamlQuote(input.Source.ClusterID), yamlQuote(input.Route.AgentGroupID), yamlQuote(firstNonEmpty(input.Source.AgentNamespace, "novaobs-system")), yamlQuote(input.Source.SourceType)))
 		if hasEnabledParseRules(input.Source.ParseRules) {
 			lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
 		}

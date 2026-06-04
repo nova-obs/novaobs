@@ -3,6 +3,7 @@ package mongo
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -92,15 +93,22 @@ func (s *cgStore) Count(ctx context.Context) (int64, error) {
 type ciStore struct{ col *mongo.Collection }
 
 func (s *ciStore) Upsert(ctx context.Context, instanceUID string, groupID string, instance interface{}) error {
-	filter := bson.M{"instance_uid": instanceUID}
-	opts := options.Update().SetUpsert(true)
 	setDoc, err := toBSONMap(instance)
 	if err != nil {
 		return err
 	}
+	filter := bson.M{"instance_uid": instanceUID}
+	if runtimeIdentity, _ := setDoc["runtime_identity"].(string); strings.TrimSpace(runtimeIdentity) != "" {
+		filter = bson.M{"$or": []bson.M{
+			{"runtime_identity": runtimeIdentity},
+			{"instance_uid": instanceUID},
+		}}
+	}
+	opts := options.Update().SetUpsert(true)
 	insertID := normalizeDocumentID(setDoc, instanceUID)
 	delete(setDoc, "_id")
 	setDoc["instance_uid"] = instanceUID
+	setDoc["opamp_instance_uid"] = instanceUID
 	setDoc["collector_group_id"] = groupID
 	_, err = s.col.UpdateOne(ctx, filter, bson.M{
 		"$set":         setDoc,
@@ -136,6 +144,15 @@ func (s *ciStore) FindByUID(ctx context.Context, instanceUID string, result inte
 		return err
 	}
 	normalizeDocumentID(doc, instanceUID)
+	return decodeBSONDocument(doc, result)
+}
+func (s *ciStore) FindByRuntimeIdentity(ctx context.Context, runtimeIdentity string, result interface{}) error {
+	var doc bson.M
+	if err := s.col.FindOne(ctx, bson.M{"runtime_identity": runtimeIdentity}).Decode(&doc); err != nil {
+		return err
+	}
+	fallback, _ := doc["instance_uid"].(string)
+	normalizeDocumentID(doc, fallback)
 	return decodeBSONDocument(doc, result)
 }
 func (s *ciStore) Update(ctx context.Context, instanceUID string, instance interface{}) error {

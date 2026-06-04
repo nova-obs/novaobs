@@ -167,9 +167,16 @@ func (s Service) UpsertInstance(ctx context.Context, instanceUID string, groupID
 	if status.LastSeenAt.IsZero() {
 		status.LastSeenAt = time.Now().UTC()
 	}
+	status.RuntimeIdentity = strings.TrimSpace(status.RuntimeIdentity)
 
 	instance := CollectorInstance{}
 	existingErr := s.instanceStore.FindByUID(ctx, instanceUID, &instance)
+	if status.RuntimeIdentity != "" {
+		runtimeErr := s.instanceStore.FindByRuntimeIdentity(ctx, status.RuntimeIdentity, &instance)
+		if runtimeErr == nil {
+			existingErr = nil
+		}
+	}
 	if existingErr != nil {
 		instance = CollectorInstance{
 			ID:        primitive.NewObjectID().Hex(),
@@ -177,10 +184,22 @@ func (s Service) UpsertInstance(ctx context.Context, instanceUID string, groupID
 		}
 	}
 	instance.InstanceUID = instanceUID
+	instance.OpAMPInstanceUID = firstNonEmpty(strings.TrimSpace(status.OpAMPInstanceUID), instanceUID)
+	instance.RuntimeIdentity = status.RuntimeIdentity
 	instance.CollectorGroupID = groupID
 	if strings.TrimSpace(status.ServiceID) != "" {
 		instance.ServiceID = strings.TrimSpace(status.ServiceID)
 	}
+	instance.ClusterID = strings.TrimSpace(status.ClusterID)
+	instance.Namespace = strings.TrimSpace(status.Namespace)
+	instance.AgentNamespace = strings.TrimSpace(status.AgentNamespace)
+	instance.Hostname = strings.TrimSpace(status.Hostname)
+	instance.PodUID = strings.TrimSpace(status.PodUID)
+	instance.PodName = strings.TrimSpace(status.PodName)
+	instance.NodeName = strings.TrimSpace(status.NodeName)
+	instance.IP = strings.TrimSpace(status.IP)
+	instance.PodIP = strings.TrimSpace(status.PodIP)
+	instance.Version = strings.TrimSpace(status.Version)
 	instance.Online = status.Online
 	if status.HealthSet || existingErr != nil {
 		instance.Healthy = status.Healthy

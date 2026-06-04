@@ -38,12 +38,19 @@ type CollectorGroup struct {
 type CollectorInstance struct {
 	ID                  string    `json:"id" bson:"_id"`
 	InstanceUID         string    `json:"instance_uid" bson:"instance_uid"`
+	OpAMPInstanceUID    string    `json:"opamp_instance_uid" bson:"opamp_instance_uid"`
+	RuntimeIdentity     string    `json:"runtime_identity" bson:"runtime_identity"`
 	CollectorGroupID    string    `json:"collector_group_id,omitempty" bson:"collector_group_id"`
 	ServiceID           string    `json:"service_id" bson:"service_id"`
+	ClusterID           string    `json:"cluster_id" bson:"cluster_id"`
+	Namespace           string    `json:"namespace" bson:"namespace"`
+	AgentNamespace      string    `json:"agent_namespace" bson:"agent_namespace"`
 	Hostname            string    `json:"hostname" bson:"hostname"`
+	PodUID              string    `json:"pod_uid" bson:"pod_uid"`
 	PodName             string    `json:"pod_name" bson:"pod_name"`
 	NodeName            string    `json:"node_name" bson:"node_name"`
 	IP                  string    `json:"ip" bson:"ip"`
+	PodIP               string    `json:"pod_ip" bson:"pod_ip"`
 	Version             string    `json:"version" bson:"version"`
 	Online              bool      `json:"online" bson:"online"`
 	Healthy             bool      `json:"healthy" bson:"healthy"`
@@ -75,6 +82,18 @@ type CollectorConfigVersion struct {
 
 type InstanceStatus struct {
 	ServiceID           string
+	OpAMPInstanceUID    string
+	RuntimeIdentity     string
+	ClusterID           string
+	Namespace           string
+	AgentNamespace      string
+	Hostname            string
+	PodUID              string
+	PodName             string
+	NodeName            string
+	IP                  string
+	PodIP               string
+	Version             string
 	Online              bool
 	Healthy             bool
 	HealthSet           bool
