@@ -14,38 +14,40 @@ import (
 const dbName = "observability_platform"
 
 type Store struct {
-	client *mongo.Client
-	db     *mongo.Database
-	svcCol *mongo.Collection
-	stgCol *mongo.Collection
-	cgCol  *mongo.Collection
-	ciCol  *mongo.Collection
-	ccvCol *mongo.Collection
-	cptCol *mongo.Collection
-	cgoCol *mongo.Collection
-	sepCol *mongo.Collection
-	sprCol *mongo.Collection
-	sppCol *mongo.Collection
-	iiCol  *mongo.Collection
-	onbCol *mongo.Collection
-	lgeCol *mongo.Collection
-	lgsCol *mongo.Collection
-	lgrCol *mongo.Collection
-	lgpCol *mongo.Collection
-	arCol  *mongo.Collection
-	rrCol  *mongo.Collection
-	rbCol  *mongo.Collection
-	psCol  *mongo.Collection
-	iuCol  *mongo.Collection
-	igCol  *mongo.Collection
-	imCol  *mongo.Collection
-	isaCol *mongo.Collection
-	secCol *mongo.Collection
-	aeCol  *mongo.Collection
-	kclCol *mongo.Collection
-	knsCol *mongo.Collection
-	kdiCol *mongo.Collection
-	kdhCol *mongo.Collection
+	client  *mongo.Client
+	db      *mongo.Database
+	svcCol  *mongo.Collection
+	stgCol  *mongo.Collection
+	cgCol   *mongo.Collection
+	ciCol   *mongo.Collection
+	ccvCol  *mongo.Collection
+	cptCol  *mongo.Collection
+	cgoCol  *mongo.Collection
+	sepCol  *mongo.Collection
+	sprCol  *mongo.Collection
+	sppCol  *mongo.Collection
+	iiCol   *mongo.Collection
+	onbCol  *mongo.Collection
+	lgeCol  *mongo.Collection
+	lgsCol  *mongo.Collection
+	lgrCol  *mongo.Collection
+	lgcvCol *mongo.Collection
+	lgdvCol *mongo.Collection
+	lgpCol  *mongo.Collection
+	arCol   *mongo.Collection
+	rrCol   *mongo.Collection
+	rbCol   *mongo.Collection
+	psCol   *mongo.Collection
+	iuCol   *mongo.Collection
+	igCol   *mongo.Collection
+	imCol   *mongo.Collection
+	isaCol  *mongo.Collection
+	secCol  *mongo.Collection
+	aeCol   *mongo.Collection
+	kclCol  *mongo.Collection
+	knsCol  *mongo.Collection
+	kdiCol  *mongo.Collection
+	kdhCol  *mongo.Collection
 }
 
 func NewStore(ctx context.Context, uri string) (*Store, error) {
@@ -60,38 +62,40 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 	}
 	db := client.Database(dbName)
 	return &Store{
-		client: client,
-		db:     db,
-		svcCol: db.Collection("services"),
-		stgCol: db.Collection("service_targets"),
-		cgCol:  db.Collection("collector_groups"),
-		ciCol:  db.Collection("collector_instances"),
-		ccvCol: db.Collection("collector_config_versions"),
-		cptCol: db.Collection("collector_platform_templates"),
-		cgoCol: db.Collection("collector_group_overrides"),
-		sepCol: db.Collection("service_enrichment_patches"),
-		sprCol: db.Collection("service_parser_rules"),
-		sppCol: db.Collection("service_pipeline_patches"),
-		iiCol:  db.Collection("ingestion_identities"),
-		onbCol: db.Collection("service_onboardings"),
-		lgeCol: db.Collection("log_endpoints"),
-		lgsCol: db.Collection("log_sources"),
-		lgrCol: db.Collection("log_routes"),
-		lgpCol: db.Collection("log_agent_plans"),
-		arCol:  db.Collection("alert_rules"),
-		rrCol:  db.Collection("rbac_roles"),
-		rbCol:  db.Collection("rbac_bindings"),
-		psCol:  db.Collection("platform_subjects"),
-		iuCol:  db.Collection("iam_users"),
-		igCol:  db.Collection("iam_groups"),
-		imCol:  db.Collection("iam_memberships"),
-		isaCol: db.Collection("iam_service_accounts"),
-		secCol: db.Collection("secrets"),
-		aeCol:  db.Collection("audit_events"),
-		kclCol: db.Collection("k8s_clusters"),
-		knsCol: db.Collection("k8s_namespaces"),
-		kdiCol: db.Collection("k8s_deployment_inventory"),
-		kdhCol: db.Collection("k8s_deployment_history"),
+		client:  client,
+		db:      db,
+		svcCol:  db.Collection("services"),
+		stgCol:  db.Collection("service_targets"),
+		cgCol:   db.Collection("collector_groups"),
+		ciCol:   db.Collection("collector_instances"),
+		ccvCol:  db.Collection("collector_config_versions"),
+		cptCol:  db.Collection("collector_platform_templates"),
+		cgoCol:  db.Collection("collector_group_overrides"),
+		sepCol:  db.Collection("service_enrichment_patches"),
+		sprCol:  db.Collection("service_parser_rules"),
+		sppCol:  db.Collection("service_pipeline_patches"),
+		iiCol:   db.Collection("ingestion_identities"),
+		onbCol:  db.Collection("service_onboardings"),
+		lgeCol:  db.Collection("log_endpoints"),
+		lgsCol:  db.Collection("log_sources"),
+		lgrCol:  db.Collection("log_routes"),
+		lgcvCol: db.Collection("log_collector_config_versions"),
+		lgdvCol: db.Collection("log_deployment_manifest_versions"),
+		lgpCol:  db.Collection("log_agent_plans"),
+		arCol:   db.Collection("alert_rules"),
+		rrCol:   db.Collection("rbac_roles"),
+		rbCol:   db.Collection("rbac_bindings"),
+		psCol:   db.Collection("platform_subjects"),
+		iuCol:   db.Collection("iam_users"),
+		igCol:   db.Collection("iam_groups"),
+		imCol:   db.Collection("iam_memberships"),
+		isaCol:  db.Collection("iam_service_accounts"),
+		secCol:  db.Collection("secrets"),
+		aeCol:   db.Collection("audit_events"),
+		kclCol:  db.Collection("k8s_clusters"),
+		knsCol:  db.Collection("k8s_namespaces"),
+		kdiCol:  db.Collection("k8s_deployment_inventory"),
+		kdhCol:  db.Collection("k8s_deployment_history"),
 	}, nil
 }
 
@@ -128,10 +132,16 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s.lgeCol} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s.lgsCol} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s.lgrCol} }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore            { return &logAgentPlanStore{s.lgpCol} }
-func (s *Store) AlertRules() database.AlertRuleStore                  { return &arStore{s.arCol} }
-func (s *Store) RBACRoles() database.RBACRoleStore                    { return &rbacRoleStore{s.rrCol} }
-func (s *Store) RBACBindings() database.RBACBindingStore              { return &rbacBindingStore{s.rbCol} }
+func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
+	return &logCollectorConfigVersionStore{s.lgcvCol}
+}
+func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
+	return &logDeploymentManifestVersionStore{s.lgdvCol}
+}
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s.lgpCol} }
+func (s *Store) AlertRules() database.AlertRuleStore       { return &arStore{s.arCol} }
+func (s *Store) RBACRoles() database.RBACRoleStore         { return &rbacRoleStore{s.rrCol} }
+func (s *Store) RBACBindings() database.RBACBindingStore   { return &rbacBindingStore{s.rbCol} }
 func (s *Store) PlatformSubjects() database.PlatformSubjectStore {
 	return &platformSubjectStore{s.psCol}
 }

@@ -24,11 +24,26 @@ type renderInput struct {
 	Route       LogRoute
 }
 
+type renderedRouteConfig struct {
+	ManifestYAML           string
+	CollectorYAML          string
+	CollectorConfigHash    string
+	DeploymentManifestYAML string
+	DeploymentManifestHash string
+	RouteIDs               []string
+}
+
 type k8sDaemonSetBundleTemplateData struct {
 	AgentNamespace       string
 	AgentName            string
 	CollectorConfigBlock string
 	ConfigHash           string
+	RuntimeLogMounts     []k8sRuntimeLogMount
+}
+
+type k8sRuntimeLogMount struct {
+	Name string
+	Path string
 }
 
 func renderAgentConfig(input renderInput) (string, string) {
@@ -38,10 +53,59 @@ func renderAgentConfig(input renderInput) (string, string) {
 	return renderK8sDaemonSetBundle([]renderInput{input})
 }
 
+func renderK8sCollectorYAML(inputs []renderInput) (string, string) {
+	yaml := renderK8sCollectorConfig(inputs)
+	return yaml, hashYAML(yaml)
+}
+
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
-	yaml := renderK8sDaemonSetBundleYAML(inputs, "")
-	hash := hashYAML(yaml)
-	return renderK8sDaemonSetBundleYAML(inputs, hash), hash
+	rendered := renderK8sDaemonSetBundleWithHashes(inputs)
+	return rendered.ManifestYAML, rendered.CollectorConfigHash
+}
+
+func renderK8sDaemonSetBundleWithHashes(inputs []renderInput) renderedRouteConfig {
+	collectorYAML, collectorHash := renderK8sCollectorYAML(inputs)
+	deploymentManifest := renderK8sDeploymentManifestYAML(inputs)
+	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorHash)
+	return renderedRouteConfig{
+		ManifestYAML:           yaml,
+		CollectorYAML:          collectorYAML,
+		CollectorConfigHash:    collectorHash,
+		DeploymentManifestYAML: deploymentManifest,
+		DeploymentManifestHash: hashYAML(deploymentManifest),
+		RouteIDs:               renderRouteIDs(inputs),
+	}
+}
+
+func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
+	if len(inputs) == 0 {
+		return ""
+	}
+	first := inputs[0]
+	source := first.Source
+	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
+	agentName := "novaobs-logs-agent"
+	data := k8sDaemonSetBundleTemplateData{
+		AgentNamespace:       agentNamespace,
+		AgentName:            agentName,
+		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
+		ConfigHash:           yamlQuote("<collector-config-hash>"),
+		RuntimeLogMounts:     []k8sRuntimeLogMount{},
+	}
+	var buffer bytes.Buffer
+	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
+		panic(fmt.Sprintf("render k8s deployment manifest template: %v", err))
+	}
+	return buffer.String()
+}
+
+func renderRouteIDs(inputs []renderInput) []string {
+	ids := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		ids = append(ids, input.Route.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) string {
@@ -58,6 +122,7 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 		AgentName:            agentName,
 		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
 		ConfigHash:           yamlQuote(configHash),
+		RuntimeLogMounts:     []k8sRuntimeLogMount{},
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -67,35 +132,19 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 }
 
 func renderK8sCollectorConfig(inputs []renderInput) string {
-	for _, input := range inputs {
-		if strings.TrimSpace(input.Source.CollectorYAML) != "" {
-			return strings.TrimSpace(input.Source.CollectorYAML)
-		}
-	}
-	source := inputs[0].Source
-	exporterName, exporterYAML := renderDownstreamExporter(inputs[0].Endpoint)
+	suffixes := routeComponentSuffixes(inputs)
 	return fmt.Sprintf(`extensions:
   file_storage/filelog_offsets:
     directory: /var/lib/otelcol/filelog_offsets
     create_directory: true
 receivers:
-  file_log/k8s:
-    include:
 %s
-    poll_interval: 5s
-    include_file_path: true
-    include_file_name: false
-    start_at: end
-    storage: file_storage/filelog_offsets
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 30s
-      max_elapsed_time: 0
-    operators:
-      - type: container
 processors:
-  k8sattributes:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  k8s_attributes:
     auth_type: serviceAccount
     passthrough: false
     filter:
@@ -110,39 +159,185 @@ processors:
         - k8s.daemonset.name
         - k8s.cronjob.name
         - k8s.job.name
-  filter/workload:
-    logs:
-      include:
-        match_type: expr
-        expressions:
 %s
-  transform/novaobs_routes:
-    log_statements:
-      - context: log
-        statements:
-%s
-  resource/novaobs:
-    attributes:
-      - key: novaobs.source.type
-        value: %s
-        action: upsert
   batch:
 exporters:
 %s
 service:
   extensions: [file_storage/filelog_offsets]
   pipelines:
-    logs:
-      receivers: [file_log/k8s]
-      processors: [k8sattributes, filter/workload, transform/novaobs_routes, resource/novaobs, batch]
-      exporters: [%s]`,
-		renderK8sIncludes(inputs),
-		renderFilterExpressions(inputs),
-		renderTransformStatements(inputs),
-		yamlQuote(source.SourceType),
-		exporterYAML,
-		exporterName,
+%s`,
+		renderK8sReceivers(inputs, suffixes),
+		renderK8sRouteProcessors(inputs, suffixes),
+		renderK8sExporters(inputs),
+		renderK8sPipelines(inputs, suffixes),
 	)
+}
+
+func renderK8sReceivers(inputs []renderInput, suffixes map[string]string) string {
+	lines := []string{}
+	for _, input := range inputs {
+		lines = append(lines, renderK8sReceiver(input, suffixForInput(input, suffixes)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderK8sReceiver(input renderInput, suffix string) string {
+	include := k8sStdoutInclude(input.Source)
+	return fmt.Sprintf(`  file_log/%s:
+    include:
+      - %s
+    exclude:
+      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+      - "/var/log/pods/*/*/*.gz"
+      - "/var/log/pods/*/*/*.tmp"
+      - "/var/log/pods/*/*/*.log.*"
+    poll_interval: 10s
+    max_concurrent_files: 64
+    max_batches: 2
+    max_log_size: 1MiB
+    file_cache_advise: true
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    storage: file_storage/filelog_offsets
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 0
+    operators:
+      - type: container`, suffix, yamlQuote(include))
+}
+
+func renderK8sRouteProcessors(inputs []renderInput, suffixes map[string]string) string {
+	lines := []string{}
+	for _, input := range inputs {
+		suffix := suffixForInput(input, suffixes)
+		lines = append(lines, fmt.Sprintf(`  resource/%s:
+    attributes:
+      - key: service.name
+        value: %s
+        action: upsert
+      - key: deployment.environment
+        value: %s
+        action: upsert
+      - key: novaobs.route.id
+        value: %s
+        action: upsert
+      - key: novaobs.source.type
+        value: %s
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment), yamlQuote(input.Route.ID), yamlQuote(input.Source.SourceType)))
+		if hasEnabledParseRules(input.Source.ParseRules) {
+			lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func hasEnabledParseRules(rules []LogParseRule) bool {
+	for _, rule := range rules {
+		if rule.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func renderK8sParseProcessor(suffix string, rules []LogParseRule) string {
+	lines := []string{
+		"  transform/" + suffix + ":",
+		"    log_statements:",
+		"      - context: log",
+		"        statements:",
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		switch rule.RuleType {
+		case ParseRuleRegex:
+			lines = append(lines, fmt.Sprintf("          # parse rule: %s", rule.Name))
+			lines = append(lines, "          - "+yamlQuote(fmt.Sprintf(`merge_maps(attributes, ExtractPatterns(body, %q), "upsert")`, rule.Pattern)))
+		case ParseRuleJSON:
+			lines = append(lines, fmt.Sprintf("          # parse rule: %s", rule.Name))
+			lines = append(lines, "          - "+yamlQuote(`merge_maps(attributes, ParseJSON(body), "upsert")`))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderK8sExporters(inputs []renderInput) string {
+	seen := map[string]bool{}
+	lines := []string{}
+	for _, input := range inputs {
+		name := downstreamExporterName(input.Endpoint)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		lines = append(lines, renderDownstreamExporterYAML(input.Endpoint, name))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+func renderK8sPipelines(inputs []renderInput, suffixes map[string]string) string {
+	lines := []string{}
+	for _, input := range inputs {
+		suffix := suffixForInput(input, suffixes)
+		processors := []string{"memory_limiter", "k8s_attributes", "resource/" + suffix}
+		if hasEnabledParseRules(input.Source.ParseRules) {
+			processors = append(processors, "transform/"+suffix)
+		}
+		processors = append(processors, "batch")
+		lines = append(lines, fmt.Sprintf(`    logs/%s:
+      receivers: [file_log/%s]
+      processors: [%s]
+      exporters: [%s]`, suffix, suffix, strings.Join(processors, ", "), downstreamExporterName(input.Endpoint)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func routeComponentSuffix(input renderInput) string {
+	return safeSegment(firstNonEmpty(input.Source.Namespace+"-"+input.Source.WorkloadName, input.ServiceName, input.Route.ID))
+}
+
+func routeComponentSuffixes(inputs []renderInput) map[string]string {
+	baseCounts := map[string]int{}
+	for _, input := range inputs {
+		baseCounts[routeComponentSuffix(input)]++
+	}
+	used := map[string]int{}
+	out := map[string]string{}
+	for _, input := range inputs {
+		base := routeComponentSuffix(input)
+		suffix := base
+		if baseCounts[base] > 1 {
+			suffix = base + "-" + shortComponentID(input.Route.ID)
+		}
+		used[suffix]++
+		if used[suffix] > 1 {
+			suffix = suffix + "-" + fmt.Sprintf("%d", used[suffix])
+		}
+		out[input.Route.ID] = suffix
+	}
+	return out
+}
+
+func suffixForInput(input renderInput, suffixes map[string]string) string {
+	if suffix := suffixes[input.Route.ID]; suffix != "" {
+		return suffix
+	}
+	return routeComponentSuffix(input)
+}
+
+func shortComponentID(value string) string {
+	value = safeSegment(value)
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
 }
 
 func renderK8sIncludes(inputs []renderInput) string {
@@ -150,9 +345,6 @@ func renderK8sIncludes(inputs []renderInput) string {
 	lines := []string{}
 	for _, input := range inputs {
 		include := k8sStdoutInclude(input.Source)
-		if input.Source.SourceType == SourceTypeK8sHostPath && strings.TrimSpace(input.Source.PathPattern) != "" {
-			include = input.Source.PathPattern
-		}
 		if seen[include] {
 			continue
 		}
@@ -221,8 +413,8 @@ func renderTransformStatements(inputs []renderInput) string {
 
 func renderVMFileConfig(input renderInput) (string, string) {
 	source := input.Source
-	if strings.TrimSpace(source.CollectorYAML) != "" {
-		yaml := strings.TrimSpace(source.CollectorYAML) + "\n"
+	if strings.TrimSpace(source.CustomCollectorYAML) != "" {
+		yaml := strings.TrimSpace(source.CustomCollectorYAML) + "\n"
 		return yaml, hashYAML(yaml)
 	}
 	exporterName, exporterYAML := renderDownstreamExporter(input.Endpoint)
@@ -279,21 +471,42 @@ service:
 }
 
 func renderDownstreamExporter(endpoint LogEndpoint) (string, string) {
+	name := downstreamExporterNameWithSuffix(endpoint, "logs_downstream")
+	return name, renderDownstreamExporterYAML(endpoint, name)
+}
+
+func downstreamExporterName(endpoint LogEndpoint) string {
+	return downstreamExporterNameWithSuffix(endpoint, "endpoint_"+safeSegment(firstNonEmpty(endpoint.Name, endpoint.ID, hashYAML(endpoint.WriteURL))))
+}
+
+func downstreamExporterNameWithSuffix(endpoint LogEndpoint, suffix string) string {
+	endpoint = normalizeEndpoint(endpoint)
+	switch endpoint.SinkType {
+	case EndpointSinkES:
+		return "elasticsearch/" + suffix
+	case EndpointSinkKafka:
+		return "kafka/" + suffix
+	default:
+		return "otlp_http/" + suffix
+	}
+}
+
+func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 	endpoint = normalizeEndpoint(endpoint)
 	switch endpoint.SinkType {
 	case EndpointSinkES:
 		lines := []string{
-			"  elasticsearch/logs_downstream:",
+			"  " + name + ":",
 			"    endpoints:",
 			"      - " + yamlQuote(endpoint.WriteURL),
 		}
 		if endpoint.StreamName != "" {
 			lines = append(lines, "    logs_index: "+yamlQuote(endpoint.StreamName))
 		}
-		return "elasticsearch/logs_downstream", strings.Join(lines, "\n")
+		return strings.Join(lines, "\n")
 	case EndpointSinkKafka:
 		lines := []string{
-			"  kafka/logs_downstream:",
+			"  " + name + ":",
 			"    brokers:",
 		}
 		for _, broker := range splitEndpointList(endpoint.WriteURL) {
@@ -301,10 +514,10 @@ func renderDownstreamExporter(endpoint LogEndpoint) (string, string) {
 		}
 		topic := firstNonEmpty(endpoint.StreamName, "novaobs-logs")
 		lines = append(lines, "    topic: "+yamlQuote(topic))
-		return "kafka/logs_downstream", strings.Join(lines, "\n")
+		return strings.Join(lines, "\n")
 	default:
-		return "otlp_http/logs_downstream", strings.Join([]string{
-			"  otlp_http/logs_downstream:",
+		return strings.Join([]string{
+			"  " + name + ":",
 			"    logs_endpoint: " + yamlQuote(endpoint.WriteURL),
 		}, "\n")
 	}

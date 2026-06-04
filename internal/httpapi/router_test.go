@@ -167,6 +167,8 @@ func newTestRouter(t *testing.T) testEnv {
 		store.LogEndpoints(),
 		store.LogSources(),
 		store.LogRoutes(),
+		store.LogCollectorConfigVersions(),
+		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
 		svcRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
@@ -558,6 +560,51 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	require.Equal(t, http.StatusOK, publishRecorder.Code)
 	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
 	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+}
+
+func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
+	env := newTestRouter(t)
+	route := createK8sLogRoute(t, env)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/logs/routes/"+route.Route.ID+"/collector-config", nil)
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), `"config_hash"`)
+	require.Contains(t, recorder.Body.String(), `"deployment_manifest_hash":"`+route.Source.DeploymentManifestHash+`"`)
+	require.Contains(t, recorder.Body.String(), `"collector_config_hash":"`+route.Route.CollectorConfigHash+`"`)
+	require.Contains(t, recorder.Body.String(), `"collector_yaml"`)
+	require.Contains(t, recorder.Body.String(), "receivers:")
+	require.Contains(t, recorder.Body.String(), "file_log/orders-orders-api")
+	require.NotContains(t, recorder.Body.String(), "kind: DaemonSet")
+	require.NotContains(t, recorder.Body.String(), "collector.yaml: |")
+}
+
+func TestRouterUpdatesLogsEndpoint(t *testing.T) {
+	env := newTestRouter(t)
+	endpointBody := `{"name":"vl-prod","sink_type":"vl","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	createRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(createRecorder, createRequest)
+	require.Equal(t, http.StatusCreated, createRecorder.Code)
+
+	var created struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
+
+	updateBody := `{"name":"vl-prod-fixed","sink_type":"vl","write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs-fixed:9428/select/logsql/query","vmui_url":"http://victorialogs-fixed:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPatch, "/api/v1/logs/endpoints/"+created.Data.ID, bytes.NewBufferString(updateBody))
+	updateRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(updateRecorder, updateRequest)
+
+	require.Equal(t, http.StatusOK, updateRecorder.Code)
+	require.Contains(t, updateRecorder.Body.String(), `"id":"`+created.Data.ID+`"`)
+	require.Contains(t, updateRecorder.Body.String(), `"name":"vl-prod-fixed"`)
+	require.Contains(t, updateRecorder.Body.String(), `"write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs"`)
 }
 
 func TestRouterSoftDeletesServiceWithoutBlockingDependencies(t *testing.T) {

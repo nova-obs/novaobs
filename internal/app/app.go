@@ -123,6 +123,8 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		store.LogEndpoints(),
 		store.LogSources(),
 		store.LogRoutes(),
+		store.LogCollectorConfigVersions(),
+		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
 		svcRepo,
 		targetRepo,

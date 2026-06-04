@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,22 +40,26 @@ type K8sDeploymentService interface {
 }
 
 type Service struct {
-	endpoints       database.LogEndpointStore
-	sources         database.LogSourceStore
-	routes          database.LogRouteStore
-	plans           database.LogAgentPlanStore
-	services        servicecatalog.Repository
-	targets         servicecatalog.TargetRepository
-	collectorGroups collectormanagement.Service
-	k8sClusters     K8sClusterService
-	k8sResources    K8sResourceService
-	k8sDeployments  K8sDeploymentService
+	endpoints        database.LogEndpointStore
+	sources          database.LogSourceStore
+	routes           database.LogRouteStore
+	configVersions   database.LogCollectorConfigVersionStore
+	manifestVersions database.LogDeploymentManifestVersionStore
+	plans            database.LogAgentPlanStore
+	services         servicecatalog.Repository
+	targets          servicecatalog.TargetRepository
+	collectorGroups  collectormanagement.Service
+	k8sClusters      K8sClusterService
+	k8sResources     K8sResourceService
+	k8sDeployments   K8sDeploymentService
 }
 
 func NewService(
 	endpoints database.LogEndpointStore,
 	sources database.LogSourceStore,
 	routes database.LogRouteStore,
+	configVersions database.LogCollectorConfigVersionStore,
+	manifestVersions database.LogDeploymentManifestVersionStore,
 	plans database.LogAgentPlanStore,
 	services servicecatalog.Repository,
 	targets servicecatalog.TargetRepository,
@@ -64,16 +69,18 @@ func NewService(
 	k8sDeployments K8sDeploymentService,
 ) Service {
 	return Service{
-		endpoints:       endpoints,
-		sources:         sources,
-		routes:          routes,
-		plans:           plans,
-		services:        services,
-		targets:         targets,
-		collectorGroups: collectorGroups,
-		k8sClusters:     k8sClusters,
-		k8sResources:    k8sResources,
-		k8sDeployments:  k8sDeployments,
+		endpoints:        endpoints,
+		sources:          sources,
+		routes:           routes,
+		configVersions:   configVersions,
+		manifestVersions: manifestVersions,
+		plans:            plans,
+		services:         services,
+		targets:          targets,
+		collectorGroups:  collectorGroups,
+		k8sClusters:      k8sClusters,
+		k8sResources:     k8sResources,
+		k8sDeployments:   k8sDeployments,
 	}
 }
 
@@ -129,9 +136,6 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 		if strings.EqualFold(item.Name, endpoint.Name) {
 			return LogEndpoint{}, apperr.Conflict("日志下游端点名称已存在")
 		}
-		if endpoint.ScopeType == EndpointScopeK8sCluster && item.ScopeType == EndpointScopeK8sCluster && item.ClusterID == endpoint.ClusterID {
-			return LogEndpoint{}, apperr.Conflict("该 K8s 集群已绑定日志下游端点")
-		}
 	}
 	if endpoint.ID == "" {
 		endpoint.ID = primitive.NewObjectID().Hex()
@@ -143,6 +147,49 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 		endpoint.Status = "active"
 	}
 	if err := s.endpoints.Insert(ctx, endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
+	return endpoint, nil
+}
+
+func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndpoint) (LogEndpoint, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return LogEndpoint{}, apperr.InvalidRequest("日志下游端点 ID 不能为空")
+	}
+	var existing LogEndpoint
+	if err := s.endpoints.FindByID(ctx, id, &existing); err != nil {
+		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
+	}
+	endpoint = normalizeEndpoint(endpoint)
+	endpoint.ID = id
+	if err := validateEndpoint(endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
+	if endpoint.ScopeType != EndpointScopeGlobal && endpoint.ScopeType != EndpointScopeK8sCluster && endpoint.ScopeType != EndpointScopeVM {
+		return LogEndpoint{}, apperr.InvalidRequest("日志下游端点 scope_type 只支持 global、k8s_cluster 或 vm")
+	}
+	if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == "" {
+		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级日志下游端点必须填写 cluster_id")
+	}
+	all, err := s.ListEndpoints(ctx)
+	if err != nil {
+		return LogEndpoint{}, err
+	}
+	for _, item := range all {
+		if item.ID == id {
+			continue
+		}
+		if strings.EqualFold(item.Name, endpoint.Name) {
+			return LogEndpoint{}, apperr.Conflict("日志下游端点名称已存在")
+		}
+	}
+	endpoint.CreatedAt = existing.CreatedAt
+	endpoint.UpdatedAt = time.Now().UTC()
+	if endpoint.Status == "" {
+		endpoint.Status = firstNonEmpty(existing.Status, "active")
+	}
+	if err := s.endpoints.Update(ctx, id, endpoint); err != nil {
 		return LogEndpoint{}, err
 	}
 	return endpoint, nil
@@ -174,7 +221,8 @@ func (s Service) ListRoutes(ctx context.Context) ([]LogRouteView, error) {
 	for _, route := range routes {
 		view := LogRouteView{Route: route}
 		if source, err := s.getSource(ctx, route.SourceID); err == nil {
-			view.Source = &source
+			effectiveSource := routeEffectiveSource(route, source)
+			view.Source = &effectiveSource
 		}
 		if endpoint, err := s.getEndpoint(ctx, route.EndpointID); err == nil {
 			view.Endpoint = &endpoint
@@ -342,28 +390,118 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 	if err != nil {
 		return LogRoutePreview{}, err
 	}
-	renderedYAML, configHash, err := s.renderRouteConfig(ctx, renderInput{
+	effectiveSource := routeEffectiveSource(route, source)
+	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
 		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
 		Environment: service.Environment,
-		Source:      source,
+		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
 	})
 	if err != nil {
 		return LogRoutePreview{}, err
 	}
-	warnings := previewWarnings(source, endpoint)
-	blocked, reason := s.publishBlock(ctx, source)
+	now := time.Now().UTC()
+	if err := s.persistRenderedArtifacts(ctx, effectiveSource, rendered, now); err != nil {
+		return LogRoutePreview{}, err
+	}
+	warnings := previewWarnings(effectiveSource, endpoint)
+	blocked, reason := s.publishBlock(ctx, effectiveSource)
 	return LogRoutePreview{
-		Source:               source,
-		Endpoint:             endpoint,
-		AgentYAML:            renderedYAML,
-		ConfigHash:           configHash,
-		Mode:                 previewMode(source),
-		PublishBlocked:       blocked,
-		PublishBlockedReason: reason,
-		Warnings:             warnings,
+		Source:                 effectiveSource,
+		Endpoint:               endpoint,
+		AgentYAML:              rendered.ManifestYAML,
+		CollectorConfigHash:    rendered.CollectorConfigHash,
+		DeploymentManifestHash: rendered.DeploymentManifestHash,
+		Mode:                   previewMode(source),
+		PublishBlocked:         blocked,
+		PublishBlockedReason:   reason,
+		Warnings:               warnings,
 	}, nil
+}
+
+func (s Service) RouteCollectorConfig(ctx context.Context, routeID string) (LogRouteCollectorConfig, error) {
+	route, source, _, _, err := s.routeParts(ctx, routeID)
+	if err != nil {
+		return LogRouteCollectorConfig{}, err
+	}
+	var config LogCollectorConfigVersion
+	if err := s.configVersions.FindByHash(ctx, route.CollectorConfigHash, &config); err != nil {
+		return LogRouteCollectorConfig{}, normalizeNotFound(err, "采集配置版本不存在")
+	}
+	var manifest LogDeploymentManifestVersion
+	if source.SourceType == SourceTypeK8sStdout && source.DeploymentManifestHash != "" {
+		if err := s.manifestVersions.FindByHash(ctx, source.DeploymentManifestHash, &manifest); err != nil {
+			return LogRouteCollectorConfig{}, normalizeNotFound(err, "部署清单版本不存在")
+		}
+	}
+	if config.CollectorConfigHash != route.CollectorConfigHash {
+		return LogRouteCollectorConfig{}, apperr.InvalidRequest("采集配置版本 hash 不匹配")
+	}
+	deploymentHash := source.DeploymentManifestHash
+	if manifest.DeploymentManifestHash != "" {
+		deploymentHash = manifest.DeploymentManifestHash
+	}
+	return LogRouteCollectorConfig{
+		RouteID:                route.ID,
+		CollectorConfigHash:    config.CollectorConfigHash,
+		DeploymentManifestHash: deploymentHash,
+		SourceType:             source.SourceType,
+		CollectorYAML:          config.CollectorYAML,
+	}, nil
+}
+
+func (s Service) persistRenderedArtifacts(ctx context.Context, source LogSource, rendered renderedRouteConfig, now time.Time) error {
+	if strings.TrimSpace(rendered.CollectorConfigHash) == "" || strings.TrimSpace(rendered.CollectorYAML) == "" {
+		return nil
+	}
+	configVersion := LogCollectorConfigVersion{
+		ID:                  rendered.CollectorConfigHash,
+		CollectorConfigHash: rendered.CollectorConfigHash,
+		SourceType:          source.SourceType,
+		ClusterID:           source.ClusterID,
+		AgentNamespace:      source.AgentNamespace,
+		CollectorYAML:       rendered.CollectorYAML,
+		RouteIDs:            copyStringSlice(rendered.RouteIDs),
+		CreatedAt:           now,
+	}
+	if err := s.configVersions.Upsert(ctx, rendered.CollectorConfigHash, configVersion); err != nil {
+		return err
+	}
+	if source.SourceType != SourceTypeK8sStdout || strings.TrimSpace(rendered.DeploymentManifestHash) == "" {
+		return nil
+	}
+	manifestVersion := LogDeploymentManifestVersion{
+		ID:                     rendered.DeploymentManifestHash,
+		DeploymentManifestHash: rendered.DeploymentManifestHash,
+		SourceType:             source.SourceType,
+		ClusterID:              source.ClusterID,
+		AgentNamespace:         source.AgentNamespace,
+		ManifestYAML:           rendered.DeploymentManifestYAML,
+		CreatedAt:              now,
+	}
+	return s.manifestVersions.Upsert(ctx, rendered.DeploymentManifestHash, manifestVersion)
+}
+
+func (s Service) latestPlanByPreview(ctx context.Context, routeID string, previewID string) (LogAgentPlan, error) {
+	var plans []LogAgentPlan
+	if err := s.plans.FindByRoute(ctx, routeID, &plans); err != nil {
+		return LogAgentPlan{}, err
+	}
+	for _, plan := range plans {
+		if plan.PreviewID == previewID {
+			return plan, nil
+		}
+	}
+	return LogAgentPlan{}, mongo.ErrNoDocuments
+}
+
+func (s Service) renderedFromPlan(plan LogAgentPlan) renderedRouteConfig {
+	return renderedRouteConfig{
+		ManifestYAML:           plan.RenderedYAML,
+		CollectorConfigHash:    plan.CollectorConfigHash,
+		DeploymentManifestHash: plan.DeploymentManifestHash,
+	}
 }
 
 func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRouteView, error) {
@@ -371,30 +509,42 @@ func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRo
 	if err != nil {
 		return LogRouteView{}, err
 	}
-	_, configHash, err := s.renderRouteConfig(ctx, renderInput{
+	effectiveSource := routeEffectiveSource(route, source)
+	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
 		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
 		Environment: service.Environment,
-		Source:      source,
+		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
 	})
 	if err != nil {
 		return LogRouteView{}, err
 	}
-	route.ConfigHash = configHash
+	applyRenderedRouteHashes(&route, rendered)
 	route.Status = "ready"
 	now := time.Now().UTC()
 	route.CreatedAt = now
 	route.UpdatedAt = now
 	source.CreatedAt = now
+	if existingSource, err := s.getSource(ctx, source.ID); err == nil && !existingSource.CreatedAt.IsZero() {
+		source.CreatedAt = existingSource.CreatedAt
+	}
+	applyRenderedSourceHashes(&source, rendered)
 	source.UpdatedAt = now
+	if err := s.persistRenderedArtifacts(ctx, source, rendered, now); err != nil {
+		return LogRouteView{}, err
+	}
 	if err := s.sources.Upsert(ctx, source.ID, source); err != nil {
 		return LogRouteView{}, err
 	}
 	if err := s.routes.Upsert(ctx, route.ID, route); err != nil {
 		return LogRouteView{}, err
 	}
-	return LogRouteView{Route: route, Source: &source, Endpoint: &endpoint}, nil
+	if err := s.markK8sBundlePending(ctx, source, rendered.CollectorConfigHash, route.ID, now); err != nil {
+		return LogRouteView{}, err
+	}
+	effectiveSource = routeEffectiveSource(route, source)
+	return LogRouteView{Route: route, Source: &effectiveSource, Endpoint: &endpoint}, nil
 }
 
 func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRouteRequest) (LogRouteView, error) {
@@ -412,26 +562,42 @@ func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRout
 		return LogRouteView{}, err
 	}
 	route.ID = existing.ID
-	route.SourceID = existing.SourceID
 	route.CreatedAt = existing.CreatedAt
-	source.ID = existing.SourceID
-	source.CreatedAt = existingSource.CreatedAt
-	_, configHash, err := s.renderRouteConfig(ctx, renderInput{
+	if source.SourceType == SourceTypeK8sStdout {
+		route.SourceID = source.ID
+	} else {
+		route.SourceID = existing.SourceID
+		source.ID = existing.SourceID
+	}
+	now := time.Now().UTC()
+	if source.SourceType == SourceTypeK8sStdout {
+		source.CreatedAt = now
+		if persistedSource, err := s.getSource(ctx, source.ID); err == nil && !persistedSource.CreatedAt.IsZero() {
+			source.CreatedAt = persistedSource.CreatedAt
+		}
+	} else {
+		source.CreatedAt = existingSource.CreatedAt
+	}
+	effectiveSource := routeEffectiveSource(route, source)
+	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
 		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
 		Environment: service.Environment,
-		Source:      source,
+		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
 	})
 	if err != nil {
 		return LogRouteView{}, err
 	}
-	now := time.Now().UTC()
-	route.ConfigHash = configHash
+	applyRenderedRouteHashes(&route, rendered)
 	route.Status = "ready"
 	route.UpdatedAt = now
+	applyRenderedSourceHashes(&source, rendered)
 	source.UpdatedAt = now
-	if existing.ConfigHash == configHash {
+	if err := s.persistRenderedArtifacts(ctx, source, rendered, now); err != nil {
+		return LogRouteView{}, err
+	}
+	if existing.CollectorConfigHash == rendered.CollectorConfigHash {
 		route.LastProbeStatus = existing.LastProbeStatus
 		route.LastProbeMessage = existing.LastProbeMessage
 		route.LastProbeAt = existing.LastProbeAt
@@ -450,7 +616,11 @@ func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRout
 	if err := s.routes.Update(ctx, route.ID, route); err != nil {
 		return LogRouteView{}, err
 	}
-	return LogRouteView{Route: route, Source: &source, Endpoint: &endpoint}, nil
+	if err := s.markK8sBundlePending(ctx, source, rendered.CollectorConfigHash, route.ID, now); err != nil {
+		return LogRouteView{}, err
+	}
+	effectiveSource = routeEffectiveSource(route, source)
+	return LogRouteView{Route: route, Source: &effectiveSource, Endpoint: &endpoint}, nil
 }
 
 func (s Service) ProbeRoute(ctx context.Context, routeID string) (ProbeResult, error) {
@@ -487,26 +657,44 @@ func (s Service) PublishRoute(ctx context.Context, subject platformrbac.Subject,
 	if err != nil {
 		return PublishRouteResult{}, err
 	}
-	yaml, configHash, err := s.renderRouteConfig(ctx, renderInput{
-		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
-		Environment: service.Environment,
-		Source:      source,
-		Endpoint:    endpoint,
-		Route:       route,
-	})
-	if err != nil {
-		return PublishRouteResult{}, err
-	}
 	if source.SourceType == SourceTypeVMFile {
-		return s.publishVM(ctx, route, source, yaml, configHash)
+		rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
+			ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+			Environment: service.Environment,
+			Source:      source,
+			Endpoint:    endpoint,
+			Route:       route,
+		})
+		if err != nil {
+			return PublishRouteResult{}, err
+		}
+		return s.publishVM(ctx, route, source, rendered)
 	}
 	if blocked, _ := s.publishBlock(ctx, source); blocked {
 		return PublishRouteResult{}, k8sopscluster.ErrClusterReadOnly
 	}
 	if strings.TrimSpace(req.PreviewID) == "" || strings.TrimSpace(req.ConfirmationToken) == "" {
-		return s.previewK8sPublish(ctx, subject, route, source, yaml, configHash)
+		rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
+			ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+			Environment: service.Environment,
+			Source:      source,
+			Endpoint:    endpoint,
+			Route:       route,
+		})
+		if err != nil {
+			return PublishRouteResult{}, err
+		}
+		return s.previewK8sPublish(ctx, subject, route, source, rendered)
 	}
-	return s.applyK8sPublish(ctx, subject, route, source, yaml, configHash, req)
+	plan, err := s.latestPlanByPreview(ctx, route.ID, strings.TrimSpace(req.PreviewID))
+	if err != nil {
+		return PublishRouteResult{}, normalizeNotFound(err, "发布预览不存在")
+	}
+	if route.CollectorConfigHash != plan.CollectorConfigHash {
+		return PublishRouteResult{}, apperr.InvalidRequest("预览对应的采集配置已失效，请重新生成发布预览")
+	}
+	rendered := s.renderedFromPlan(plan)
+	return s.applyK8sPublish(ctx, subject, route, source, rendered, req)
 }
 
 func (s Service) ServiceRouteSummary(ctx context.Context, serviceID string) ([]LogRouteView, error) {
@@ -523,23 +711,26 @@ func (s Service) ServiceRouteSummary(ctx context.Context, serviceID string) ([]L
 	return out, nil
 }
 
-func (s Service) publishVM(ctx context.Context, route LogRoute, source LogSource, yaml string, configHash string) (PublishRouteResult, error) {
+func (s Service) publishVM(ctx context.Context, route LogRoute, source LogSource, rendered renderedRouteConfig) (PublishRouteResult, error) {
 	now := time.Now().UTC()
+	if err := s.persistRenderedArtifacts(ctx, source, rendered, now); err != nil {
+		return PublishRouteResult{}, err
+	}
 	plan := LogAgentPlan{
-		ID:           primitive.NewObjectID().Hex(),
-		RouteID:      route.ID,
-		AgentGroupID: route.AgentGroupID,
-		SourceType:   source.SourceType,
-		ConfigHash:   configHash,
-		RenderedYAML: yaml,
-		Status:       "ready_for_agent_sync",
-		Message:      "VM Agent 配置已生成，等待 Agent 运维模块下发",
-		CreatedAt:    now,
+		ID:                  primitive.NewObjectID().Hex(),
+		RouteID:             route.ID,
+		AgentGroupID:        route.AgentGroupID,
+		SourceType:          source.SourceType,
+		CollectorConfigHash: rendered.CollectorConfigHash,
+		RenderedYAML:        rendered.ManifestYAML,
+		Status:              "ready_for_agent_sync",
+		Message:             "VM Agent 配置已生成，等待 Agent 运维模块下发",
+		CreatedAt:           now,
 	}
 	if err := s.plans.Insert(ctx, plan); err != nil {
 		return PublishRouteResult{}, err
 	}
-	route.ConfigHash = configHash
+	applyRenderedRouteHashes(&route, rendered)
 	route.LastPublishStatus = plan.Status
 	route.LastPublishMessage = plan.Message
 	route.LastPublishedAt = &now
@@ -550,45 +741,52 @@ func (s Service) publishVM(ctx context.Context, route LogRoute, source LogSource
 	return PublishRouteResult{Route: route, Plan: plan, Status: plan.Status, Message: plan.Message, Warnings: []string{}}, nil
 }
 
-func (s Service) previewK8sPublish(ctx context.Context, subject platformrbac.Subject, route LogRoute, source LogSource, yaml string, configHash string) (PublishRouteResult, error) {
+func (s Service) previewK8sPublish(ctx context.Context, subject platformrbac.Subject, route LogRoute, source LogSource, rendered renderedRouteConfig) (PublishRouteResult, error) {
 	if s.k8sDeployments == nil {
 		return PublishRouteResult{}, apperr.InvalidRequest("K8s 部署服务不可用")
 	}
+	now := time.Now().UTC()
+	if err := s.persistRenderedArtifacts(ctx, source, rendered, now); err != nil {
+		return PublishRouteResult{}, err
+	}
 	result, err := s.k8sDeployments.Preview(ctx, subject, k8sopsdeployment.OperationRequest{
 		ClusterID:      source.ClusterID,
-		YAMLContent:    yaml,
+		YAMLContent:    rendered.ManifestYAML,
 		ForceConflicts: true,
 	})
 	if err != nil {
 		return PublishRouteResult{}, err
 	}
-	now := time.Now().UTC()
 	plan := LogAgentPlan{
-		ID:                primitive.NewObjectID().Hex(),
-		RouteID:           route.ID,
-		AgentGroupID:      route.AgentGroupID,
-		SourceType:        source.SourceType,
-		ClusterID:         source.ClusterID,
-		Namespace:         source.AgentNamespace,
-		ConfigHash:        configHash,
-		RenderedYAML:      yaml,
-		Status:            "previewed",
-		PreviewID:         result.PreviewID,
-		ConfirmationToken: result.ConfirmationToken,
-		AuditID:           result.AuditID,
-		Message:           result.Message,
-		CreatedAt:         now,
+		ID:                     primitive.NewObjectID().Hex(),
+		RouteID:                route.ID,
+		AgentGroupID:           route.AgentGroupID,
+		SourceType:             source.SourceType,
+		ClusterID:              source.ClusterID,
+		Namespace:              source.AgentNamespace,
+		CollectorConfigHash:    rendered.CollectorConfigHash,
+		DeploymentManifestHash: rendered.DeploymentManifestHash,
+		RenderedYAML:           rendered.ManifestYAML,
+		Status:                 "previewed",
+		PreviewID:              result.PreviewID,
+		ConfirmationToken:      result.ConfirmationToken,
+		AuditID:                result.AuditID,
+		Message:                result.Message,
+		CreatedAt:              now,
 	}
 	if err := s.plans.Insert(ctx, plan); err != nil {
 		return PublishRouteResult{}, err
 	}
-	route.ConfigHash = configHash
+	applyRenderedRouteHashes(&route, rendered)
 	route.LastPublishStatus = "previewed"
 	route.LastPublishMessage = "K8s Agent DaemonSet 发布预览已生成，请确认后执行"
 	route.LastPreviewID = result.PreviewID
 	route.LastAuditID = result.AuditID
 	route.UpdatedAt = now
 	if err := s.routes.Update(ctx, route.ID, route); err != nil {
+		return PublishRouteResult{}, err
+	}
+	if err := s.syncK8sBundlePublishState(ctx, source, rendered.CollectorConfigHash, "previewed", route.LastPublishMessage, result.PreviewID, result.AuditID, nil, now); err != nil {
 		return PublishRouteResult{}, err
 	}
 	return PublishRouteResult{
@@ -606,10 +804,10 @@ func (s Service) previewK8sPublish(ctx context.Context, subject platformrbac.Sub
 	}, nil
 }
 
-func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subject, route LogRoute, source LogSource, yaml string, configHash string, req PublishRouteRequest) (PublishRouteResult, error) {
+func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subject, route LogRoute, source LogSource, rendered renderedRouteConfig, req PublishRouteRequest) (PublishRouteResult, error) {
 	result, err := s.k8sDeployments.Apply(ctx, subject, k8sopsdeployment.OperationRequest{
 		ClusterID:         source.ClusterID,
-		YAMLContent:       yaml,
+		YAMLContent:       rendered.ManifestYAML,
 		PreviewID:         req.PreviewID,
 		ConfirmationToken: req.ConfirmationToken,
 		ForceConflicts:    true,
@@ -619,30 +817,34 @@ func (s Service) applyK8sPublish(ctx context.Context, subject platformrbac.Subje
 	}
 	now := time.Now().UTC()
 	plan := LogAgentPlan{
-		ID:           primitive.NewObjectID().Hex(),
-		RouteID:      route.ID,
-		AgentGroupID: route.AgentGroupID,
-		SourceType:   source.SourceType,
-		ClusterID:    source.ClusterID,
-		Namespace:    source.AgentNamespace,
-		ConfigHash:   configHash,
-		RenderedYAML: yaml,
-		Status:       result.Status,
-		PreviewID:    req.PreviewID,
-		AuditID:      result.AuditID,
-		Message:      result.Message,
-		CreatedAt:    now,
+		ID:                     primitive.NewObjectID().Hex(),
+		RouteID:                route.ID,
+		AgentGroupID:           route.AgentGroupID,
+		SourceType:             source.SourceType,
+		ClusterID:              source.ClusterID,
+		Namespace:              source.AgentNamespace,
+		CollectorConfigHash:    rendered.CollectorConfigHash,
+		DeploymentManifestHash: rendered.DeploymentManifestHash,
+		RenderedYAML:           rendered.ManifestYAML,
+		Status:                 result.Status,
+		PreviewID:              req.PreviewID,
+		AuditID:                result.AuditID,
+		Message:                result.Message,
+		CreatedAt:              now,
 	}
 	if err := s.plans.Insert(ctx, plan); err != nil {
 		return PublishRouteResult{}, err
 	}
-	route.ConfigHash = configHash
+	applyRenderedRouteHashes(&route, rendered)
 	route.LastPublishStatus = result.Status
 	route.LastPublishMessage = result.Message
 	route.LastPublishedAt = &now
 	route.LastAuditID = result.AuditID
 	route.UpdatedAt = now
 	if err := s.routes.Update(ctx, route.ID, route); err != nil {
+		return PublishRouteResult{}, err
+	}
+	if err := s.syncK8sBundlePublishState(ctx, source, rendered.CollectorConfigHash, result.Status, result.Message, req.PreviewID, result.AuditID, &now, now); err != nil {
 		return PublishRouteResult{}, err
 	}
 	return PublishRouteResult{
@@ -691,6 +893,9 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 		EndpointID:   endpoint.ID,
 		Status:       "draft",
 	}
+	if source.SourceType == SourceTypeK8sStdout {
+		route.K8s = k8sRouteConfigFromRequest(req.K8s)
+	}
 	return route, source, endpoint, service, nil
 }
 
@@ -700,7 +905,7 @@ func validateServiceSourceMatch(service servicecatalog.Service, sourceType strin
 		if service.IdentityType != "host_process" {
 			return apperr.InvalidRequest("VM 日志接入只能选择 VM/物理机服务")
 		}
-	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
+	case SourceTypeK8sStdout:
 		if service.IdentityType != "" && service.IdentityType != "k8s_workload" {
 			return apperr.InvalidRequest("K8s 日志接入只能选择 K8s 服务")
 		}
@@ -823,7 +1028,7 @@ func (s Service) routeParts(ctx context.Context, routeID string) (LogRoute, LogS
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, normalizeNotFound(err, "服务不存在")
 	}
-	return route, source, endpoint, service, nil
+	return route, routeEffectiveSource(route, source), endpoint, service, nil
 }
 
 func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error) {
@@ -831,7 +1036,13 @@ func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error
 	if err := s.endpoints.FindByID(ctx, strings.TrimSpace(id), &endpoint); err != nil {
 		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
-	return normalizeEndpoint(endpoint), nil
+	endpoint = normalizeEndpoint(endpoint)
+	if endpoint.SinkType == EndpointSinkVL {
+		if err := validateVLWriteURL(endpoint.WriteURL); err != nil {
+			return LogEndpoint{}, err
+		}
+	}
+	return endpoint, nil
 }
 
 func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (LogEndpoint, error) {
@@ -853,14 +1064,6 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 			if endpoint.ClusterID != req.K8s.ClusterID {
 				return LogEndpoint{}, apperr.InvalidRequest("K8s 日志路由只能选择当前集群绑定的日志下游端点")
 			}
-		case EndpointScopeGlobal:
-			clusterEndpoint, ok, err := s.clusterEndpoint(ctx, req.K8s.ClusterID)
-			if err != nil {
-				return LogEndpoint{}, err
-			}
-			if ok && clusterEndpoint.ID != endpoint.ID {
-				return LogEndpoint{}, apperr.InvalidRequest("当前集群已有绑定的日志下游端点，请使用集群绑定端点")
-			}
 		}
 		return endpoint, nil
 	}
@@ -871,10 +1074,17 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 	if err != nil {
 		return LogEndpoint{}, err
 	}
+	clusterEndpoints := []LogEndpoint{}
 	for _, endpoint := range endpoints {
 		if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == req.K8s.ClusterID {
-			return endpoint, nil
+			clusterEndpoints = append(clusterEndpoints, endpoint)
 		}
+	}
+	if len(clusterEndpoints) == 1 {
+		return clusterEndpoints[0], nil
+	}
+	if len(clusterEndpoints) > 1 {
+		return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群存在多个日志下游端点，请显式选择端点")
 	}
 	for _, endpoint := range endpoints {
 		if endpoint.ScopeType == EndpointScopeGlobal {
@@ -882,19 +1092,6 @@ func (s Service) endpointForRoute(ctx context.Context, req UpsertRouteRequest) (
 		}
 	}
 	return LogEndpoint{}, apperr.InvalidRequest("当前 K8s 集群未绑定日志下游端点")
-}
-
-func (s Service) clusterEndpoint(ctx context.Context, clusterID string) (LogEndpoint, bool, error) {
-	endpoints, err := s.ListEndpoints(ctx)
-	if err != nil {
-		return LogEndpoint{}, false, err
-	}
-	for _, endpoint := range endpoints {
-		if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == clusterID {
-			return endpoint, true, nil
-		}
-	}
-	return LogEndpoint{}, false, nil
 }
 
 func (s Service) getSource(ctx context.Context, id string) (LogSource, error) {
@@ -913,20 +1110,34 @@ func (s Service) getRoute(ctx context.Context, id string) (LogRoute, error) {
 	return route, nil
 }
 
-func (s Service) renderRouteConfig(ctx context.Context, input renderInput) (string, string, error) {
+func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderInput) (renderedRouteConfig, error) {
 	if input.Source.SourceType == SourceTypeVMFile {
 		yaml, hash := renderAgentConfig(input)
-		return yaml, hash, nil
+		return renderedRouteConfig{
+			ManifestYAML:        yaml,
+			CollectorYAML:       yaml,
+			CollectorConfigHash: hash,
+			RouteIDs:            []string{input.Route.ID},
+		}, nil
 	}
 	inputs, err := s.k8sBundleInputs(ctx, input)
 	if err != nil {
-		return "", "", err
+		return renderedRouteConfig{}, err
 	}
-	if err := validateK8sBundleCollectorYAML(inputs); err != nil {
-		return "", "", err
+	rendered := renderK8sDaemonSetBundleWithHashes(inputs)
+	if err := validateK8sCollectorYAMLRuntimeScope(rendered.CollectorYAML); err != nil {
+		return renderedRouteConfig{}, err
 	}
-	yaml, hash := renderK8sDaemonSetBundle(inputs)
-	return yaml, hash, nil
+	return rendered, nil
+}
+
+func applyRenderedRouteHashes(route *LogRoute, rendered renderedRouteConfig) {
+	route.CollectorConfigHash = rendered.CollectorConfigHash
+}
+
+func applyRenderedSourceHashes(source *LogSource, rendered renderedRouteConfig) {
+	source.CollectorConfigHash = rendered.CollectorConfigHash
+	source.DeploymentManifestHash = rendered.DeploymentManifestHash
 }
 
 func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]renderInput, error) {
@@ -943,8 +1154,7 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 			continue
 		}
 		if view.Source.ClusterID != current.Source.ClusterID ||
-			firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != firstNonEmpty(current.Source.AgentNamespace, "novaobs-system") ||
-			view.Endpoint.ID != current.Endpoint.ID {
+			firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != firstNonEmpty(current.Source.AgentNamespace, "novaobs-system") {
 			continue
 		}
 		service, err := s.services.Get(ctx, view.Route.ServiceID)
@@ -963,6 +1173,67 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 		return inputs[i].Route.ID < inputs[j].Route.ID
 	})
 	return inputs, nil
+}
+
+func (s Service) markK8sBundlePending(ctx context.Context, source LogSource, collectorConfigHash string, currentRouteID string, now time.Time) error {
+	if source.SourceType != SourceTypeK8sStdout {
+		return nil
+	}
+	return s.updateK8sCollectorDomainRoutes(ctx, source, func(route LogRoute) LogRoute {
+		route.CollectorConfigHash = collectorConfigHash
+		if route.ID != currentRouteID && route.LastPublishStatus != "" && route.LastPublishStatus != "pending_publish" {
+			route.LastPublishStatus = "pending_publish"
+			route.LastPublishMessage = "采集域配置已更新，等待发布"
+			route.LastPreviewID = ""
+		}
+		route.UpdatedAt = now
+		return route
+	})
+}
+
+func (s Service) syncK8sBundlePublishState(ctx context.Context, source LogSource, collectorConfigHash string, status string, message string, previewID string, auditID string, publishedAt *time.Time, now time.Time) error {
+	if source.SourceType != SourceTypeK8sStdout {
+		return nil
+	}
+	return s.updateK8sCollectorDomainRoutes(ctx, source, func(route LogRoute) LogRoute {
+		route.CollectorConfigHash = collectorConfigHash
+		route.LastPublishStatus = status
+		route.LastPublishMessage = message
+		if previewID != "" {
+			route.LastPreviewID = previewID
+		}
+		if auditID != "" {
+			route.LastAuditID = auditID
+		}
+		if publishedAt != nil {
+			route.LastPublishedAt = publishedAt
+		}
+		route.UpdatedAt = now
+		return route
+	})
+}
+
+func (s Service) updateK8sCollectorDomainRoutes(ctx context.Context, source LogSource, mutate func(LogRoute) LogRoute) error {
+	views, err := s.ListRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, view := range views {
+		if view.Source == nil || !sameK8sCollectorDomain(*view.Source, source) {
+			continue
+		}
+		if err := s.routes.Update(ctx, view.Route.ID, mutate(view.Route)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sameK8sCollectorDomain(left LogSource, right LogSource) bool {
+	return left.SourceType == SourceTypeK8sStdout &&
+		right.SourceType == SourceTypeK8sStdout &&
+		left.ClusterID == right.ClusterID &&
+		firstNonEmpty(left.AgentNamespace, "novaobs-system") == firstNonEmpty(right.AgentNamespace, "novaobs-system")
 }
 
 func (s Service) publishBlock(ctx context.Context, source LogSource) (bool, string) {
@@ -986,20 +1257,47 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 		source.HostSelector = copyStringMap(req.VM.HostSelector)
 		source.PathPattern = req.VM.PathPattern
 		source.ParseRules = normalizeParseRules(req.VM.ParseRules)
-		source.CollectorYAML = req.VM.CollectorYAML
+		source.CustomCollectorYAML = req.VM.CollectorYAML
 		return source
 	}
+	agentNamespace := firstNonEmpty(req.K8s.AgentNamespace, "novaobs-system")
+	source.ID = k8sCollectorDomainSourceID(req.K8s.ClusterID, agentNamespace)
 	source.ClusterID = req.K8s.ClusterID
-	source.Namespace = req.K8s.Namespace
-	source.AgentNamespace = firstNonEmpty(req.K8s.AgentNamespace, "novaobs-system")
-	source.WorkloadKind = req.K8s.WorkloadKind
-	source.WorkloadName = req.K8s.WorkloadName
-	source.Container = req.K8s.Container
-	source.WorkloadSelector = copyStringMap(req.K8s.WorkloadSelector)
-	source.PathPattern = req.K8s.PathPattern
-	source.ParseRules = normalizeParseRules(req.K8s.ParseRules)
-	source.CollectorYAML = req.K8s.CollectorYAML
+	source.AgentNamespace = agentNamespace
 	return source
+}
+
+func k8sRouteConfigFromRequest(input K8sSourceInput) *K8sRouteConfig {
+	return &K8sRouteConfig{
+		Namespace:        input.Namespace,
+		WorkloadKind:     input.WorkloadKind,
+		WorkloadName:     input.WorkloadName,
+		Container:        input.Container,
+		WorkloadSelector: copyStringMap(input.WorkloadSelector),
+		PathPattern:      input.PathPattern,
+		ParseRules:       normalizeParseRules(input.ParseRules),
+	}
+}
+
+func routeEffectiveSource(route LogRoute, source LogSource) LogSource {
+	if source.SourceType != SourceTypeK8sStdout || route.K8s == nil {
+		return source
+	}
+	out := source
+	out.Namespace = route.K8s.Namespace
+	out.WorkloadKind = route.K8s.WorkloadKind
+	out.WorkloadName = route.K8s.WorkloadName
+	out.Container = route.K8s.Container
+	out.WorkloadSelector = copyStringMap(route.K8s.WorkloadSelector)
+	out.PathPattern = route.K8s.PathPattern
+	out.ParseRules = normalizeParseRules(route.K8s.ParseRules)
+	out.CustomCollectorYAML = ""
+	return out
+}
+
+func k8sCollectorDomainSourceID(clusterID string, agentNamespace string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(clusterID) + "\x00" + strings.TrimSpace(agentNamespace)))
+	return "k8s-collector-domain-" + hex.EncodeToString(sum[:])[:16]
 }
 
 func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
@@ -1030,16 +1328,12 @@ func validateRouteRequest(req UpsertRouteRequest) error {
 		return apperr.InvalidRequest("service_id 和 source_type 不能为空")
 	}
 	if !validSourceType(req.SourceType) {
-		return apperr.InvalidRequest("日志来源类型只支持 k8s_stdout、k8s_hostpath、vm_file")
+		return apperr.InvalidRequest("日志来源类型只支持 k8s_stdout、vm_file")
 	}
 	switch req.SourceType {
 	case SourceTypeK8sStdout:
 		if req.K8s.ClusterID == "" || req.K8s.Namespace == "" || req.K8s.WorkloadKind == "" || req.K8s.WorkloadName == "" {
 			return apperr.InvalidRequest("K8s 标准输出接入必须选择集群、namespace 和 workload")
-		}
-	case SourceTypeK8sHostPath:
-		if req.K8s.ClusterID == "" || req.K8s.Namespace == "" || req.K8s.WorkloadKind == "" || req.K8s.WorkloadName == "" || req.K8s.PathPattern == "" {
-			return apperr.InvalidRequest("K8s hostPath 接入必须选择集群、namespace、workload 并填写日志路径")
 		}
 	case SourceTypeVMFile:
 		if req.EndpointID == "" {
@@ -1059,7 +1353,7 @@ func validateRouteRequest(req UpsertRouteRequest) error {
 }
 
 func validSourceType(value string) bool {
-	return value == SourceTypeK8sStdout || value == SourceTypeK8sHostPath || value == SourceTypeVMFile
+	return value == SourceTypeK8sStdout || value == SourceTypeVMFile
 }
 
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
@@ -1098,6 +1392,9 @@ func validateEndpoint(endpoint LogEndpoint) error {
 	case EndpointSinkVL:
 		if endpoint.QueryURL == "" || endpoint.VMUIURL == "" {
 			return apperr.InvalidRequest("VL 下游端点必须填写写入地址、查询地址和 VMUI 地址")
+		}
+		if err := validateVLWriteURL(endpoint.WriteURL); err != nil {
+			return err
 		}
 		for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
 			if err := validateHTTPURL(rawURL, "VL 下游端点地址"); err != nil {
@@ -1138,6 +1435,17 @@ func validateHTTPURL(raw string, label string) error {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return apperr.InvalidRequest(label + "只支持 http/https")
+	}
+	return nil
+}
+
+func validateVLWriteURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return apperr.InvalidRequest("VL 下游端点写入地址必须是完整的 http/https 地址")
+	}
+	if strings.TrimRight(parsed.Path, "/") != "/insert/opentelemetry/v1/logs" {
+		return apperr.InvalidRequest("VL 下游端点写入地址必须指向 /insert/opentelemetry/v1/logs")
 	}
 	return nil
 }
@@ -1225,6 +1533,17 @@ func copyStringMap(input map[string]string) map[string]string {
 	return out
 }
 
+func copyStringSlice(input []string) []string {
+	out := make([]string, 0, len(input))
+	for _, value := range input {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func previewMode(source LogSource) string {
 	if source.SourceType == SourceTypeVMFile {
 		return "vm-agent-config"
@@ -1234,9 +1553,6 @@ func previewMode(source LogSource) string {
 
 func previewWarnings(source LogSource, endpoint LogEndpoint) []string {
 	warnings := []string{}
-	if source.SourceType == SourceTypeK8sHostPath {
-		warnings = append(warnings, "K8s hostPath 接入依赖业务写宿主机目录，请确认日志轮转和磁盘配额")
-	}
 	for _, rule := range source.ParseRules {
 		if rule.RuleType == ParseRuleRegex {
 			warnings = append(warnings, "正则解析规则会在 OTel Collector transform processor 中按 workload 条件执行，请先通过预览确认字段映射")
@@ -1293,32 +1609,14 @@ func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint)
 	switch req.SourceType {
 	case SourceTypeVMFile:
 		return validateCollectorYAML(req.VM.CollectorYAML, endpoint)
-	case SourceTypeK8sStdout, SourceTypeK8sHostPath:
-		if err := validateCollectorYAML(req.K8s.CollectorYAML, endpoint); err != nil {
-			return err
+	case SourceTypeK8sStdout:
+		if strings.TrimSpace(req.K8s.CollectorYAML) != "" {
+			return apperr.InvalidRequest("K8s 日志接入不再接受 route 级 collector_yaml，请使用服务级采集配置，由采集域统一生成 Collector YAML")
 		}
-		return validateK8sCollectorYAMLRuntimeScope(req.K8s.CollectorYAML)
+		return nil
 	default:
 		return nil
 	}
-}
-
-func validateK8sBundleCollectorYAML(inputs []renderInput) error {
-	customCount := 0
-	for _, input := range inputs {
-		raw := strings.TrimSpace(input.Source.CollectorYAML)
-		if raw == "" {
-			continue
-		}
-		customCount++
-		if err := validateK8sCollectorYAMLRuntimeScope(raw); err != nil {
-			return err
-		}
-	}
-	if len(inputs) > 1 && customCount > 0 {
-		return apperr.InvalidRequest("同一 K8s 采集域包含多条日志路由时，暂不支持完整 collector_yaml 覆盖，请使用解析规则或拆分采集域")
-	}
-	return nil
 }
 
 func validateK8sCollectorYAMLRuntimeScope(raw string) error {
@@ -1330,10 +1628,113 @@ func validateK8sCollectorYAMLRuntimeScope(raw string) error {
 	if err != nil {
 		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
 	}
-	for _, include := range collectorReceiverIncludes(root) {
-		if include == "/var/log/pods/*_*_*/*/*.log" {
+	receivers := collectorReceivers(root)
+	if len(receivers) == 0 {
+		return apperr.InvalidRequest("K8s collector_yaml 必须声明 file_log receiver")
+	}
+	hasFilelogReceiver := false
+	for name, receiver := range receivers {
+		if strings.HasPrefix(name, "filelog") {
+			return apperr.InvalidRequest("K8s collector_yaml receiver 类型必须使用 file_log，不支持 filelog alias")
+		}
+		includes := yamlStringValues(yamlMappingValue(receiver, "include"))
+		for _, include := range includes {
+			if err := validateK8sCollectorInclude(include); err != nil {
+				return err
+			}
+		}
+		if !collectorReceiverReadsPods(includes) {
+			continue
+		}
+		if !strings.HasPrefix(name, "file_log") {
+			return apperr.InvalidRequest("K8s collector_yaml 读取 Pod 标准日志时必须使用 file_log receiver")
+		}
+		hasFilelogReceiver = true
+		if err := validateK8sFilelogSafety(receiver); err != nil {
+			return err
+		}
+	}
+	if !hasFilelogReceiver {
+		return apperr.InvalidRequest("K8s collector_yaml 必须包含读取 /var/log/pods 的 file_log receiver")
+	}
+	if !collectorHasProcessor(root, "memory_limiter") {
+		return apperr.InvalidRequest("K8s collector_yaml 必须配置 memory_limiter 处理器，避免采集端内存失控")
+	}
+	if collectorHasProcessor(root, "k8sattributes") {
+		return apperr.InvalidRequest("K8s collector_yaml processor 必须使用 k8s_attributes，不支持 k8sattributes alias")
+	}
+	if !collectorHasProcessor(root, "k8s_attributes") {
+		return apperr.InvalidRequest("K8s collector_yaml 必须配置 k8s_attributes 处理器，并按节点过滤 Pod 元数据")
+	}
+	return nil
+}
+
+func validateK8sFilelogSafety(receiver *yaml.Node) error {
+	pollRaw := yamlScalarValue(yamlMappingValue(receiver, "poll_interval"))
+	if pollRaw == "" {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 poll_interval，且不小于 5s")
+	}
+	pollInterval, err := time.ParseDuration(pollRaw)
+	if err != nil || pollInterval < 5*time.Second {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 的 poll_interval 不能小于 5s")
+	}
+	if yamlMappingValue(receiver, "storage") == nil {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 storage 保存 offset")
+	}
+	if len(yamlStringValues(yamlMappingValue(receiver, "exclude"))) == 0 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 exclude，排除采集器自身和轮转文件")
+	}
+	maxConcurrent, ok := yamlPositiveInt(receiver, "max_concurrent_files")
+	if !ok || maxConcurrent > 256 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 max_concurrent_files，且不能大于 256")
+	}
+	maxBatches, ok := yamlPositiveInt(receiver, "max_batches")
+	if !ok || maxBatches > 4 {
+		return apperr.InvalidRequest("K8s collector_yaml file_log receiver 必须设置 max_batches，且不能大于 4")
+	}
+	return nil
+}
+
+func collectorReceiverReadsPods(includes []string) bool {
+	for _, include := range includes {
+		if strings.HasPrefix(strings.TrimSpace(include), "/var/log/pods/") {
+			return true
+		}
+	}
+	return false
+}
+
+func collectorHasProcessor(root *yaml.Node, processorType string) bool {
+	processors := yamlMappingValue(root, "processors")
+	if processors == nil || processors.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(processors.Content); i += 2 {
+		name := strings.TrimSpace(processors.Content[i].Value)
+		if name == processorType || strings.HasPrefix(name, processorType+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func validateK8sCollectorInclude(include string) error {
+	include = strings.TrimSpace(include)
+	if include == "" {
+		return nil
+	}
+	if strings.HasPrefix(include, "/var/log/pods/") {
+		podDirPattern, _, _ := strings.Cut(strings.TrimPrefix(include, "/var/log/pods/"), "/")
+		namespacePattern, _, _ := strings.Cut(podDirPattern, "_")
+		if podDirPattern == "" || strings.HasPrefix(podDirPattern, "*") || strings.ContainsAny(namespacePattern, "*?[") {
 			return apperr.InvalidRequest("K8s collector_yaml 不能使用全局 Pod 日志路径，请按 Namespace/Workload 生成采集路径后再发布")
 		}
+		return nil
+	}
+	if include == "/var/log" || strings.HasPrefix(include, "/var/log/") ||
+		include == "/var/lib/kubelet" || strings.HasPrefix(include, "/var/lib/kubelet/") ||
+		include == "/var/lib/docker" || strings.HasPrefix(include, "/var/lib/docker/") {
+		return apperr.InvalidRequest("K8s collector_yaml 只能读取 /var/log/pods 下按 Namespace/Workload 收窄后的容器标准日志")
 	}
 	return nil
 }
@@ -1347,8 +1748,8 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 	if err != nil {
 		return apperr.InvalidRequest("collector_yaml 必须是合法 YAML")
 	}
-	if mappingValue(root, "service", "pipelines", "logs") == nil {
-		return apperr.InvalidRequest("collector_yaml 必须包含 service.pipelines.logs")
+	if !collectorHasLogsPipeline(root) {
+		return apperr.InvalidRequest("collector_yaml 必须包含 logs pipeline（service.pipelines.logs 或 service.pipelines.logs/<service>）")
 	}
 	exporters := yamlMappingValue(root, "exporters")
 	if exporters == nil || exporters.Kind != yaml.MappingNode {
@@ -1365,6 +1766,20 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
 	}
 	return nil
+}
+
+func collectorHasLogsPipeline(root *yaml.Node) bool {
+	pipelines := mappingValue(root, "service", "pipelines")
+	if pipelines == nil || pipelines.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(pipelines.Content); i += 2 {
+		name := strings.TrimSpace(pipelines.Content[i].Value)
+		if name == "logs" || strings.HasPrefix(name, "logs/") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCollectorYAML(raw string) (*yaml.Node, error) {
@@ -1415,17 +1830,44 @@ func yamlStringValues(node *yaml.Node) []string {
 	}
 }
 
-func collectorReceiverIncludes(root *yaml.Node) []string {
+func yamlScalarValue(node *yaml.Node) string {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return strings.TrimSpace(node.Value)
+}
+
+func yamlPositiveInt(mapping *yaml.Node, key string) (int, bool) {
+	raw := yamlScalarValue(yamlMappingValue(mapping, key))
+	if raw == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func collectorReceivers(root *yaml.Node) map[string]*yaml.Node {
 	receivers := yamlMappingValue(root, "receivers")
 	if receivers == nil || receivers.Kind != yaml.MappingNode {
 		return nil
 	}
-	out := []string{}
+	out := map[string]*yaml.Node{}
 	for i := 0; i+1 < len(receivers.Content); i += 2 {
 		receiver := receivers.Content[i+1]
 		if receiver.Kind != yaml.MappingNode {
 			continue
 		}
+		out[strings.TrimSpace(receivers.Content[i].Value)] = receiver
+	}
+	return out
+}
+
+func collectorReceiverIncludes(root *yaml.Node) []string {
+	out := []string{}
+	for _, receiver := range collectorReceivers(root) {
 		includes := yamlMappingValue(receiver, "include")
 		out = append(out, yamlStringValues(includes)...)
 	}

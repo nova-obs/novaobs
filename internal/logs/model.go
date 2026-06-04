@@ -3,9 +3,8 @@ package logs
 import "time"
 
 const (
-	SourceTypeK8sStdout   = "k8s_stdout"
-	SourceTypeK8sHostPath = "k8s_hostpath"
-	SourceTypeVMFile      = "vm_file"
+	SourceTypeK8sStdout = "k8s_stdout"
+	SourceTypeVMFile    = "vm_file"
 
 	EndpointScopeGlobal     = "global"
 	EndpointScopeK8sCluster = "k8s_cluster"
@@ -37,22 +36,45 @@ type LogEndpoint struct {
 }
 
 type LogSource struct {
-	ID               string            `json:"id" bson:"_id"`
-	SourceType       string            `json:"source_type" bson:"source_type"`
-	ClusterID        string            `json:"cluster_id" bson:"cluster_id"`
-	Namespace        string            `json:"namespace" bson:"namespace"`
-	AgentNamespace   string            `json:"agent_namespace" bson:"agent_namespace"`
-	WorkloadKind     string            `json:"workload_kind" bson:"workload_kind"`
-	WorkloadName     string            `json:"workload_name" bson:"workload_name"`
-	Container        string            `json:"container" bson:"container"`
-	WorkloadSelector map[string]string `json:"workload_selector" bson:"workload_selector"`
-	HostGroup        string            `json:"host_group" bson:"host_group"`
-	HostSelector     map[string]string `json:"host_selector" bson:"host_selector"`
-	PathPattern      string            `json:"path_pattern" bson:"path_pattern"`
-	ParseRules       []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
-	CollectorYAML    string            `json:"collector_yaml" bson:"collector_yaml"`
-	CreatedAt        time.Time         `json:"created_at" bson:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at" bson:"updated_at"`
+	ID                     string            `json:"id" bson:"_id"`
+	SourceType             string            `json:"source_type" bson:"source_type"`
+	ClusterID              string            `json:"cluster_id" bson:"cluster_id"`
+	Namespace              string            `json:"namespace" bson:"namespace"`
+	AgentNamespace         string            `json:"agent_namespace" bson:"agent_namespace"`
+	WorkloadKind           string            `json:"workload_kind" bson:"workload_kind"`
+	WorkloadName           string            `json:"workload_name" bson:"workload_name"`
+	Container              string            `json:"container" bson:"container"`
+	WorkloadSelector       map[string]string `json:"workload_selector" bson:"workload_selector"`
+	HostGroup              string            `json:"host_group" bson:"host_group"`
+	HostSelector           map[string]string `json:"host_selector" bson:"host_selector"`
+	PathPattern            string            `json:"path_pattern" bson:"path_pattern"`
+	ParseRules             []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
+	CustomCollectorYAML    string            `json:"custom_collector_yaml" bson:"custom_collector_yaml"`
+	CollectorConfigHash    string            `json:"collector_config_hash" bson:"collector_config_hash"`
+	DeploymentManifestHash string            `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
+	CreatedAt              time.Time         `json:"created_at" bson:"created_at"`
+	UpdatedAt              time.Time         `json:"updated_at" bson:"updated_at"`
+}
+
+type LogCollectorConfigVersion struct {
+	ID                  string    `json:"id" bson:"_id"`
+	CollectorConfigHash string    `json:"collector_config_hash" bson:"collector_config_hash"`
+	SourceType          string    `json:"source_type" bson:"source_type"`
+	ClusterID           string    `json:"cluster_id" bson:"cluster_id"`
+	AgentNamespace      string    `json:"agent_namespace" bson:"agent_namespace"`
+	CollectorYAML       string    `json:"collector_yaml" bson:"collector_yaml"`
+	RouteIDs            []string  `json:"route_ids" bson:"route_ids"`
+	CreatedAt           time.Time `json:"created_at" bson:"created_at"`
+}
+
+type LogDeploymentManifestVersion struct {
+	ID                     string    `json:"id" bson:"_id"`
+	DeploymentManifestHash string    `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
+	SourceType             string    `json:"source_type" bson:"source_type"`
+	ClusterID              string    `json:"cluster_id" bson:"cluster_id"`
+	AgentNamespace         string    `json:"agent_namespace" bson:"agent_namespace"`
+	ManifestYAML           string    `json:"manifest_yaml" bson:"manifest_yaml"`
+	CreatedAt              time.Time `json:"created_at" bson:"created_at"`
 }
 
 type LogParseRule struct {
@@ -77,42 +99,44 @@ type ParsePreviewResult struct {
 }
 
 type LogRoute struct {
-	ID                 string     `json:"id" bson:"_id"`
-	Name               string     `json:"name" bson:"name"`
-	ServiceID          string     `json:"service_id" bson:"service_id"`
-	SourceID           string     `json:"source_id" bson:"source_id"`
-	SourceType         string     `json:"source_type" bson:"source_type"`
-	AgentGroupID       string     `json:"agent_group_id" bson:"agent_group_id"`
-	EndpointID         string     `json:"endpoint_id" bson:"endpoint_id"`
-	Status             string     `json:"status" bson:"status"`
-	ConfigHash         string     `json:"config_hash" bson:"config_hash"`
-	LastProbeStatus    string     `json:"last_probe_status" bson:"last_probe_status"`
-	LastProbeMessage   string     `json:"last_probe_message" bson:"last_probe_message"`
-	LastProbeAt        *time.Time `json:"last_probe_at,omitempty" bson:"last_probe_at,omitempty"`
-	LastPublishStatus  string     `json:"last_publish_status" bson:"last_publish_status"`
-	LastPublishMessage string     `json:"last_publish_message" bson:"last_publish_message"`
-	LastPublishedAt    *time.Time `json:"last_published_at,omitempty" bson:"last_published_at,omitempty"`
-	LastAuditID        string     `json:"last_audit_id" bson:"last_audit_id"`
-	LastPreviewID      string     `json:"last_preview_id" bson:"last_preview_id"`
-	CreatedAt          time.Time  `json:"created_at" bson:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at" bson:"updated_at"`
+	ID                  string          `json:"id" bson:"_id"`
+	Name                string          `json:"name" bson:"name"`
+	ServiceID           string          `json:"service_id" bson:"service_id"`
+	SourceID            string          `json:"source_id" bson:"source_id"`
+	SourceType          string          `json:"source_type" bson:"source_type"`
+	K8s                 *K8sRouteConfig `json:"k8s,omitempty" bson:"k8s,omitempty"`
+	AgentGroupID        string          `json:"agent_group_id" bson:"agent_group_id"`
+	EndpointID          string          `json:"endpoint_id" bson:"endpoint_id"`
+	Status              string          `json:"status" bson:"status"`
+	CollectorConfigHash string          `json:"collector_config_hash" bson:"collector_config_hash"`
+	LastProbeStatus     string          `json:"last_probe_status" bson:"last_probe_status"`
+	LastProbeMessage    string          `json:"last_probe_message" bson:"last_probe_message"`
+	LastProbeAt         *time.Time      `json:"last_probe_at,omitempty" bson:"last_probe_at,omitempty"`
+	LastPublishStatus   string          `json:"last_publish_status" bson:"last_publish_status"`
+	LastPublishMessage  string          `json:"last_publish_message" bson:"last_publish_message"`
+	LastPublishedAt     *time.Time      `json:"last_published_at,omitempty" bson:"last_published_at,omitempty"`
+	LastAuditID         string          `json:"last_audit_id" bson:"last_audit_id"`
+	LastPreviewID       string          `json:"last_preview_id" bson:"last_preview_id"`
+	CreatedAt           time.Time       `json:"created_at" bson:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at" bson:"updated_at"`
 }
 
 type LogAgentPlan struct {
-	ID                string    `json:"id" bson:"_id"`
-	RouteID           string    `json:"route_id" bson:"route_id"`
-	AgentGroupID      string    `json:"agent_group_id" bson:"agent_group_id"`
-	SourceType        string    `json:"source_type" bson:"source_type"`
-	ClusterID         string    `json:"cluster_id" bson:"cluster_id"`
-	Namespace         string    `json:"namespace" bson:"namespace"`
-	ConfigHash        string    `json:"config_hash" bson:"config_hash"`
-	RenderedYAML      string    `json:"rendered_yaml" bson:"rendered_yaml"`
-	Status            string    `json:"status" bson:"status"`
-	PreviewID         string    `json:"preview_id" bson:"preview_id"`
-	ConfirmationToken string    `json:"confirmation_token" bson:"confirmation_token"`
-	AuditID           string    `json:"audit_id" bson:"audit_id"`
-	Message           string    `json:"message" bson:"message"`
-	CreatedAt         time.Time `json:"created_at" bson:"created_at"`
+	ID                     string    `json:"id" bson:"_id"`
+	RouteID                string    `json:"route_id" bson:"route_id"`
+	AgentGroupID           string    `json:"agent_group_id" bson:"agent_group_id"`
+	SourceType             string    `json:"source_type" bson:"source_type"`
+	ClusterID              string    `json:"cluster_id" bson:"cluster_id"`
+	Namespace              string    `json:"namespace" bson:"namespace"`
+	CollectorConfigHash    string    `json:"collector_config_hash" bson:"collector_config_hash"`
+	DeploymentManifestHash string    `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
+	RenderedYAML           string    `json:"rendered_yaml" bson:"rendered_yaml"`
+	Status                 string    `json:"status" bson:"status"`
+	PreviewID              string    `json:"preview_id" bson:"preview_id"`
+	ConfirmationToken      string    `json:"confirmation_token" bson:"confirmation_token"`
+	AuditID                string    `json:"audit_id" bson:"audit_id"`
+	Message                string    `json:"message" bson:"message"`
+	CreatedAt              time.Time `json:"created_at" bson:"created_at"`
 }
 
 type K8sSourceInput struct {
@@ -134,6 +158,16 @@ type VMSourceInput struct {
 	PathPattern   string            `json:"path_pattern"`
 	ParseRules    []LogParseRule    `json:"parse_rules"`
 	CollectorYAML string            `json:"collector_yaml"`
+}
+
+type K8sRouteConfig struct {
+	Namespace        string            `json:"namespace" bson:"namespace"`
+	WorkloadKind     string            `json:"workload_kind" bson:"workload_kind"`
+	WorkloadName     string            `json:"workload_name" bson:"workload_name"`
+	Container        string            `json:"container" bson:"container"`
+	WorkloadSelector map[string]string `json:"workload_selector" bson:"workload_selector"`
+	PathPattern      string            `json:"path_pattern" bson:"path_pattern"`
+	ParseRules       []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
 }
 
 type SyncK8sNamespaceRequest struct {
@@ -239,14 +273,23 @@ type LogRouteView struct {
 }
 
 type LogRoutePreview struct {
-	Source               LogSource   `json:"source"`
-	Endpoint             LogEndpoint `json:"endpoint"`
-	AgentYAML            string      `json:"agent_yaml"`
-	ConfigHash           string      `json:"config_hash"`
-	Mode                 string      `json:"mode"`
-	PublishBlocked       bool        `json:"publish_blocked"`
-	PublishBlockedReason string      `json:"publish_blocked_reason"`
-	Warnings             []string    `json:"warnings"`
+	Source                 LogSource   `json:"source"`
+	Endpoint               LogEndpoint `json:"endpoint"`
+	AgentYAML              string      `json:"agent_yaml"`
+	CollectorConfigHash    string      `json:"collector_config_hash"`
+	DeploymentManifestHash string      `json:"deployment_manifest_hash"`
+	Mode                   string      `json:"mode"`
+	PublishBlocked         bool        `json:"publish_blocked"`
+	PublishBlockedReason   string      `json:"publish_blocked_reason"`
+	Warnings               []string    `json:"warnings"`
+}
+
+type LogRouteCollectorConfig struct {
+	RouteID                string `json:"route_id"`
+	CollectorConfigHash    string `json:"collector_config_hash"`
+	DeploymentManifestHash string `json:"deployment_manifest_hash"`
+	SourceType             string `json:"source_type"`
+	CollectorYAML          string `json:"collector_yaml"`
 }
 
 type PublishRouteResult struct {

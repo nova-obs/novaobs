@@ -1,5 +1,7 @@
 # NovaObs Logs 模块重构架构草案
 
+> 状态说明：本文是 2026-05-28 的重构草案，部分内容已被当前实现演进替代。当前运行代码以 `K8s / VM` 两类接入来源、`VL / ES / Kafka` 日志下游端点、自动派生采集域、同一 K8s 采集域多服务命名 `logs/<service>` pipeline 为准；不要再按草案中的 `k8s_hostpath`、VL-only 或手选 AgentGroup 语义实现新功能。
+
 ## 目标
 
 这次 Logs 变动按“日志大模块重做”处理，不继续把旧 Pipeline 作为产品主心智，也不把所有能力塞进一个页面。
@@ -109,28 +111,28 @@ type LogEndpoint struct {
 
 ```go
 type LogSource struct {
-	ID              string
-	ServiceID       string
-	RuntimeTargetID string
-	SourceType      string // k8s_stdout | k8s_hostpath | vm_file
-	ClusterID       string
-	Namespace       string
-	WorkloadPattern string
-	ContainerNames  []string
-	HostPattern     string
-	PathPattern      string
-	Labels          map[string]string
-	Status          string // active | disabled
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                     string
+	SourceType             string // k8s_stdout | vm_file
+	ClusterID              string
+	AgentNamespace         string
+	HostGroup              string
+	HostSelector           map[string]string
+	PathPattern            string
+	CustomCollectorYAML    string // only for vm_file
+	CollectorConfigHash    string
+	DeploymentManifestHash string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 ```
 
 说明：
 
-- `LogSource` 表示“从哪里采”。
-- K8s 标准输出、K8s hostPath、VM 文件路径都归一到这个模型。
-- `ServiceID + RuntimeTargetID + SourceType + Path/Container` 应有唯一约束。
+- `LogSource` 在 K8s 下表示采集域/部署域，而不是单个 workload 来源；唯一键收敛到 `SourceType + ClusterID + AgentNamespace`。
+- K8s `LogSource` 不保存 `collector_yaml`。完整采集配置由 `LogCollectorConfigVersion` 按 `collector_config_hash` 保存。
+- `deployment_manifest_hash` 指向采集域的标准部署清单版本，不等同于最终 apply bundle，也不随服务路由数量变化。
+- `LogSource` 在 VM 下表示主机采集域；VM 的用户自定义 YAML 只能写入 `CustomCollectorYAML`，避免和 K8s 生成配置混用。
+- K8s workload 范围、容器、解析规则属于 `LogRoute.K8s` 的服务级采集配置，不能继续写回 source。
 
 ### LogRoute
 
@@ -143,7 +145,7 @@ type LogRoute struct {
 	EndpointIDs     []string
 	Mode            string // active | shadow | disabled
 	ConfigVersion   int
-	ConfigHash      string
+	CollectorConfigHash string
 	LastPublishID   string
 	LastPublishState string // pending | applied | drift | failed
 	CreatedAt       time.Time
@@ -156,6 +158,49 @@ type LogRoute struct {
 - `LogRoute` 表示“谁采、采到哪、当前配置状态是什么”。
 - 一个 route 可以有多个 endpoint，用于双写和旁路对账。
 - 不再用“多个 Pipeline 片段”表达服务日志接入。
+- `collector_config_hash` 必须能回查到 `LogCollectorConfigVersion.collector_yaml`，查看配置不能重新 render。
+- K8s 确认发布必须使用发布预览时保存的 `LogAgentPlan.rendered_yaml`，不能 apply 时重新 render。
+
+### LogCollectorConfigVersion
+
+```go
+type LogCollectorConfigVersion struct {
+	ID                  string
+	CollectorConfigHash string
+	SourceType          string
+	ClusterID           string
+	AgentNamespace      string
+	CollectorYAML       string
+	RouteIDs            []string
+	CreatedAt           time.Time
+}
+```
+
+说明：
+
+- 这是 `collector_config_hash -> collector_yaml` 的唯一事实表。
+- K8s 同一采集域新增或更新服务 route 后生成新版本；旧 hash 仍能查看旧 YAML 快照。
+- 这里存的是 Collector 配置，不是 K8s 部署清单。
+
+### LogDeploymentManifestVersion
+
+```go
+type LogDeploymentManifestVersion struct {
+	ID                     string
+	DeploymentManifestHash string
+	SourceType             string
+	ClusterID              string
+	AgentNamespace         string
+	ManifestYAML           string
+	CreatedAt              time.Time
+}
+```
+
+说明：
+
+- 这是 `deployment_manifest_hash -> manifest_yaml` 的事实表。
+- K8s 一个集群/agent namespace 对应一份标准部署清单；最终部署时再与 collector config 组合成 apply bundle。
+- `deployment_manifest_hash` 不代表 `collector_yaml`，也不代表包含 collector config 的最终 bundle hash。
 
 ### LogAlertBinding
 
@@ -437,6 +482,8 @@ Mongo collections：
 log_endpoints
 log_sources
 log_routes
+log_collector_config_versions
+log_deployment_manifest_versions
 log_alert_bindings
 ```
 
@@ -444,12 +491,12 @@ log_alert_bindings
 
 ```text
 log_endpoints.name unique
-log_sources.service_id
-log_sources.runtime_target_id
-log_sources.service_id + runtime_target_id + source_type
+log_sources.source_type + cluster_id + agent_namespace
 log_routes.service_id
 log_routes.agent_group_id
 log_routes.endpoint_ids
+log_collector_config_versions.collector_config_hash unique
+log_deployment_manifest_versions.deployment_manifest_hash unique
 log_alert_bindings.service_id
 log_alert_bindings.rule_id unique
 ```
@@ -494,7 +541,8 @@ Explorer / Pipelines / Views
 
 - 主体是接入路由表，每一行表示一条服务日志链路：服务、来源、AgentGroup、VL 端点、探测状态。
 - 右侧是当前选中路由的编辑面板，只保留完成链路所需字段：服务、采集方式、范围、AgentGroup、VL 端点、接入验证。
-- 发布接入前必须支持配置预览，发布后记录 `route_id`、`config_hash`、`last_publish_id`。
+- 发布接入前必须支持配置预览，发布后 route 记录 `collector_config_hash`、`last_publish_id`；K8s 采集域/source 记录唯一部署清单的 `deployment_manifest_hash`，不要再使用泛化 `config_hash` 混合两种语义。
+- “查看采集配置”必须按 `collector_config_hash` 从 `log_collector_config_versions` 读取快照；禁止因为 route id 重新渲染当前配置。
 - 发布完成后提供进入 `/logs/agents?agent_group_id=...&route_id=...` 的下一步动作。
 
 `/logs/agents`：
