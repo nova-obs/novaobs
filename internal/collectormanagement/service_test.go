@@ -143,6 +143,64 @@ func TestServiceUpsertsK8sInstancesByRuntimeIdentity(t *testing.T) {
 	require.Equal(t, "node-01", instances[0].NodeName)
 }
 
+func TestServiceIgnoresStaleOfflineEventForReplacedRuntimeIdentity(t *testing.T) {
+	store := memstore.NewStore()
+	svc := NewService(store.CollectorGroups(), store.CollectorInstances())
+	ctx := context.Background()
+
+	group, err := svc.CreateGroup(ctx, CollectorGroup{
+		Name:    "logs-k8s-test03-novaobs-system",
+		Mode:    "dedicated_collector",
+		Cluster: "test03",
+	})
+	require.NoError(t, err)
+
+	runtimeIdentity := "k8s:test03:" + group.ID + ":node-01"
+	_, err = svc.UpsertInstance(ctx, "opamp-uid-a", group.ID, InstanceStatus{
+		OpAMPInstanceUID: "opamp-uid-a",
+		RuntimeIdentity:  runtimeIdentity,
+		NodeName:         "node-01",
+		PodUID:           "pod-uid-a",
+		Online:           true,
+		Healthy:          true,
+		HealthSet:        true,
+	})
+	require.NoError(t, err)
+	current, err := svc.UpsertInstance(ctx, "opamp-uid-b", group.ID, InstanceStatus{
+		OpAMPInstanceUID: "opamp-uid-b",
+		RuntimeIdentity:  runtimeIdentity,
+		NodeName:         "node-01",
+		PodUID:           "pod-uid-b",
+		Online:           true,
+		Healthy:          true,
+		HealthSet:        true,
+	})
+	require.NoError(t, err)
+
+	afterStaleClose, err := svc.UpsertInstance(ctx, "opamp-uid-a", group.ID, InstanceStatus{
+		OpAMPInstanceUID: "opamp-uid-a",
+		RuntimeIdentity:  runtimeIdentity,
+		NodeName:         "node-01",
+		PodUID:           "pod-uid-a",
+		Online:           false,
+		Healthy:          false,
+		HealthSet:        true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, current.ID, afterStaleClose.ID)
+	require.Equal(t, "opamp-uid-b", afterStaleClose.InstanceUID)
+	require.Equal(t, "opamp-uid-b", afterStaleClose.OpAMPInstanceUID)
+	require.Equal(t, "pod-uid-b", afterStaleClose.PodUID)
+	require.True(t, afterStaleClose.Online)
+	require.True(t, afterStaleClose.Healthy)
+
+	instances, err := svc.ListInstances(ctx, group.ID)
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	require.Equal(t, "opamp-uid-b", instances[0].InstanceUID)
+	require.True(t, instances[0].Online)
+}
+
 func TestServiceSummarizesRuntimeInstanceCountsOnGroups(t *testing.T) {
 	store := memstore.NewStore()
 	svc := NewService(store.CollectorGroups(), store.CollectorInstances())

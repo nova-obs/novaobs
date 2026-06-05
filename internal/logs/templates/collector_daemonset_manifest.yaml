@@ -45,6 +45,10 @@ kind: Service
 metadata:
   name: {{ .AgentName }}
   namespace: {{ .AgentNamespace }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8888"
   labels:
     app.kubernetes.io/name: {{ .AgentName }}
     app.kubernetes.io/part-of: novaobs
@@ -79,6 +83,9 @@ spec:
         app.kubernetes.io/part-of: novaobs
       annotations:
         novaobs.io/config-hash: {{ .ConfigHash }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8888"
     spec:
       serviceAccountName: {{ .AgentName }}
       terminationGracePeriodSeconds: 30
@@ -128,8 +135,6 @@ spec:
               value: {{ .CollectorGroupID | printf "%q" }}
             - name: NOVAOBS_AGENT_NAMESPACE
               value: {{ .AgentNamespace | printf "%q" }}
-            - name: NOVAOBS_OPAMP_ENDPOINT
-              value: {{ .OpAMPEndpoint | printf "%q" }}
           readinessProbe:
             httpGet:
               path: /

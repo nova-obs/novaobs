@@ -93,9 +93,21 @@ func (s *cgStore) Count(ctx context.Context) (int64, error) {
 type ciStore struct{ col *mongo.Collection }
 
 func (s *ciStore) Upsert(ctx context.Context, instanceUID string, groupID string, instance interface{}) error {
-	setDoc, err := toBSONMap(instance)
+	filter, setDoc, insertID, err := collectorInstanceUpsertDocument(instanceUID, groupID, instance)
 	if err != nil {
 		return err
+	}
+	_, err = s.col.UpdateOne(ctx, filter, bson.M{
+		"$set":         setDoc,
+		"$setOnInsert": bson.M{"_id": insertID},
+	}, options.Update().SetUpsert(true))
+	return err
+}
+
+func collectorInstanceUpsertDocument(instanceUID string, groupID string, instance interface{}) (bson.M, bson.M, string, error) {
+	setDoc, err := toBSONMap(instance)
+	if err != nil {
+		return nil, nil, "", err
 	}
 	filter := bson.M{"instance_uid": instanceUID}
 	if runtimeIdentity, _ := setDoc["runtime_identity"].(string); strings.TrimSpace(runtimeIdentity) != "" {
@@ -104,17 +116,14 @@ func (s *ciStore) Upsert(ctx context.Context, instanceUID string, groupID string
 			{"instance_uid": instanceUID},
 		}}
 	}
-	opts := options.Update().SetUpsert(true)
 	insertID := normalizeDocumentID(setDoc, instanceUID)
 	delete(setDoc, "_id")
 	setDoc["instance_uid"] = instanceUID
-	setDoc["opamp_instance_uid"] = instanceUID
+	if opampUID, _ := setDoc["opamp_instance_uid"].(string); strings.TrimSpace(opampUID) == "" {
+		setDoc["opamp_instance_uid"] = instanceUID
+	}
 	setDoc["collector_group_id"] = groupID
-	_, err = s.col.UpdateOne(ctx, filter, bson.M{
-		"$set":         setDoc,
-		"$setOnInsert": bson.M{"_id": insertID},
-	}, opts)
-	return err
+	return filter, setDoc, insertID, nil
 }
 func (s *ciStore) FindAll(ctx context.Context, results interface{}) error {
 	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))

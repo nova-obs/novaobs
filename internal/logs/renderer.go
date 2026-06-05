@@ -38,7 +38,6 @@ type k8sDaemonSetBundleTemplateData struct {
 	AgentName            string
 	ClusterID            string
 	CollectorGroupID     string
-	OpAMPEndpoint        string
 	CollectorConfigBlock string
 	ConfigHash           string
 	RuntimeLogMounts     []k8sRuntimeLogMount
@@ -93,10 +92,9 @@ func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
 		AgentName:            agentName,
 		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
 		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
-		OpAMPEndpoint:        defaultOpAMPEndpoint(agentNamespace),
 		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
 		ConfigHash:           yamlQuote("<collector-config-hash>"),
-		RuntimeLogMounts:     []k8sRuntimeLogMount{},
+		RuntimeLogMounts:     k8sRuntimeLogMounts(),
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -128,16 +126,21 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 		AgentName:            agentName,
 		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
 		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
-		OpAMPEndpoint:        defaultOpAMPEndpoint(agentNamespace),
 		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
 		ConfigHash:           yamlQuote(configHash),
-		RuntimeLogMounts:     []k8sRuntimeLogMount{},
+		RuntimeLogMounts:     k8sRuntimeLogMounts(),
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
 		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
 	}
 	return buffer.String()
+}
+
+func k8sRuntimeLogMounts() []k8sRuntimeLogMount {
+	return []k8sRuntimeLogMount{
+		{Name: "docker-containers", Path: "/data/docker/containers"},
+	}
 }
 
 func renderK8sCollectorConfig(inputs []renderInput) string {
@@ -153,22 +156,6 @@ func renderK8sCollectorConfig(inputs []renderInput) string {
     create_directory: true
   health_check:
     endpoint: 0.0.0.0:13133
-  opamp:
-    server:
-      ws:
-        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
-    instance_uid: ${env:KUBE_POD_UID}
-    agent_description:
-      include_resource_attributes: true
-      non_identifying_attributes:
-        novaobs.cluster.id: ${env:NOVAOBS_CLUSTER_ID}
-        novaobs.collector.group_id: ${env:NOVAOBS_COLLECTOR_GROUP_ID}
-        novaobs.agent.namespace: ${env:NOVAOBS_AGENT_NAMESPACE}
-        k8s.namespace.name: ${env:NOVAOBS_AGENT_NAMESPACE}
-        k8s.pod.uid: ${env:KUBE_POD_UID}
-        k8s.pod.name: ${env:KUBE_POD_NAME}
-        k8s.node.name: ${env:KUBE_NODE_NAME}
-        k8s.pod.ip: ${env:KUBE_POD_IP}
 receivers:
 %s
 processors:
@@ -196,13 +183,17 @@ processors:
 exporters:
 %s
 service:
-  extensions: [file_storage/filelog_offsets, health_check, opamp]
+  extensions: [file_storage/filelog_offsets, health_check]
   telemetry:
     resource:
       service.name: novaobs-logs-agent
       novaobs.cluster.id: ${env:NOVAOBS_CLUSTER_ID}
       novaobs.collector.group_id: ${env:NOVAOBS_COLLECTOR_GROUP_ID}
       novaobs.agent.namespace: %s
+      k8s.pod.uid: ${env:KUBE_POD_UID}
+      k8s.pod.name: ${env:KUBE_POD_NAME}
+      k8s.node.name: ${env:KUBE_NODE_NAME}
+      k8s.pod.ip: ${env:KUBE_POD_IP}
     metrics:
       level: normal
       readers:
@@ -219,10 +210,6 @@ service:
 		yamlQuote(agentNamespace),
 		renderK8sPipelines(inputs, suffixes),
 	)
-}
-
-func defaultOpAMPEndpoint(agentNamespace string) string {
-	return "ws://novaobs-control-plane." + firstNonEmpty(agentNamespace, "novaobs-system") + ".svc.cluster.local:8080/v1/opamp"
 }
 
 func renderK8sReceivers(inputs []renderInput, suffixes map[string]string) string {

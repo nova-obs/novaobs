@@ -177,6 +177,10 @@ func (s Service) UpsertInstance(ctx context.Context, instanceUID string, groupID
 			existingErr = nil
 		}
 	}
+	incomingOpAMPUID := firstNonEmpty(strings.TrimSpace(status.OpAMPInstanceUID), instanceUID)
+	if existingErr == nil && status.RuntimeIdentity != "" && !status.Online && instance.OpAMPInstanceUID != "" && instance.OpAMPInstanceUID != incomingOpAMPUID {
+		return s.applyRuntimeStatus(instance), nil
+	}
 	if existingErr != nil {
 		instance = CollectorInstance{
 			ID:        primitive.NewObjectID().Hex(),
@@ -184,7 +188,7 @@ func (s Service) UpsertInstance(ctx context.Context, instanceUID string, groupID
 		}
 	}
 	instance.InstanceUID = instanceUID
-	instance.OpAMPInstanceUID = firstNonEmpty(strings.TrimSpace(status.OpAMPInstanceUID), instanceUID)
+	instance.OpAMPInstanceUID = incomingOpAMPUID
 	instance.RuntimeIdentity = status.RuntimeIdentity
 	instance.CollectorGroupID = groupID
 	if strings.TrimSpace(status.ServiceID) != "" {
