@@ -74,6 +74,26 @@ func TestCollectorInstanceUpdateDocumentOmitsID(t *testing.T) {
 	require.Equal(t, "", doc["collector_group_id"])
 }
 
+func TestCollectorInstanceUpsertDocumentPreservesOpAMPInstanceUID(t *testing.T) {
+	instance := collectormanagement.CollectorInstance{
+		ID:               "runtime-identity-key",
+		InstanceUID:      "runtime-identity-key",
+		OpAMPInstanceUID: "opamp-uid-b",
+		RuntimeIdentity:  "k8s:test03:group-001:node-01",
+		CollectorGroupID: "old-group",
+		Online:           true,
+	}
+
+	_, doc, insertID, err := collectorInstanceUpsertDocument("runtime-identity-key", "group-001", instance)
+
+	require.NoError(t, err)
+	require.Equal(t, "runtime-identity-key", insertID)
+	require.Equal(t, "runtime-identity-key", doc["instance_uid"])
+	require.Equal(t, "opamp-uid-b", doc["opamp_instance_uid"])
+	require.Equal(t, "group-001", doc["collector_group_id"])
+	require.Equal(t, "k8s:test03:group-001:node-01", doc["runtime_identity"])
+}
+
 func TestScopedUpdateDocumentMovesIDToSetOnInsert(t *testing.T) {
 	doc, insertID, err := scopedUpsertDocuments(collectormanagement.CollectorConfigVersion{
 		ID:               "version-1",

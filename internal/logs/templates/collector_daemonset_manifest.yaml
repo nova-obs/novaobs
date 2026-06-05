@@ -40,6 +40,30 @@ data:
   collector.yaml: |
 {{ .CollectorConfigBlock }}
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .AgentName }}
+  namespace: {{ .AgentNamespace }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8888"
+  labels:
+    app.kubernetes.io/name: {{ .AgentName }}
+    app.kubernetes.io/part-of: novaobs
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .AgentName }}
+  ports:
+    - name: metrics
+      port: 8888
+      targetPort: metrics
+    - name: health
+      port: 13133
+      targetPort: health
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -59,6 +83,9 @@ spec:
         app.kubernetes.io/part-of: novaobs
       annotations:
         novaobs.io/config-hash: {{ .ConfigHash }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8888"
     spec:
       serviceAccountName: {{ .AgentName }}
       terminationGracePeriodSeconds: 30
@@ -66,6 +93,11 @@ spec:
         - name: otelcol
           image: hub-test.service.ucloud.cn/logsplatfrom/opentelemetry-collector-contrib:0.153.0
           args: ["--config=/conf/collector.yaml"]
+          ports:
+            - name: metrics
+              containerPort: 8888
+            - name: health
+              containerPort: 13133
           resources:
             requests:
               cpu: 100m
@@ -85,6 +117,36 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: KUBE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KUBE_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: KUBE_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NOVAOBS_CLUSTER_ID
+              value: {{ .ClusterID | printf "%q" }}
+            - name: NOVAOBS_COLLECTOR_GROUP_ID
+              value: {{ .CollectorGroupID | printf "%q" }}
+            - name: NOVAOBS_AGENT_NAMESPACE
+              value: {{ .AgentNamespace | printf "%q" }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
           volumeMounts:
             - name: config
               mountPath: /conf

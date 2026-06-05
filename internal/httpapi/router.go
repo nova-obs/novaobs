@@ -66,6 +66,17 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		deps.OpAMPManager.SetStateSink(func(ctx context.Context, state opamp.AgentState) {
 			_, _ = deps.CollectorService.UpsertInstance(ctx, state.InstanceUID, state.CollectorGroupID, collectormanagement.InstanceStatus{
 				ServiceID:           state.ServiceID,
+				OpAMPInstanceUID:    state.OpAMPInstanceUID,
+				RuntimeIdentity:     state.RuntimeIdentity,
+				ClusterID:           state.ClusterID,
+				Namespace:           state.Namespace,
+				AgentNamespace:      state.AgentNamespace,
+				Hostname:            state.Hostname,
+				PodUID:              state.PodUID,
+				PodName:             state.PodName,
+				NodeName:            state.NodeName,
+				PodIP:               state.PodIP,
+				Version:             state.Version,
 				Online:              state.Online,
 				Healthy:             state.Healthy,
 				HealthSet:           state.HealthSet,

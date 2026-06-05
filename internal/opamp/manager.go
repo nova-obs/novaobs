@@ -20,8 +20,19 @@ import (
 
 type AgentState struct {
 	InstanceUID         string    `json:"instance_uid"`
+	OpAMPInstanceUID    string    `json:"opamp_instance_uid"`
+	RuntimeIdentity     string    `json:"runtime_identity"`
 	CollectorGroupID    string    `json:"collector_group_id,omitempty"`
 	ServiceID           string    `json:"service_id"`
+	ClusterID           string    `json:"cluster_id"`
+	Namespace           string    `json:"namespace"`
+	AgentNamespace      string    `json:"agent_namespace"`
+	Hostname            string    `json:"hostname"`
+	PodUID              string    `json:"pod_uid"`
+	PodName             string    `json:"pod_name"`
+	NodeName            string    `json:"node_name"`
+	PodIP               string    `json:"pod_ip"`
+	Version             string    `json:"version"`
 	Online              bool      `json:"online"`
 	Healthy             bool      `json:"healthy"`
 	HealthSet           bool      `json:"-"`
@@ -221,6 +232,7 @@ func (m *Manager) HandleConnectionMessage(ctx context.Context, conn opampservert
 	groupID := m.instanceGroups[uid]
 	state := m.agents[uid]
 	state.InstanceUID = uid
+	state.OpAMPInstanceUID = uid
 	state.CollectorGroupID = groupID
 	state.ServiceID = m.serviceAgents[uid]
 	state.Online = true
@@ -240,6 +252,11 @@ func (m *Manager) HandleConnectionMessage(ctx context.Context, conn opampservert
 	if message.AgentDescription != nil {
 		detail.IdentifyingAttributes = keyValuesToAttributes(message.AgentDescription.IdentifyingAttributes, true)
 		detail.NonIdentifyingAttributes = keyValuesToAttributes(message.AgentDescription.NonIdentifyingAttributes, false)
+		applyAgentDescriptionState(&state, detail.IdentifyingAttributes, detail.NonIdentifyingAttributes)
+		if state.CollectorGroupID != "" {
+			m.instanceGroups[uid] = state.CollectorGroupID
+			groupID = state.CollectorGroupID
+		}
 	}
 	if message.EffectiveConfig != nil {
 		state.EffectiveConfigHash = effectiveConfigHash(message.EffectiveConfig)
@@ -447,6 +464,45 @@ func keyValuesToAttributes(values []*opampproto.KeyValue, identifying bool) []Ag
 		})
 	}
 	return attrs
+}
+
+func applyAgentDescriptionState(state *AgentState, groups ...[]AgentAttribute) {
+	attrs := map[string]string{}
+	for _, group := range groups {
+		for _, attr := range group {
+			if strings.TrimSpace(attr.ValueText) == "" {
+				continue
+			}
+			attrs[attr.Key] = attr.ValueText
+		}
+	}
+	applyAttr := func(target *string, keys ...string) {
+		if value := firstAttr(attrs, keys...); value != "" {
+			*target = value
+		}
+	}
+	applyAttr(&state.ClusterID, "novaobs.cluster.id", "k8s.cluster.name", "k8s.cluster.id")
+	applyAttr(&state.CollectorGroupID, "novaobs.collector.group_id", "collector_group_id")
+	applyAttr(&state.Namespace, "k8s.namespace.name", "novaobs.agent.namespace")
+	applyAttr(&state.AgentNamespace, "novaobs.agent.namespace", "k8s.namespace.name")
+	applyAttr(&state.Hostname, "host.name")
+	applyAttr(&state.PodUID, "k8s.pod.uid")
+	applyAttr(&state.PodName, "k8s.pod.name")
+	applyAttr(&state.NodeName, "k8s.node.name")
+	applyAttr(&state.PodIP, "k8s.pod.ip", "net.host.ip")
+	applyAttr(&state.Version, "service.version")
+	if state.RuntimeIdentity == "" && state.ClusterID != "" && state.CollectorGroupID != "" && state.NodeName != "" {
+		state.RuntimeIdentity = "k8s:" + state.ClusterID + ":" + state.CollectorGroupID + ":" + state.NodeName
+	}
+}
+
+func firstAttr(attrs map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(attrs[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func anyValueToGo(value *opampproto.AnyValue) any {

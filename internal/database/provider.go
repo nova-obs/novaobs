@@ -71,6 +71,7 @@ type CollectorInstanceStore interface {
 	FindAll(ctx context.Context, results interface{}) error
 	FindByGroup(ctx context.Context, groupID string, results interface{}) error
 	FindByUID(ctx context.Context, instanceUID string, result interface{}) error
+	FindByRuntimeIdentity(ctx context.Context, runtimeIdentity string, result interface{}) error
 	Update(ctx context.Context, instanceUID string, instance interface{}) error
 	Delete(ctx context.Context, instanceUID string) error
 }
