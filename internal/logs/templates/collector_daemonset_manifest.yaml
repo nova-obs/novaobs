@@ -135,6 +135,10 @@ spec:
               value: {{ .CollectorGroupID | printf "%q" }}
             - name: NOVAOBS_AGENT_NAMESPACE
               value: {{ .AgentNamespace | printf "%q" }}
+            {{- if .OpAMPEnabled }}
+            - name: NOVAOBS_OPAMP_ENDPOINT
+              value: {{ .OpAMPEndpoint | printf "%q" }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /

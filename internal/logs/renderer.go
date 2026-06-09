@@ -22,6 +22,7 @@ type renderInput struct {
 	Source      LogSource
 	Endpoint    LogEndpoint
 	Route       LogRoute
+	Deployment  agentDeploymentOptions
 }
 
 type renderedRouteConfig struct {
@@ -41,6 +42,8 @@ type k8sDaemonSetBundleTemplateData struct {
 	CollectorConfigBlock string
 	ConfigHash           string
 	RuntimeLogMounts     []k8sRuntimeLogMount
+	OpAMPEnabled         bool
+	OpAMPEndpoint        string
 }
 
 type k8sRuntimeLogMount struct {
@@ -95,6 +98,8 @@ func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
 		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
 		ConfigHash:           yamlQuote("<collector-config-hash>"),
 		RuntimeLogMounts:     k8sRuntimeLogMounts(),
+		OpAMPEnabled:         opAMPEnabled(first.Deployment),
+		OpAMPEndpoint:        strings.TrimSpace(first.Deployment.OpAMPEndpoint),
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -129,6 +134,8 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
 		ConfigHash:           yamlQuote(configHash),
 		RuntimeLogMounts:     k8sRuntimeLogMounts(),
+		OpAMPEnabled:         opAMPEnabled(first.Deployment),
+		OpAMPEndpoint:        strings.TrimSpace(first.Deployment.OpAMPEndpoint),
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -150,12 +157,21 @@ func renderK8sCollectorConfig(inputs []renderInput) string {
 	first := inputs[0]
 	agentNamespace := firstNonEmpty(first.Source.AgentNamespace, "novaobs-system")
 	suffixes := routeComponentSuffixes(inputs)
+	opAMPBlock := ""
+	if opAMPEnabled(first.Deployment) {
+		opAMPBlock = `  opamp:
+    server:
+      ws:
+        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
+`
+	}
 	return fmt.Sprintf(`extensions:
   file_storage/filelog_offsets:
     directory: /var/lib/otelcol/filelog_offsets
     create_directory: true
   health_check:
     endpoint: 0.0.0.0:13133
+%s
 receivers:
 %s
 processors:
@@ -183,7 +199,7 @@ processors:
 exporters:
 %s
 service:
-  extensions: [file_storage/filelog_offsets, health_check]
+  extensions: [%s]
   telemetry:
     resource:
       service.name: novaobs-logs-agent
@@ -204,12 +220,26 @@ service:
                 port: 8888
   pipelines:
 %s`,
+		opAMPBlock,
 		renderK8sReceivers(inputs, suffixes),
 		renderK8sRouteProcessors(inputs, suffixes),
 		renderK8sExporters(inputs),
+		renderServiceExtensions(first.Deployment),
 		yamlQuote(agentNamespace),
 		renderK8sPipelines(inputs, suffixes),
 	)
+}
+
+func renderServiceExtensions(options agentDeploymentOptions) string {
+	extensions := []string{"file_storage/filelog_offsets", "health_check"}
+	if opAMPEnabled(options) {
+		extensions = append(extensions, "opamp")
+	}
+	return strings.Join(extensions, ", ")
+}
+
+func opAMPEnabled(options agentDeploymentOptions) bool {
+	return strings.TrimSpace(options.OpAMPEndpoint) != ""
 }
 
 func renderK8sReceivers(inputs []renderInput, suffixes map[string]string) string {

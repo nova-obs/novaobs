@@ -1185,6 +1185,37 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
 }
 
+func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
+	input := renderInput{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:     SourceTypeK8sStdout,
+			ClusterID:      "test03",
+			Namespace:      "logplatform",
+			WorkloadKind:   "Deployment",
+			WorkloadName:   "utrace-api",
+			AgentNamespace: "novaobs-system",
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-001"},
+	}
+
+	defaultYAML, _ := renderK8sDaemonSetBundle([]renderInput{input})
+	require.NotContains(t, defaultYAML, "opamp:")
+	require.NotContains(t, defaultYAML, "NOVAOBS_OPAMP_ENDPOINT")
+
+	input.Deployment.OpAMPEndpoint = "ws://novaobs.example.com/v1/opamp"
+	enabledYAML, _ := renderK8sDaemonSetBundle([]renderInput{input})
+	collectorYAML, _ := renderK8sCollectorYAML([]renderInput{input})
+
+	require.Contains(t, collectorYAML, "opamp:")
+	require.Contains(t, collectorYAML, "endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}")
+	require.Contains(t, collectorYAML, "service:\n  extensions: [file_storage/filelog_offsets, health_check, opamp]")
+	require.Contains(t, enabledYAML, "NOVAOBS_OPAMP_ENDPOINT")
+	require.Contains(t, enabledYAML, `value: "ws://novaobs.example.com/v1/opamp"`)
+}
+
 func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
