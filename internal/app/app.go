@@ -132,6 +132,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		k8sOpsModule.Cluster,
 		k8sOpsModule.Resource,
 		k8sOpsModule.Deploy,
+		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAOBS_LOGS_AGENT_OPAMP_ENDPOINT")),
 	)
 
 	deps := httpapi.Dependencies{

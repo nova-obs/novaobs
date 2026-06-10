@@ -52,6 +52,19 @@ type Service struct {
 	k8sClusters      K8sClusterService
 	k8sResources     K8sResourceService
 	k8sDeployments   K8sDeploymentService
+	deployment       agentDeploymentOptions
+}
+
+type agentDeploymentOptions struct {
+	OpAMPEndpoint string
+}
+
+type ServiceOption func(*Service)
+
+func WithAgentOpAMPEndpoint(endpoint string) ServiceOption {
+	return func(s *Service) {
+		s.deployment.OpAMPEndpoint = strings.TrimSpace(endpoint)
+	}
 }
 
 func NewService(
@@ -67,8 +80,9 @@ func NewService(
 	k8sClusters K8sClusterService,
 	k8sResources K8sResourceService,
 	k8sDeployments K8sDeploymentService,
+	options ...ServiceOption,
 ) Service {
-	return Service{
+	service := Service{
 		endpoints:        endpoints,
 		sources:          sources,
 		routes:           routes,
@@ -82,6 +96,12 @@ func NewService(
 		k8sResources:     k8sResources,
 		k8sDeployments:   k8sDeployments,
 	}
+	for _, option := range options {
+		if option != nil {
+			option(&service)
+		}
+	}
+	return service
 }
 
 func (s Service) Workspace(ctx context.Context) (Workspace, error) {
@@ -397,6 +417,7 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
+		Deployment:  s.deployment,
 	})
 	if err != nil {
 		return LogRoutePreview{}, err
@@ -516,6 +537,7 @@ func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRo
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
+		Deployment:  s.deployment,
 	})
 	if err != nil {
 		return LogRouteView{}, err
@@ -585,6 +607,7 @@ func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRout
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
 		Route:       route,
+		Deployment:  s.deployment,
 	})
 	if err != nil {
 		return LogRouteView{}, err
@@ -664,6 +687,7 @@ func (s Service) PublishRoute(ctx context.Context, subject platformrbac.Subject,
 			Source:      source,
 			Endpoint:    endpoint,
 			Route:       route,
+			Deployment:  s.deployment,
 		})
 		if err != nil {
 			return PublishRouteResult{}, err
@@ -680,6 +704,7 @@ func (s Service) PublishRoute(ctx context.Context, subject platformrbac.Subject,
 			Source:      source,
 			Endpoint:    endpoint,
 			Route:       route,
+			Deployment:  s.deployment,
 		})
 		if err != nil {
 			return PublishRouteResult{}, err
@@ -1167,6 +1192,7 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 			Source:      *view.Source,
 			Endpoint:    *view.Endpoint,
 			Route:       view.Route,
+			Deployment:  current.Deployment,
 		})
 	}
 	sort.SliceStable(inputs, func(i, j int) bool {
