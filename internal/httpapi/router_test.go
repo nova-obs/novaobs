@@ -170,6 +170,7 @@ func newTestRouter(t *testing.T) testEnv {
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
+		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
 		collectorSvc,

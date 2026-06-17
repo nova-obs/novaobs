@@ -34,6 +34,7 @@ type Store struct {
 	lgcvCol *mongo.Collection
 	lgdvCol *mongo.Collection
 	lgpCol  *mongo.Collection
+	lgccCol *mongo.Collection
 	arCol   *mongo.Collection
 	rrCol   *mongo.Collection
 	rbCol   *mongo.Collection
@@ -82,6 +83,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgcvCol: db.Collection("log_collector_config_versions"),
 		lgdvCol: db.Collection("log_deployment_manifest_versions"),
 		lgpCol:  db.Collection("log_agent_plans"),
+		lgccCol: db.Collection("log_collector_cluster_configs"),
 		arCol:   db.Collection("alert_rules"),
 		rrCol:   db.Collection("rbac_roles"),
 		rbCol:   db.Collection("rbac_bindings"),
@@ -139,6 +141,9 @@ func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVe
 	return &logDeploymentManifestVersionStore{s.lgdvCol}
 }
 func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s.lgpCol} }
+func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
+	return &logCollectorClusterConfigStore{s.lgccCol}
+}
 func (s *Store) AlertRules() database.AlertRuleStore       { return &arStore{s.arCol} }
 func (s *Store) RBACRoles() database.RBACRoleStore         { return &rbacRoleStore{s.rrCol} }
 func (s *Store) RBACBindings() database.RBACBindingStore   { return &rbacBindingStore{s.rbCol} }

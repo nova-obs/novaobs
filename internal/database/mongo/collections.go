@@ -577,6 +577,20 @@ func (s *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, res
 	return cursor.All(ctx, results)
 }
 
+// ---------- LogCollectorClusterConfigStore ----------
+type logCollectorClusterConfigStore struct{ col *mongo.Collection }
+
+func (s *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID string, agentNamespace string, config interface{}) error {
+	id := clusterID + "\x00" + agentNamespace
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, config, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error {
+	id := clusterID + "\x00" + agentNamespace
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
 // ---------- AlertRuleStore ----------
 type arStore struct{ col *mongo.Collection }
 

@@ -126,6 +126,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
+		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		targetRepo,
 		collectorSvc,
