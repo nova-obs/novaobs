@@ -22,6 +22,7 @@ type Store interface {
 	LogCollectorConfigVersions() LogCollectorConfigVersionStore
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
 	LogAgentPlans() LogAgentPlanStore
+	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
 	AlertRules() AlertRuleStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
@@ -163,6 +164,11 @@ type LogAgentPlanStore interface {
 	Insert(ctx context.Context, plan interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
 	FindByRoute(ctx context.Context, routeID string, results interface{}) error
+}
+
+type LogCollectorClusterConfigStore interface {
+	Upsert(ctx context.Context, clusterID string, agentNamespace string, config interface{}) error
+	FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error
 }
 
 // AlertRuleStore manages alert rules.

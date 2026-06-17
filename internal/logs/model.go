@@ -43,12 +43,11 @@ type LogSource struct {
 	AgentNamespace         string            `json:"agent_namespace" bson:"agent_namespace"`
 	WorkloadKind           string            `json:"workload_kind" bson:"workload_kind"`
 	WorkloadName           string            `json:"workload_name" bson:"workload_name"`
-	Container              string            `json:"container" bson:"container"`
-	WorkloadSelector       map[string]string `json:"workload_selector" bson:"workload_selector"`
 	HostGroup              string            `json:"host_group" bson:"host_group"`
 	HostSelector           map[string]string `json:"host_selector" bson:"host_selector"`
 	PathPattern            string            `json:"path_pattern" bson:"path_pattern"`
 	ParseRules             []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
+	OperatorsYAML          string            `json:"operators_yaml" bson:"operators_yaml"`
 	CustomCollectorYAML    string            `json:"custom_collector_yaml" bson:"custom_collector_yaml"`
 	CollectorConfigHash    string            `json:"collector_config_hash" bson:"collector_config_hash"`
 	DeploymentManifestHash string            `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
@@ -78,12 +77,11 @@ type LogDeploymentManifestVersion struct {
 }
 
 type LogParseRule struct {
-	ID       string            `json:"id" bson:"id"`
-	Name     string            `json:"name" bson:"name"`
-	RuleType string            `json:"rule_type" bson:"rule_type"`
-	Pattern  string            `json:"pattern" bson:"pattern"`
-	Fields   map[string]string `json:"fields" bson:"fields"`
-	Enabled  bool              `json:"enabled" bson:"enabled"`
+	ID       string `json:"id" bson:"id"`
+	Name     string `json:"name" bson:"name"`
+	RuleType string `json:"rule_type" bson:"rule_type"`
+	Pattern  string `json:"pattern" bson:"pattern"`
+	Enabled  bool   `json:"enabled" bson:"enabled"`
 }
 
 type ParsePreviewRequest struct {
@@ -140,16 +138,14 @@ type LogAgentPlan struct {
 }
 
 type K8sSourceInput struct {
-	ClusterID        string            `json:"cluster_id"`
-	Namespace        string            `json:"namespace"`
-	AgentNamespace   string            `json:"agent_namespace"`
-	WorkloadKind     string            `json:"workload_kind"`
-	WorkloadName     string            `json:"workload_name"`
-	Container        string            `json:"container"`
-	WorkloadSelector map[string]string `json:"workload_selector"`
-	PathPattern      string            `json:"path_pattern"`
-	ParseRules       []LogParseRule    `json:"parse_rules"`
-	CollectorYAML    string            `json:"collector_yaml"`
+	ClusterID      string         `json:"cluster_id"`
+	Namespace      string         `json:"namespace"`
+	AgentNamespace string         `json:"agent_namespace"`
+	WorkloadKind   string         `json:"workload_kind"`
+	WorkloadName   string         `json:"workload_name"`
+	PathPattern    string         `json:"path_pattern"`
+	ParseRules     []LogParseRule `json:"parse_rules"`
+	OperatorsYAML  string         `json:"operators_yaml"`
 }
 
 type VMSourceInput struct {
@@ -161,13 +157,20 @@ type VMSourceInput struct {
 }
 
 type K8sRouteConfig struct {
-	Namespace        string            `json:"namespace" bson:"namespace"`
-	WorkloadKind     string            `json:"workload_kind" bson:"workload_kind"`
-	WorkloadName     string            `json:"workload_name" bson:"workload_name"`
-	Container        string            `json:"container" bson:"container"`
-	WorkloadSelector map[string]string `json:"workload_selector" bson:"workload_selector"`
-	PathPattern      string            `json:"path_pattern" bson:"path_pattern"`
-	ParseRules       []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
+	Namespace     string         `json:"namespace" bson:"namespace"`
+	WorkloadKind  string         `json:"workload_kind" bson:"workload_kind"`
+	WorkloadName  string         `json:"workload_name" bson:"workload_name"`
+	PathPattern   string         `json:"path_pattern" bson:"path_pattern"`
+	ParseRules    []LogParseRule `json:"parse_rules" bson:"parse_rules"`
+	OperatorsYAML string         `json:"operators_yaml" bson:"operators_yaml"`
+}
+
+type LogCollectorClusterConfig struct {
+	ID             string    `json:"id" bson:"_id"`
+	ClusterID      string    `json:"cluster_id" bson:"cluster_id"`
+	AgentNamespace string    `json:"agent_namespace" bson:"agent_namespace"`
+	ProcessorPatch string    `json:"processor_patch" bson:"processor_patch"`
+	UpdatedAt      time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 type SyncK8sNamespaceRequest struct {

@@ -46,6 +46,7 @@ type Service struct {
 	configVersions   database.LogCollectorConfigVersionStore
 	manifestVersions database.LogDeploymentManifestVersionStore
 	plans            database.LogAgentPlanStore
+	clusterConfigs   database.LogCollectorClusterConfigStore
 	services         servicecatalog.Repository
 	targets          servicecatalog.TargetRepository
 	collectorGroups  collectormanagement.Service
@@ -74,6 +75,7 @@ func NewService(
 	configVersions database.LogCollectorConfigVersionStore,
 	manifestVersions database.LogDeploymentManifestVersionStore,
 	plans database.LogAgentPlanStore,
+	clusterConfigs database.LogCollectorClusterConfigStore,
 	services servicecatalog.Repository,
 	targets servicecatalog.TargetRepository,
 	collectorGroups collectormanagement.Service,
@@ -89,6 +91,7 @@ func NewService(
 		configVersions:   configVersions,
 		manifestVersions: manifestVersions,
 		plans:            plans,
+		clusterConfigs:   clusterConfigs,
 		services:         services,
 		targets:          targets,
 		collectorGroups:  collectorGroups,
@@ -102,6 +105,34 @@ func NewService(
 		}
 	}
 	return service
+}
+
+func (s Service) GetClusterConfig(ctx context.Context, clusterID string, agentNamespace string) (LogCollectorClusterConfig, error) {
+	agentNamespace = firstNonEmpty(strings.TrimSpace(agentNamespace), "novaobs-system")
+	var cfg LogCollectorClusterConfig
+	err := s.clusterConfigs.FindByCluster(ctx, strings.TrimSpace(clusterID), agentNamespace, &cfg)
+	if err != nil {
+		return LogCollectorClusterConfig{ClusterID: clusterID, AgentNamespace: agentNamespace}, nil
+	}
+	return cfg, nil
+}
+
+func (s Service) UpsertClusterConfig(ctx context.Context, clusterID string, agentNamespace string, processorPatch string) (LogCollectorClusterConfig, error) {
+	agentNamespace = firstNonEmpty(strings.TrimSpace(agentNamespace), "novaobs-system")
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return LogCollectorClusterConfig{}, apperr.InvalidRequest("cluster_id 不能为空")
+	}
+	cfg := LogCollectorClusterConfig{
+		ClusterID:      clusterID,
+		AgentNamespace: agentNamespace,
+		ProcessorPatch: strings.TrimSpace(processorPatch),
+		UpdatedAt:      time.Now(),
+	}
+	if err := s.clusterConfigs.Upsert(ctx, clusterID, agentNamespace, cfg); err != nil {
+		return LogCollectorClusterConfig{}, err
+	}
+	return cfg, nil
 }
 
 func (s Service) Workspace(ctx context.Context) (Workspace, error) {
@@ -900,8 +931,10 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
-	if err := validateCollectorYAMLForRoute(req, endpoint); err != nil {
-		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
+	if req.SourceType == SourceTypeVMFile {
+		if err := validateCollectorYAML(req.VM.CollectorYAML, endpoint); err != nil {
+			return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
+		}
 	}
 	source := sourceFromRequest(req)
 	agentGroupID, err := s.resolveAgentGroup(ctx, req.AgentGroupID, source, service, ensureAgentGroup)
@@ -1149,8 +1182,15 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 	if err != nil {
 		return renderedRouteConfig{}, err
 	}
-	rendered := renderK8sDaemonSetBundleWithHashes(inputs)
-	if err := validateK8sCollectorYAMLRuntimeScope(rendered.CollectorYAML); err != nil {
+	processorPatch := ""
+	if s.clusterConfigs != nil {
+		var clusterCfg LogCollectorClusterConfig
+		if err := s.clusterConfigs.FindByCluster(ctx, input.Source.ClusterID, firstNonEmpty(input.Source.AgentNamespace, "novaobs-system"), &clusterCfg); err == nil {
+			processorPatch = clusterCfg.ProcessorPatch
+		}
+	}
+	rendered := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	if err := validateGeneratedK8sCollectorConfig(rendered.CollectorYAML); err != nil {
 		return renderedRouteConfig{}, err
 	}
 	return rendered, nil
@@ -1295,13 +1335,12 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 
 func k8sRouteConfigFromRequest(input K8sSourceInput) *K8sRouteConfig {
 	return &K8sRouteConfig{
-		Namespace:        input.Namespace,
-		WorkloadKind:     input.WorkloadKind,
-		WorkloadName:     input.WorkloadName,
-		Container:        input.Container,
-		WorkloadSelector: copyStringMap(input.WorkloadSelector),
-		PathPattern:      input.PathPattern,
-		ParseRules:       normalizeParseRules(input.ParseRules),
+		Namespace:     input.Namespace,
+		WorkloadKind:  input.WorkloadKind,
+		WorkloadName:  input.WorkloadName,
+		PathPattern:   input.PathPattern,
+		ParseRules:    normalizeParseRules(input.ParseRules),
+		OperatorsYAML: input.OperatorsYAML,
 	}
 }
 
@@ -1313,10 +1352,9 @@ func routeEffectiveSource(route LogRoute, source LogSource) LogSource {
 	out.Namespace = route.K8s.Namespace
 	out.WorkloadKind = route.K8s.WorkloadKind
 	out.WorkloadName = route.K8s.WorkloadName
-	out.Container = route.K8s.Container
-	out.WorkloadSelector = copyStringMap(route.K8s.WorkloadSelector)
 	out.PathPattern = route.K8s.PathPattern
 	out.ParseRules = normalizeParseRules(route.K8s.ParseRules)
+	out.OperatorsYAML = route.K8s.OperatorsYAML
 	out.CustomCollectorYAML = ""
 	return out
 }
@@ -1338,9 +1376,7 @@ func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
 	req.K8s.AgentNamespace = strings.TrimSpace(req.K8s.AgentNamespace)
 	req.K8s.WorkloadKind = strings.TrimSpace(req.K8s.WorkloadKind)
 	req.K8s.WorkloadName = strings.TrimSpace(req.K8s.WorkloadName)
-	req.K8s.Container = strings.TrimSpace(req.K8s.Container)
 	req.K8s.PathPattern = strings.TrimSpace(req.K8s.PathPattern)
-	req.K8s.CollectorYAML = strings.TrimSpace(req.K8s.CollectorYAML)
 	req.K8s.ParseRules = normalizeParseRules(req.K8s.ParseRules)
 	req.VM.HostGroup = strings.TrimSpace(req.VM.HostGroup)
 	req.VM.PathPattern = strings.TrimSpace(req.VM.PathPattern)
@@ -1598,7 +1634,6 @@ func normalizeParseRules(rules []LogParseRule) []LogParseRule {
 		rule.Name = strings.TrimSpace(rule.Name)
 		rule.RuleType = strings.TrimSpace(rule.RuleType)
 		rule.Pattern = strings.TrimSpace(rule.Pattern)
-		rule.Fields = copyStringMap(rule.Fields)
 		if rule.RuleType == "" {
 			rule.RuleType = ParseRuleRegex
 		}
@@ -1631,21 +1666,7 @@ func validateParseRules(rules []LogParseRule) error {
 	return nil
 }
 
-func validateCollectorYAMLForRoute(req UpsertRouteRequest, endpoint LogEndpoint) error {
-	switch req.SourceType {
-	case SourceTypeVMFile:
-		return validateCollectorYAML(req.VM.CollectorYAML, endpoint)
-	case SourceTypeK8sStdout:
-		if strings.TrimSpace(req.K8s.CollectorYAML) != "" {
-			return apperr.InvalidRequest("K8s 日志接入不再接受 route 级 collector_yaml，请使用服务级采集配置，由采集域统一生成 Collector YAML")
-		}
-		return nil
-	default:
-		return nil
-	}
-}
-
-func validateK8sCollectorYAMLRuntimeScope(raw string) error {
+func validateGeneratedK8sCollectorConfig(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -1888,16 +1909,6 @@ func collectorReceivers(root *yaml.Node) map[string]*yaml.Node {
 		}
 		out[strings.TrimSpace(receivers.Content[i].Value)] = receiver
 	}
-	return out
-}
-
-func collectorReceiverIncludes(root *yaml.Node) []string {
-	out := []string{}
-	for _, receiver := range collectorReceivers(root) {
-		includes := yamlMappingValue(receiver, "include")
-		out = append(out, yamlStringValues(includes)...)
-	}
-	sort.Strings(out)
 	return out
 }
 

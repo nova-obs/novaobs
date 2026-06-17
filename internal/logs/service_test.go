@@ -160,35 +160,6 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	require.Empty(t, sources[0].WorkloadName)
 }
 
-func TestCreateK8sRouteRejectsRouteLevelCollectorYAML(t *testing.T) {
-	ctx := context.Background()
-	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	service := fixture.createService(t, "mtu-test")
-	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
-		Name:      "vl-test03",
-		WriteURL:  "http://10.86.11.30:9428/insert/opentelemetry/v1/logs",
-		QueryURL:  "http://10.86.11.30:9428/select/logsql/query",
-		VMUIURL:   "http://10.86.11.30:9428/select/vmui",
-		ClusterID: "test03",
-	})
-	require.NoError(t, err)
-
-	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
-		ServiceID:  service.ID,
-		SourceType: SourceTypeK8sStdout,
-		EndpointID: endpoint.ID,
-		K8s: K8sSourceInput{
-			ClusterID:     "test03",
-			Namespace:     "mtu-test",
-			WorkloadKind:  "DaemonSet",
-			WorkloadName:  "mtu-ds",
-			CollectorYAML: validMultiServiceK8sCollectorYAML(endpoint.WriteURL),
-		},
-	})
-
-	require.ErrorContains(t, err, "K8s 日志接入不再接受 route 级 collector_yaml")
-}
-
 func TestK8sHostPathSourceTypeIsRetired(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -207,59 +178,6 @@ func TestK8sHostPathSourceTypeIsRetired(t *testing.T) {
 	})
 
 	require.ErrorContains(t, err, "日志来源类型只支持 k8s_stdout、vm_file")
-}
-
-func TestPreviewAndUpdateK8sRouteRejectsRouteLevelCollectorYAML(t *testing.T) {
-	ctx := context.Background()
-	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	service := fixture.createService(t, "utrace-api")
-	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
-		Name:      "vl-test03",
-		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
-		QueryURL:  "http://vl.test03:9428/select/logsql/query",
-		VMUIURL:   "http://vl.test03:9428/select/vmui",
-		ClusterID: "test03",
-	})
-	require.NoError(t, err)
-	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
-		ServiceID:  service.ID,
-		SourceType: SourceTypeK8sStdout,
-		EndpointID: endpoint.ID,
-		K8s: K8sSourceInput{
-			ClusterID:    "test03",
-			Namespace:    "logplatform",
-			WorkloadKind: "Deployment",
-			WorkloadName: "utrace-api",
-		},
-	})
-	require.NoError(t, err)
-
-	updateReq := UpsertRouteRequest{
-		RouteID:    route.Route.ID,
-		ServiceID:  service.ID,
-		SourceType: SourceTypeK8sStdout,
-		EndpointID: endpoint.ID,
-		K8s: K8sSourceInput{
-			ClusterID:      "test03",
-			Namespace:      "logplatform",
-			AgentNamespace: "novaobs-system",
-			WorkloadKind:   "Deployment",
-			WorkloadName:   "utrace-api",
-			CollectorYAML:  validK8sCollectorYAML(endpoint.WriteURL, "logplatform", "utrace-api"),
-		},
-	}
-	preview, err := fixture.service.PreviewRoute(ctx, updateReq)
-	require.ErrorContains(t, err, "K8s 日志接入不再接受 route 级 collector_yaml")
-	require.Empty(t, preview.AgentYAML)
-
-	updated, err := fixture.service.UpdateRoute(ctx, route.Route.ID, updateReq)
-	require.ErrorContains(t, err, "K8s 日志接入不再接受 route 级 collector_yaml")
-	require.Empty(t, updated.Route.ID)
-
-	routes, err := fixture.service.ListRoutes(ctx)
-	require.NoError(t, err)
-	require.Len(t, routes, 1)
-	require.Equal(t, route.Route.ID, routes[0].Route.ID)
 }
 
 func TestCreateVMRouteAutoCreatesHostAgentGroup(t *testing.T) {
@@ -516,35 +434,9 @@ func TestValidateCollectorYAMLSupportsMultipleNamedLogsPipelines(t *testing.T) {
 }
 
 func TestK8sCollectorYAMLRejectsGlobalPodLogInclude(t *testing.T) {
-	ctx := context.Background()
-	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	service := fixture.createService(t, "utrace-api")
-	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
-		Name:      "vl-test03",
-		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
-		QueryURL:  "http://vl.test03:9428/select/logsql/query",
-		VMUIURL:   "http://vl.test03:9428/select/vmui",
-		ClusterID: "test03",
-	})
-	require.NoError(t, err)
-	globalIncludeYAML := strings.ReplaceAll(validCollectorYAML(endpoint.WriteURL, ""), "/data/app.log", "/var/log/pods/*_*_*/*/*.log")
+	globalIncludeYAML := strings.ReplaceAll(validCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", ""), "/data/app.log", "/var/log/pods/*_*_*/*/*.log")
 
-	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
-		ServiceID:  service.ID,
-		SourceType: SourceTypeK8sStdout,
-		EndpointID: endpoint.ID,
-		K8s: K8sSourceInput{
-			ClusterID:      "test03",
-			Namespace:      "logplatform",
-			AgentNamespace: "novaobs-system",
-			WorkloadKind:   "Deployment",
-			WorkloadName:   "utrace-api",
-			CollectorYAML:  globalIncludeYAML,
-		},
-	})
-	require.ErrorContains(t, err, "K8s 日志接入不再接受 route 级 collector_yaml")
-
-	err = validateK8sCollectorYAMLRuntimeScope(globalIncludeYAML)
+	err := validateGeneratedK8sCollectorConfig(globalIncludeYAML)
 	require.ErrorContains(t, err, "不能使用全局 Pod 日志路径")
 }
 
@@ -558,11 +450,11 @@ func TestK8sCollectorYAMLRejectsUnsafeNodeLogIncludes(t *testing.T) {
 		"/var/lib/kubelet/pods/*/volumes/*",
 		"/var/lib/docker/containers/*/*.log",
 	} {
-		err := validateK8sCollectorYAMLRuntimeScope(validCollectorYAMLWithInclude("http://vl.test03:9428/insert/opentelemetry/v1/logs", include, ""))
+		err := validateGeneratedK8sCollectorConfig(validCollectorYAMLWithInclude("http://vl.test03:9428/insert/opentelemetry/v1/logs", include, ""))
 		require.Error(t, err, include)
 	}
 
-	err := validateK8sCollectorYAMLRuntimeScope(validK8sCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", "logplatform", "utrace-api"))
+	err := validateGeneratedK8sCollectorConfig(validK8sCollectorYAML("http://vl.test03:9428/insert/opentelemetry/v1/logs", "logplatform", "utrace-api"))
 	require.NoError(t, err)
 }
 
@@ -591,11 +483,11 @@ service:
       processors: [resource/novaobs, batch]
       exporters: [otlp_http/logs_downstream]
 `
-	err := validateK8sCollectorYAMLRuntimeScope(raw)
+	err := validateGeneratedK8sCollectorConfig(raw)
 	require.ErrorContains(t, err, "poll_interval")
 
 	aliasReceiver := strings.Replace(raw, "file_log/novaobs", "filelog/novaobs", 1)
-	err = validateK8sCollectorYAMLRuntimeScope(aliasReceiver)
+	err = validateGeneratedK8sCollectorConfig(aliasReceiver)
 	require.ErrorContains(t, err, "不支持 filelog alias")
 }
 
@@ -1132,9 +1024,9 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 		Route:    LogRoute{ID: "route-001"},
 	}
 
-	rendered := renderK8sDaemonSetBundleWithHashes([]renderInput{input})
+	rendered := renderK8sDaemonSetBundleWithHashes([]renderInput{input}, "")
 	yaml := rendered.ManifestYAML
-	collectorYAML, collectorHash := renderK8sCollectorYAML([]renderInput{input})
+	collectorYAML, collectorHash := renderK8sCollectorConfigWithHash([]renderInput{input})
 
 	require.NotEmpty(t, rendered.DeploymentManifestHash)
 	require.NotEmpty(t, rendered.CollectorConfigHash)
@@ -1207,7 +1099,7 @@ func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
 
 	input.Deployment.OpAMPEndpoint = "ws://novaobs.example.com/v1/opamp"
 	enabledYAML, _ := renderK8sDaemonSetBundle([]renderInput{input})
-	collectorYAML, _ := renderK8sCollectorYAML([]renderInput{input})
+	collectorYAML, _ := renderK8sCollectorConfigWithHash([]renderInput{input})
 
 	require.Contains(t, collectorYAML, "opamp:")
 	require.Contains(t, collectorYAML, "endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}")
@@ -1463,6 +1355,7 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
 		store.LogAgentPlans(),
+		store.LogCollectorClusterConfigs(),
 		repo,
 		targets,
 		collectorSvc,

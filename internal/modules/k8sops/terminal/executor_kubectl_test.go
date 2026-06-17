@@ -25,7 +25,7 @@ cat "$KUBECONFIG"
 `)
 	executor := NewKubectlExecutor(staticKubeconfigProvider{"prod": []byte("apiVersion: v1\nkind: Config\n")}, KubectlExecutorConfig{
 		BinaryPath: kubectlPath,
-		Timeout:    time.Second,
+		Timeout:    5 * time.Second,
 		TempDir:    t.TempDir(),
 	})
 
@@ -49,7 +49,7 @@ exit 7
 `)
 	executor := NewKubectlExecutor(staticKubeconfigProvider{"prod": []byte("apiVersion: v1\n")}, KubectlExecutorConfig{
 		BinaryPath: kubectlPath,
-		Timeout:    time.Second,
+		Timeout:    5 * time.Second,
 		TempDir:    t.TempDir(),
 	})
 

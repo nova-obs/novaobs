@@ -32,6 +32,7 @@ type Store struct {
 	lgcvs map[string]interface{}
 	lgdvs map[string]interface{}
 	lgps  map[string]interface{}
+	lgccs map[string]interface{}
 	ars   map[string]interface{}
 	rrs   map[string]interface{}
 	rbs   map[string]interface{}
@@ -69,6 +70,7 @@ func NewStore() *Store {
 		lgcvs: map[string]interface{}{},
 		lgdvs: map[string]interface{}{},
 		lgps:  map[string]interface{}{},
+		lgccs: map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		rrs:   map[string]interface{}{},
 		rbs:   map[string]interface{}{},
@@ -124,6 +126,9 @@ func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVe
 	return &logDeploymentManifestVersionStore{s}
 }
 func (s *Store) LogAgentPlans() database.LogAgentPlanStore       { return &logAgentPlanStore{s} }
+func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
+	return &logCollectorClusterConfigStore{s}
+}
 func (s *Store) AlertRules() database.AlertRuleStore             { return &arStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore         { return &rbacBindingStore{s} }
@@ -796,6 +801,25 @@ func (st *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, re
 		}
 	}
 	return copyAll(filtered, results)
+}
+
+type logCollectorClusterConfigStore struct{ s *Store }
+
+func (st *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID string, agentNamespace string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.lgccs[clusterID+"\x00"+agentNamespace] = v
+	return nil
+}
+
+func (st *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.lgccs[clusterID+"\x00"+agentNamespace]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
 }
 
 // ---------- Alert Rules ----------

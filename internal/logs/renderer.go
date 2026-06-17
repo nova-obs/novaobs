@@ -58,20 +58,25 @@ func renderAgentConfig(input renderInput) (string, string) {
 	return renderK8sDaemonSetBundle([]renderInput{input})
 }
 
-func renderK8sCollectorYAML(inputs []renderInput) (string, string) {
-	yaml := renderK8sCollectorConfig(inputs)
+func renderK8sCollectorConfigWithHash(inputs []renderInput) (string, string) {
+	yaml := renderK8sCollectorConfig(inputs, "")
+	return yaml, hashYAML(yaml)
+}
+
+func renderK8sCollectorConfigWithPatchHash(inputs []renderInput, processorPatch string) (string, string) {
+	yaml := renderK8sCollectorConfig(inputs, processorPatch)
 	return yaml, hashYAML(yaml)
 }
 
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
-	rendered := renderK8sDaemonSetBundleWithHashes(inputs)
+	rendered := renderK8sDaemonSetBundleWithHashes(inputs, "")
 	return rendered.ManifestYAML, rendered.CollectorConfigHash
 }
 
-func renderK8sDaemonSetBundleWithHashes(inputs []renderInput) renderedRouteConfig {
-	collectorYAML, collectorHash := renderK8sCollectorYAML(inputs)
+func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch string) renderedRouteConfig {
+	collectorYAML, collectorHash := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
 	deploymentManifest := renderK8sDeploymentManifestYAML(inputs)
-	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorHash)
+	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorHash, processorPatch)
 	return renderedRouteConfig{
 		ManifestYAML:           yaml,
 		CollectorYAML:          collectorYAML,
@@ -117,7 +122,7 @@ func renderRouteIDs(inputs []renderInput) []string {
 	return ids
 }
 
-func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) string {
+func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string, processorPatch string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
@@ -125,7 +130,7 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string) strin
 	source := first.Source
 	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
 	agentName := "novaobs-logs-agent"
-	collectorConfig := renderK8sCollectorConfig(inputs)
+	collectorConfig := renderK8sCollectorConfig(inputs, processorPatch)
 	data := k8sDaemonSetBundleTemplateData{
 		AgentNamespace:       agentNamespace,
 		AgentName:            agentName,
@@ -150,12 +155,11 @@ func k8sRuntimeLogMounts() []k8sRuntimeLogMount {
 	}
 }
 
-func renderK8sCollectorConfig(inputs []renderInput) string {
+func renderK8sCollectorConfig(inputs []renderInput, processorPatch string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
 	first := inputs[0]
-	agentNamespace := firstNonEmpty(first.Source.AgentNamespace, "novaobs-system")
 	suffixes := routeComponentSuffixes(inputs)
 	opAMPBlock := ""
 	if opAMPEnabled(first.Deployment) {
@@ -164,6 +168,10 @@ func renderK8sCollectorConfig(inputs []renderInput) string {
       ws:
         endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
 `
+	}
+	patchBlock := ""
+	if trimmed := strings.TrimSpace(processorPatch); trimmed != "" {
+		patchBlock = indentYAMLBlock(trimmed, "  ") + "\n"
 	}
 	return fmt.Sprintf(`extensions:
   file_storage/filelog_offsets:
@@ -195,7 +203,7 @@ processors:
         - k8s.cronjob.name
         - k8s.job.name
 %s
-  batch:
+%s  batch:
 exporters:
 %s
 service:
@@ -203,9 +211,6 @@ service:
   telemetry:
     resource:
       service.name: novaobs-logs-agent
-      novaobs.cluster.id: ${env:NOVAOBS_CLUSTER_ID}
-      novaobs.collector.group_id: ${env:NOVAOBS_COLLECTOR_GROUP_ID}
-      novaobs.agent.namespace: %s
       k8s.pod.uid: ${env:KUBE_POD_UID}
       k8s.pod.name: ${env:KUBE_POD_NAME}
       k8s.node.name: ${env:KUBE_NODE_NAME}
@@ -223,9 +228,9 @@ service:
 		opAMPBlock,
 		renderK8sReceivers(inputs, suffixes),
 		renderK8sRouteProcessors(inputs, suffixes),
+		patchBlock,
 		renderK8sExporters(inputs),
 		renderServiceExtensions(first.Deployment),
-		yamlQuote(agentNamespace),
 		renderK8sPipelines(inputs, suffixes),
 	)
 }
@@ -252,6 +257,10 @@ func renderK8sReceivers(inputs []renderInput, suffixes map[string]string) string
 
 func renderK8sReceiver(input renderInput, suffix string) string {
 	include := k8sStdoutInclude(input.Source)
+	extraOperators := ""
+	if trimmed := strings.TrimSpace(input.Source.OperatorsYAML); trimmed != "" {
+		extraOperators = "\n" + indentYAMLBlock(trimmed, "      ")
+	}
 	return fmt.Sprintf(`  file_log/%s:
     include:
       - %s
@@ -275,7 +284,7 @@ func renderK8sReceiver(input renderInput, suffix string) string {
       max_interval: 30s
       max_elapsed_time: 0
     operators:
-      - type: container`, suffix, yamlQuote(include))
+      - type: container%s`, suffix, yamlQuote(include), extraOperators)
 }
 
 func renderK8sRouteProcessors(inputs []renderInput, suffixes map[string]string) string {
@@ -289,22 +298,7 @@ func renderK8sRouteProcessors(inputs []renderInput, suffixes map[string]string) 
         action: upsert
       - key: deployment.environment
         value: %s
-        action: upsert
-      - key: novaobs.route.id
-        value: %s
-        action: upsert
-      - key: novaobs.cluster.id
-        value: %s
-        action: upsert
-      - key: novaobs.collector.group_id
-        value: %s
-        action: upsert
-      - key: novaobs.agent.namespace
-        value: %s
-        action: upsert
-      - key: novaobs.source.type
-        value: %s
-        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment), yamlQuote(input.Route.ID), yamlQuote(input.Source.ClusterID), yamlQuote(input.Route.AgentGroupID), yamlQuote(firstNonEmpty(input.Source.AgentNamespace, "novaobs-system")), yamlQuote(input.Source.SourceType)))
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment)))
 		if hasEnabledParseRules(input.Source.ParseRules) {
 			lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
 		}
@@ -417,21 +411,6 @@ func shortComponentID(value string) string {
 	return value[:8]
 }
 
-func renderK8sIncludes(inputs []renderInput) string {
-	seen := map[string]bool{}
-	lines := []string{}
-	for _, input := range inputs {
-		include := k8sStdoutInclude(input.Source)
-		if seen[include] {
-			continue
-		}
-		seen[include] = true
-		lines = append(lines, "          - "+yamlQuote(include))
-	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
-}
-
 func k8sStdoutInclude(source LogSource) string {
 	namespace := strings.TrimSpace(source.Namespace)
 	workloadName := strings.TrimSpace(source.WorkloadName)
@@ -442,50 +421,6 @@ func k8sStdoutInclude(source LogSource) string {
 		return fmt.Sprintf("/var/log/pods/%s_*_*/*/*.log", namespace)
 	}
 	return "/var/log/pods/*_*_*/*/*.log"
-}
-
-func renderFilterExpressions(inputs []renderInput) string {
-	seen := map[string]bool{}
-	lines := []string{}
-	for _, input := range inputs {
-		expr := workloadFilterExpression(input.Source)
-		if seen[expr] {
-			continue
-		}
-		seen[expr] = true
-		lines = append(lines, "              - "+yamlQuote(expr))
-	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
-}
-
-func renderTransformStatements(inputs []renderInput) string {
-	lines := []string{}
-	for _, input := range inputs {
-		expr := workloadFilterExpression(input.Source)
-		for _, statement := range []string{
-			fmt.Sprintf(`set(resource.attributes["service.name"], %q) where %s`, input.ServiceName, expr),
-			fmt.Sprintf(`set(resource.attributes["deployment.environment"], %q) where %s`, input.Environment, expr),
-			fmt.Sprintf(`set(resource.attributes["novaobs.route.id"], %q) where %s`, input.Route.ID, expr),
-			fmt.Sprintf(`set(resource.attributes["novaobs.source.type"], %q) where %s`, input.Source.SourceType, expr),
-		} {
-			lines = append(lines, "              - "+yamlQuote(statement))
-		}
-		for _, rule := range input.Source.ParseRules {
-			if !rule.Enabled {
-				continue
-			}
-			switch rule.RuleType {
-			case ParseRuleRegex:
-				lines = append(lines, fmt.Sprintf("              # parse rule: %s", rule.Name))
-				lines = append(lines, "              - "+yamlQuote(fmt.Sprintf(`merge_maps(attributes, ExtractPatterns(body, %q), "upsert") where %s`, rule.Pattern, expr)))
-			case ParseRuleJSON:
-				lines = append(lines, fmt.Sprintf("              # parse rule: %s", rule.Name))
-				lines = append(lines, "              - "+yamlQuote(fmt.Sprintf(`merge_maps(attributes, ParseJSON(body), "upsert") where %s`, expr)))
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
 }
 
 func renderVMFileConfig(input renderInput) (string, string) {
@@ -518,12 +453,6 @@ processors:
       - key: deployment.environment
         value: %s
         action: upsert
-      - key: novaobs.route.id
-        value: %s
-        action: upsert
-      - key: novaobs.host.group
-        value: %s
-        action: upsert
   batch:
 exporters:
 %s
@@ -538,8 +467,6 @@ service:
 		parseProcessor,
 		yamlQuote(input.ServiceName),
 		yamlQuote(input.Environment),
-		yamlQuote(input.Route.ID),
-		yamlQuote(source.HostGroup),
 		exporterYAML,
 		pipelineProcessors,
 		exporterName,
