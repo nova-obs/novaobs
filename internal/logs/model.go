@@ -48,6 +48,7 @@ type LogSource struct {
 	PathPattern            string            `json:"path_pattern" bson:"path_pattern"`
 	ParseRules             []LogParseRule    `json:"parse_rules" bson:"parse_rules"`
 	OperatorsYAML          string            `json:"operators_yaml" bson:"operators_yaml"`
+	CollectorFragmentYAML  string            `json:"collector_fragment_yaml" bson:"collector_fragment_yaml"`
 	CustomCollectorYAML    string            `json:"custom_collector_yaml" bson:"custom_collector_yaml"`
 	CollectorConfigHash    string            `json:"collector_config_hash" bson:"collector_config_hash"`
 	DeploymentManifestHash string            `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
@@ -138,14 +139,15 @@ type LogAgentPlan struct {
 }
 
 type K8sSourceInput struct {
-	ClusterID      string         `json:"cluster_id"`
-	Namespace      string         `json:"namespace"`
-	AgentNamespace string         `json:"agent_namespace"`
-	WorkloadKind   string         `json:"workload_kind"`
-	WorkloadName   string         `json:"workload_name"`
-	PathPattern    string         `json:"path_pattern"`
-	ParseRules     []LogParseRule `json:"parse_rules"`
-	OperatorsYAML  string         `json:"operators_yaml"`
+	ClusterID             string         `json:"cluster_id"`
+	Namespace             string         `json:"namespace"`
+	AgentNamespace        string         `json:"agent_namespace"`
+	WorkloadKind          string         `json:"workload_kind"`
+	WorkloadName          string         `json:"workload_name"`
+	PathPattern           string         `json:"path_pattern"`
+	ParseRules            []LogParseRule `json:"parse_rules"`
+	OperatorsYAML         string         `json:"operators_yaml"`
+	CollectorFragmentYAML string         `json:"collector_fragment_yaml"`
 }
 
 type VMSourceInput struct {
@@ -157,12 +159,13 @@ type VMSourceInput struct {
 }
 
 type K8sRouteConfig struct {
-	Namespace     string         `json:"namespace" bson:"namespace"`
-	WorkloadKind  string         `json:"workload_kind" bson:"workload_kind"`
-	WorkloadName  string         `json:"workload_name" bson:"workload_name"`
-	PathPattern   string         `json:"path_pattern" bson:"path_pattern"`
-	ParseRules    []LogParseRule `json:"parse_rules" bson:"parse_rules"`
-	OperatorsYAML string         `json:"operators_yaml" bson:"operators_yaml"`
+	Namespace             string         `json:"namespace" bson:"namespace"`
+	WorkloadKind          string         `json:"workload_kind" bson:"workload_kind"`
+	WorkloadName          string         `json:"workload_name" bson:"workload_name"`
+	PathPattern           string         `json:"path_pattern" bson:"path_pattern"`
+	ParseRules            []LogParseRule `json:"parse_rules" bson:"parse_rules"`
+	OperatorsYAML         string         `json:"operators_yaml" bson:"operators_yaml"`
+	CollectorFragmentYAML string         `json:"collector_fragment_yaml" bson:"collector_fragment_yaml"`
 }
 
 type LogCollectorClusterConfig struct {
@@ -279,6 +282,7 @@ type LogRoutePreview struct {
 	Source                 LogSource   `json:"source"`
 	Endpoint               LogEndpoint `json:"endpoint"`
 	AgentYAML              string      `json:"agent_yaml"`
+	CollectorYAML          string      `json:"collector_yaml"`
 	CollectorConfigHash    string      `json:"collector_config_hash"`
 	DeploymentManifestHash string      `json:"deployment_manifest_hash"`
 	Mode                   string      `json:"mode"`

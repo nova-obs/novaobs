@@ -463,6 +463,7 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 		Source:                 effectiveSource,
 		Endpoint:               endpoint,
 		AgentYAML:              rendered.ManifestYAML,
+		CollectorYAML:          rendered.CollectorYAML,
 		CollectorConfigHash:    rendered.CollectorConfigHash,
 		DeploymentManifestHash: rendered.DeploymentManifestHash,
 		Mode:                   previewMode(source),
@@ -1189,7 +1190,10 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 			processorPatch = clusterCfg.ProcessorPatch
 		}
 	}
-	rendered := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	rendered, err := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	if err != nil {
+		return renderedRouteConfig{}, apperr.InvalidRequest(err.Error())
+	}
 	if err := validateGeneratedK8sCollectorConfig(rendered.CollectorYAML); err != nil {
 		return renderedRouteConfig{}, err
 	}
@@ -1335,12 +1339,13 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 
 func k8sRouteConfigFromRequest(input K8sSourceInput) *K8sRouteConfig {
 	return &K8sRouteConfig{
-		Namespace:     input.Namespace,
-		WorkloadKind:  input.WorkloadKind,
-		WorkloadName:  input.WorkloadName,
-		PathPattern:   input.PathPattern,
-		ParseRules:    normalizeParseRules(input.ParseRules),
-		OperatorsYAML: input.OperatorsYAML,
+		Namespace:             input.Namespace,
+		WorkloadKind:          input.WorkloadKind,
+		WorkloadName:          input.WorkloadName,
+		PathPattern:           input.PathPattern,
+		ParseRules:            normalizeParseRules(input.ParseRules),
+		OperatorsYAML:         input.OperatorsYAML,
+		CollectorFragmentYAML: input.CollectorFragmentYAML,
 	}
 }
 
@@ -1355,6 +1360,7 @@ func routeEffectiveSource(route LogRoute, source LogSource) LogSource {
 	out.PathPattern = route.K8s.PathPattern
 	out.ParseRules = normalizeParseRules(route.K8s.ParseRules)
 	out.OperatorsYAML = route.K8s.OperatorsYAML
+	out.CollectorFragmentYAML = route.K8s.CollectorFragmentYAML
 	out.CustomCollectorYAML = ""
 	return out
 }
@@ -1377,6 +1383,7 @@ func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
 	req.K8s.WorkloadKind = strings.TrimSpace(req.K8s.WorkloadKind)
 	req.K8s.WorkloadName = strings.TrimSpace(req.K8s.WorkloadName)
 	req.K8s.PathPattern = strings.TrimSpace(req.K8s.PathPattern)
+	req.K8s.CollectorFragmentYAML = strings.TrimSpace(req.K8s.CollectorFragmentYAML)
 	req.K8s.ParseRules = normalizeParseRules(req.K8s.ParseRules)
 	req.VM.HostGroup = strings.TrimSpace(req.VM.HostGroup)
 	req.VM.PathPattern = strings.TrimSpace(req.VM.PathPattern)
