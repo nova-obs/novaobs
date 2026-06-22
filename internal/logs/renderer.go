@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed templates/collector_daemonset_manifest.yaml
@@ -59,24 +61,36 @@ func renderAgentConfig(input renderInput) (string, string) {
 }
 
 func renderK8sCollectorConfigWithHash(inputs []renderInput) (string, string) {
-	yaml := renderK8sCollectorConfig(inputs, "")
+	yaml, err := renderK8sCollectorConfig(inputs, "")
+	if err != nil {
+		return "", ""
+	}
 	return yaml, hashYAML(yaml)
 }
 
-func renderK8sCollectorConfigWithPatchHash(inputs []renderInput, processorPatch string) (string, string) {
-	yaml := renderK8sCollectorConfig(inputs, processorPatch)
-	return yaml, hashYAML(yaml)
+func renderK8sCollectorConfigWithPatchHash(inputs []renderInput, processorPatch string) (string, string, error) {
+	yaml, err := renderK8sCollectorConfig(inputs, processorPatch)
+	if err != nil {
+		return "", "", err
+	}
+	return yaml, hashYAML(yaml), nil
 }
 
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
-	rendered := renderK8sDaemonSetBundleWithHashes(inputs, "")
+	rendered, err := renderK8sDaemonSetBundleWithHashes(inputs, "")
+	if err != nil {
+		return "", ""
+	}
 	return rendered.ManifestYAML, rendered.CollectorConfigHash
 }
 
-func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch string) renderedRouteConfig {
-	collectorYAML, collectorHash := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
+func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch string) (renderedRouteConfig, error) {
+	collectorYAML, collectorHash, err := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
+	if err != nil {
+		return renderedRouteConfig{}, err
+	}
 	deploymentManifest := renderK8sDeploymentManifestYAML(inputs)
-	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorHash, processorPatch)
+	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorYAML, collectorHash)
 	return renderedRouteConfig{
 		ManifestYAML:           yaml,
 		CollectorYAML:          collectorYAML,
@@ -84,7 +98,7 @@ func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch str
 		DeploymentManifestYAML: deploymentManifest,
 		DeploymentManifestHash: hashYAML(deploymentManifest),
 		RouteIDs:               renderRouteIDs(inputs),
-	}
+	}, nil
 }
 
 func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
@@ -122,7 +136,7 @@ func renderRouteIDs(inputs []renderInput) []string {
 	return ids
 }
 
-func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string, processorPatch string) string {
+func renderK8sDaemonSetBundleYAML(inputs []renderInput, collectorConfig string, configHash string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
@@ -130,7 +144,6 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, configHash string, proce
 	source := first.Source
 	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
 	agentName := "novaobs-logs-agent"
-	collectorConfig := renderK8sCollectorConfig(inputs, processorPatch)
 	data := k8sDaemonSetBundleTemplateData{
 		AgentNamespace:       agentNamespace,
 		AgentName:            agentName,
@@ -155,12 +168,16 @@ func k8sRuntimeLogMounts() []k8sRuntimeLogMount {
 	}
 }
 
-func renderK8sCollectorConfig(inputs []renderInput, processorPatch string) string {
+func renderK8sCollectorConfig(inputs []renderInput, processorPatch string) (string, error) {
 	if len(inputs) == 0 {
-		return ""
+		return "", nil
 	}
 	first := inputs[0]
 	suffixes := routeComponentSuffixes(inputs)
+	fragmentBundle, err := collectK8sRouteFragments(inputs, suffixes)
+	if err != nil {
+		return "", err
+	}
 	opAMPBlock := ""
 	if opAMPEnabled(first.Deployment) {
 		opAMPBlock = `  opamp:
@@ -226,13 +243,13 @@ service:
   pipelines:
 %s`,
 		opAMPBlock,
-		renderK8sReceivers(inputs, suffixes),
-		renderK8sRouteProcessors(inputs, suffixes),
+		indentYAMLBlock(fragmentBundle.receivers, "  "),
+		indentYAMLBlock(fragmentBundle.processors, "  "),
 		patchBlock,
-		renderK8sExporters(inputs),
+		indentYAMLBlock(fragmentBundle.exporters, "  "),
 		renderServiceExtensions(first.Deployment),
-		renderK8sPipelines(inputs, suffixes),
-	)
+		indentYAMLBlock(fragmentBundle.pipelines, "    "),
+	), nil
 }
 
 func renderServiceExtensions(options agentDeploymentOptions) string {
@@ -287,21 +304,180 @@ func renderK8sReceiver(input renderInput, suffix string) string {
       - type: container%s`, suffix, yamlQuote(include), extraOperators)
 }
 
+type k8sRouteFragmentBundle struct {
+	receivers  string
+	processors string
+	exporters  string
+	pipelines  string
+}
+
+type k8sRouteFragmentSections struct {
+	receivers  map[string]string
+	processors map[string]string
+	exporters  map[string]string
+	pipelines  map[string]string
+}
+
+func collectK8sRouteFragments(inputs []renderInput, suffixes map[string]string) (k8sRouteFragmentBundle, error) {
+	merged := k8sRouteFragmentSections{
+		receivers:  map[string]string{},
+		processors: map[string]string{},
+		exporters:  map[string]string{},
+		pipelines:  map[string]string{},
+	}
+	for _, input := range inputs {
+		suffix := suffixForInput(input, suffixes)
+		fragment := strings.TrimSpace(input.Source.CollectorFragmentYAML)
+		if fragment == "" {
+			fragment = renderDefaultK8sRouteFragment(input, suffix)
+		} else if input.Endpoint.SinkType == EndpointSinkVL && input.Endpoint.AccountID != "" {
+			root, err := parseCollectorYAML(fragment)
+			if err != nil {
+				return k8sRouteFragmentBundle{}, fmt.Errorf("collector fragment 必须是合法 YAML: %w", err)
+			}
+			if err := validateVictoriaLogsCollectorTenant(yamlMappingValue(root, "exporters"), input.Endpoint); err != nil {
+				return k8sRouteFragmentBundle{}, err
+			}
+		}
+		sections, err := parseK8sRouteFragment(fragment)
+		if err != nil {
+			return k8sRouteFragmentBundle{}, err
+		}
+		mergeFragmentMap(merged.receivers, sections.receivers)
+		mergeFragmentMap(merged.processors, sections.processors)
+		mergeFragmentMap(merged.exporters, sections.exporters)
+		mergeFragmentMap(merged.pipelines, sections.pipelines)
+	}
+	return k8sRouteFragmentBundle{
+		receivers:  renderFragmentMap(merged.receivers),
+		processors: renderFragmentMap(merged.processors),
+		exporters:  renderFragmentMap(merged.exporters),
+		pipelines:  renderFragmentMap(merged.pipelines),
+	}, nil
+}
+
+func renderDefaultK8sRouteFragment(input renderInput, suffix string) string {
+	return strings.Join([]string{
+		"receivers:",
+		indentYAMLBlock(renderK8sReceiver(input, suffix), "  "),
+		"processors:",
+		indentYAMLBlock(renderK8sRouteProcessor(input, suffix), "  "),
+		"exporters:",
+		indentYAMLBlock(renderDownstreamExporterYAML(input.Endpoint, downstreamExporterName(input.Endpoint)), "  "),
+		"service:",
+		"  pipelines:",
+		indentYAMLBlock(renderK8sPipeline(input, suffix), "    "),
+	}, "\n")
+}
+
+func parseK8sRouteFragment(raw string) (k8sRouteFragmentSections, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return k8sRouteFragmentSections{}, fmt.Errorf("collector fragment 必须是合法 YAML: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return k8sRouteFragmentSections{}, fmt.Errorf("collector fragment root 必须是 YAML mapping")
+	}
+	root := doc.Content[0]
+	sections := k8sRouteFragmentSections{
+		receivers:  yamlSectionEntries(root, "receivers"),
+		processors: yamlSectionEntries(root, "processors"),
+		exporters:  yamlSectionEntries(root, "exporters"),
+		pipelines:  yamlSectionEntries(root, "service", "pipelines"),
+	}
+	for _, name := range []string{"memory_limiter", "k8s_attributes", "batch"} {
+		if _, ok := sections.processors[name]; ok {
+			return k8sRouteFragmentSections{}, fmt.Errorf("collector fragment 不能定义公共 processor %q，请只编辑业务 route 片段", name)
+		}
+	}
+	if len(sections.receivers) == 0 || len(sections.pipelines) == 0 {
+		return k8sRouteFragmentSections{}, fmt.Errorf("collector fragment 必须包含 receivers 和 service.pipelines")
+	}
+	return sections, nil
+}
+
+func yamlSectionEntries(root *yaml.Node, path ...string) map[string]string {
+	node := yamlNestedMapping(root, path...)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return map[string]string{}
+	}
+	out := map[string]string{}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		value := node.Content[i+1]
+		pair := yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{key, value}}
+		rendered, err := yaml.Marshal(&pair)
+		if err != nil {
+			continue
+		}
+		out[strings.TrimSpace(key.Value)] = strings.TrimSpace(string(rendered))
+	}
+	return out
+}
+
+func yamlNestedMapping(root *yaml.Node, path ...string) *yaml.Node {
+	current := root
+	for _, key := range path {
+		if current == nil || current.Kind != yaml.MappingNode {
+			return nil
+		}
+		var next *yaml.Node
+		for i := 0; i+1 < len(current.Content); i += 2 {
+			if current.Content[i].Value == key {
+				next = current.Content[i+1]
+				break
+			}
+		}
+		current = next
+	}
+	if current == nil || current.Kind != yaml.MappingNode {
+		return nil
+	}
+	return current
+}
+
+func mergeFragmentMap(dst map[string]string, src map[string]string) {
+	for key, value := range src {
+		if key == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		dst[key] = value
+	}
+}
+
+func renderFragmentMap(items map[string]string) string {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, items[key])
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderK8sRouteProcessors(inputs []renderInput, suffixes map[string]string) string {
 	lines := []string{}
 	for _, input := range inputs {
 		suffix := suffixForInput(input, suffixes)
-		lines = append(lines, fmt.Sprintf(`  resource/%s:
+		lines = append(lines, renderK8sRouteProcessor(input, suffix))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderK8sRouteProcessor(input renderInput, suffix string) string {
+	lines := []string{fmt.Sprintf(`  resource/%s:
     attributes:
       - key: service.name
         value: %s
         action: upsert
       - key: deployment.environment
         value: %s
-        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment)))
-		if hasEnabledParseRules(input.Source.ParseRules) {
-			lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
-		}
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment))}
+	if hasEnabledParseRules(input.Source.ParseRules) {
+		lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -357,17 +533,21 @@ func renderK8sPipelines(inputs []renderInput, suffixes map[string]string) string
 	lines := []string{}
 	for _, input := range inputs {
 		suffix := suffixForInput(input, suffixes)
-		processors := []string{"memory_limiter", "k8s_attributes", "resource/" + suffix}
-		if hasEnabledParseRules(input.Source.ParseRules) {
-			processors = append(processors, "transform/"+suffix)
-		}
-		processors = append(processors, "batch")
-		lines = append(lines, fmt.Sprintf(`    logs/%s:
-      receivers: [file_log/%s]
-      processors: [%s]
-      exporters: [%s]`, suffix, suffix, strings.Join(processors, ", "), downstreamExporterName(input.Endpoint)))
+		lines = append(lines, renderK8sPipeline(input, suffix))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderK8sPipeline(input renderInput, suffix string) string {
+	processors := []string{"memory_limiter", "k8s_attributes", "resource/" + suffix}
+	if hasEnabledParseRules(input.Source.ParseRules) {
+		processors = append(processors, "transform/"+suffix)
+	}
+	processors = append(processors, "batch")
+	return fmt.Sprintf(`    logs/%s:
+      receivers: [file_log/%s]
+      processors: [%s]
+      exporters: [%s]`, suffix, suffix, strings.Join(processors, ", "), downstreamExporterName(input.Endpoint))
 }
 
 func routeComponentSuffix(input renderInput) string {
@@ -520,10 +700,18 @@ func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 		lines = append(lines, "    topic: "+yamlQuote(topic))
 		return strings.Join(lines, "\n")
 	default:
-		return strings.Join([]string{
+		lines := []string{
 			"  " + name + ":",
 			"    logs_endpoint: " + yamlQuote(endpoint.WriteURL),
-		}, "\n")
+		}
+		if endpoint.AccountID != "" && endpoint.ProjectID != "" {
+			lines = append(lines,
+				"    headers:",
+				"      AccountID: "+yamlQuote(endpoint.AccountID),
+				"      ProjectID: "+yamlQuote(endpoint.ProjectID),
+			)
+		}
+		return strings.Join(lines, "\n")
 	}
 }
 

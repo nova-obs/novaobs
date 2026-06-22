@@ -81,6 +81,43 @@ func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, endpoint.ID, preview.Endpoint.ID)
 	require.Contains(t, preview.AgentYAML, "logs_endpoint: \"http://vl.test03:9428/insert/opentelemetry/v1/logs\"")
+	require.Contains(t, preview.CollectorYAML, "receivers:")
+	require.Contains(t, preview.CollectorYAML, "file_log/logplatform-utrace-api")
+	require.NotContains(t, preview.CollectorYAML, "kind: DaemonSet")
+}
+
+func TestPreviewRouteRejectsRouteFragmentWithPlatformProcessor(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	_, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+	fragment := strings.Replace(
+		validK8sRouteFragment("custom-route", "http://vl.test03:9428/insert/opentelemetry/v1/logs"),
+		"processors:\n  resource/custom-route:",
+		"processors:\n  memory_limiter:\n    check_interval: 1s\n  resource/custom-route:",
+		1,
+	)
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		K8s: K8sSourceInput{
+			ClusterID:             "test03",
+			Namespace:             "logplatform",
+			WorkloadKind:          "Deployment",
+			WorkloadName:          "utrace-api",
+			CollectorFragmentYAML: fragment,
+		},
+	})
+
+	require.ErrorContains(t, err, `collector fragment 不能定义公共 processor "memory_limiter"`)
 }
 
 func TestCreateVLEndpointRejectsRootWriteURL(t *testing.T) {
@@ -293,6 +330,64 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 		ScopeType: EndpointScopeVM,
 	})
 	require.ErrorContains(t, err, "Kafka 下游端点必须填写 topic")
+}
+
+func TestCreateVictoriaLogsEndpointPersistsTenantAndRendersHeaders(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-tenant-9527",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:   "http://vl.prod:9428/select/vmui/",
+		AccountID: "9527",
+		ProjectID: "9527",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "9527", endpoint.AccountID)
+	require.Equal(t, "9527", endpoint.ProjectID)
+	rendered := renderDownstreamExporterYAML(endpoint, "otlp_http/logs_downstream")
+	require.Contains(t, rendered, "headers:")
+	require.Contains(t, rendered, `AccountID: "9527"`)
+	require.Contains(t, rendered, `ProjectID: "9527"`)
+}
+
+func TestCreateVictoriaLogsEndpointValidatesTenantPair(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	base := LogEndpoint{
+		Name:      "vl-invalid-tenant",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:   "http://vl.prod:9428/select/vmui/",
+		AccountID: "9527",
+	}
+
+	_, err := fixture.service.CreateEndpoint(ctx, base)
+	require.ErrorContains(t, err, "AccountID 和 ProjectID 必须同时填写")
+
+	base.ProjectID = "4294967296"
+	_, err = fixture.service.CreateEndpoint(ctx, base)
+	require.ErrorContains(t, err, "ProjectID 必须是 uint32")
+}
+
+func TestVictoriaLogsTenantCannotBeBypassedByCustomCollectorYAML(t *testing.T) {
+	endpoint := LogEndpoint{
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		AccountID: "9527",
+		ProjectID: "9527",
+	}
+
+	err := validateCollectorYAML(validCollectorYAML(endpoint.WriteURL, ""), endpoint)
+	require.ErrorContains(t, err, "必须携带匹配的 AccountID 和 ProjectID")
+
+	raw := validCollectorYAML(endpoint.WriteURL, "    headers:\n      AccountID: \"9527\"\n      ProjectID: \"9527\"\n")
+	require.NoError(t, validateCollectorYAML(raw, endpoint))
 }
 
 func TestUpdateEndpointKeepsIDAndValidatesUniqueness(t *testing.T) {
@@ -1024,7 +1119,8 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 		Route:    LogRoute{ID: "route-001"},
 	}
 
-	rendered := renderK8sDaemonSetBundleWithHashes([]renderInput{input}, "")
+	rendered, err := renderK8sDaemonSetBundleWithHashes([]renderInput{input}, "")
+	require.NoError(t, err)
 	yaml := rendered.ManifestYAML
 	collectorYAML, collectorHash := renderK8sCollectorConfigWithHash([]renderInput{input})
 
@@ -1075,6 +1171,34 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, "NOVAOBS_COLLECTOR_GROUP_ID")
 	require.Contains(t, yaml, `novaobs.io/config-hash: "`)
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
+}
+
+func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
+	input := renderInput{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:            SourceTypeK8sStdout,
+			ClusterID:             "test03",
+			Namespace:             "logplatform",
+			WorkloadKind:          "Deployment",
+			WorkloadName:          "utrace-api",
+			CollectorFragmentYAML: validK8sRouteFragment("custom-route", "http://vl.test03:9428/insert/opentelemetry/v1/logs"),
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-custom"},
+	}
+
+	rendered, err := renderK8sDaemonSetBundleWithHashes([]renderInput{input}, "")
+	require.NoError(t, err)
+
+	require.Contains(t, rendered.CollectorYAML, "file_log/custom-route")
+	require.Contains(t, rendered.CollectorYAML, "resource/custom-route")
+	require.Contains(t, rendered.CollectorYAML, "logs/custom-route")
+	require.Contains(t, rendered.CollectorYAML, "manual.fragment")
+	require.NotContains(t, rendered.CollectorYAML, "file_log/logplatform-utrace-api")
+	require.Contains(t, rendered.ManifestYAML, "collector.yaml: |")
+	require.Contains(t, rendered.ManifestYAML, "file_log/custom-route")
 }
 
 func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
@@ -1416,6 +1540,42 @@ func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGrou
 
 func validCollectorYAML(writeURL string, exporterExtras string) string {
 	return validCollectorYAMLWithInclude(writeURL, "/data/app.log", exporterExtras)
+}
+
+func validK8sRouteFragment(name string, writeURL string) string {
+	return fmt.Sprintf(`receivers:
+  file_log/%s:
+    include:
+      - "/var/log/pods/logplatform_utrace-api*_*/*/*.log"
+    exclude:
+      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+    poll_interval: 10s
+    max_concurrent_files: 64
+    max_batches: 2
+    max_log_size: 1MiB
+    file_cache_advise: true
+    include_file_path: true
+    include_file_name: false
+    start_at: end
+    storage: file_storage/filelog_offsets
+    operators:
+      - type: container
+processors:
+  resource/%s:
+    attributes:
+      - key: manual.fragment
+        value: "true"
+        action: upsert
+exporters:
+  otlp_http/%s:
+    logs_endpoint: %q
+service:
+  pipelines:
+    logs/%s:
+      receivers: [file_log/%s]
+      processors: [memory_limiter, k8s_attributes, resource/%s, batch]
+      exporters: [otlp_http/%s]
+`, name, name, name, writeURL, name, name, name, name)
 }
 
 func validK8sCollectorYAML(writeURL string, namespace string, workload string) string {

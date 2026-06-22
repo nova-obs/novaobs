@@ -203,39 +203,6 @@ func publishLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
-func getLogsClusterConfigHandler(service logs.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		clusterID := strings.TrimSpace(ctx.Query("cluster_id"))
-		agentNamespace := strings.TrimSpace(ctx.Query("agent_namespace"))
-		cfg, err := service.GetClusterConfig(ctx.Request.Context(), clusterID, agentNamespace)
-		if err != nil {
-			writeError(ctx, err)
-			return
-		}
-		response.OK(ctx, cfg, gin.H{})
-	}
-}
-
-func upsertLogsClusterConfigHandler(service logs.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		var body struct {
-			ClusterID      string `json:"cluster_id"`
-			AgentNamespace string `json:"agent_namespace"`
-			ProcessorPatch string `json:"processor_patch"`
-		}
-		if err := ctx.ShouldBindJSON(&body); err != nil {
-			response.Error(ctx, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
-		cfg, err := service.UpsertClusterConfig(ctx.Request.Context(), body.ClusterID, body.AgentNamespace, body.ProcessorPatch)
-		if err != nil {
-			writeError(ctx, err)
-			return
-		}
-		response.OK(ctx, cfg, gin.H{})
-	}
-}
-
 func writeLogsError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, k8sopscluster.ErrClusterReadOnly):

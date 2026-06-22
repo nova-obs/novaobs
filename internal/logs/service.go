@@ -463,6 +463,7 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 		Source:                 effectiveSource,
 		Endpoint:               endpoint,
 		AgentYAML:              rendered.ManifestYAML,
+		CollectorYAML:          rendered.CollectorYAML,
 		CollectorConfigHash:    rendered.CollectorConfigHash,
 		DeploymentManifestHash: rendered.DeploymentManifestHash,
 		Mode:                   previewMode(source),
@@ -1189,7 +1190,10 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 			processorPatch = clusterCfg.ProcessorPatch
 		}
 	}
-	rendered := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	rendered, err := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	if err != nil {
+		return renderedRouteConfig{}, apperr.InvalidRequest(err.Error())
+	}
 	if err := validateGeneratedK8sCollectorConfig(rendered.CollectorYAML); err != nil {
 		return renderedRouteConfig{}, err
 	}
@@ -1335,12 +1339,13 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 
 func k8sRouteConfigFromRequest(input K8sSourceInput) *K8sRouteConfig {
 	return &K8sRouteConfig{
-		Namespace:     input.Namespace,
-		WorkloadKind:  input.WorkloadKind,
-		WorkloadName:  input.WorkloadName,
-		PathPattern:   input.PathPattern,
-		ParseRules:    normalizeParseRules(input.ParseRules),
-		OperatorsYAML: input.OperatorsYAML,
+		Namespace:             input.Namespace,
+		WorkloadKind:          input.WorkloadKind,
+		WorkloadName:          input.WorkloadName,
+		PathPattern:           input.PathPattern,
+		ParseRules:            normalizeParseRules(input.ParseRules),
+		OperatorsYAML:         input.OperatorsYAML,
+		CollectorFragmentYAML: input.CollectorFragmentYAML,
 	}
 }
 
@@ -1355,6 +1360,7 @@ func routeEffectiveSource(route LogRoute, source LogSource) LogSource {
 	out.PathPattern = route.K8s.PathPattern
 	out.ParseRules = normalizeParseRules(route.K8s.ParseRules)
 	out.OperatorsYAML = route.K8s.OperatorsYAML
+	out.CollectorFragmentYAML = route.K8s.CollectorFragmentYAML
 	out.CustomCollectorYAML = ""
 	return out
 }
@@ -1377,6 +1383,7 @@ func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
 	req.K8s.WorkloadKind = strings.TrimSpace(req.K8s.WorkloadKind)
 	req.K8s.WorkloadName = strings.TrimSpace(req.K8s.WorkloadName)
 	req.K8s.PathPattern = strings.TrimSpace(req.K8s.PathPattern)
+	req.K8s.CollectorFragmentYAML = strings.TrimSpace(req.K8s.CollectorFragmentYAML)
 	req.K8s.ParseRules = normalizeParseRules(req.K8s.ParseRules)
 	req.VM.HostGroup = strings.TrimSpace(req.VM.HostGroup)
 	req.VM.PathPattern = strings.TrimSpace(req.VM.PathPattern)
@@ -1426,6 +1433,8 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.WriteURL = strings.TrimSpace(endpoint.WriteURL)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
 	endpoint.VMUIURL = strings.TrimSpace(endpoint.VMUIURL)
+	endpoint.AccountID = strings.TrimSpace(endpoint.AccountID)
+	endpoint.ProjectID = strings.TrimSpace(endpoint.ProjectID)
 	endpoint.SecretRef = strings.TrimSpace(endpoint.SecretRef)
 	endpoint.ScopeType = strings.TrimSpace(endpoint.ScopeType)
 	endpoint.ClusterID = strings.TrimSpace(endpoint.ClusterID)
@@ -1439,6 +1448,10 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	}
 	if endpoint.SinkType == "" {
 		endpoint.SinkType = EndpointSinkVL
+	}
+	if endpoint.SinkType != EndpointSinkVL {
+		endpoint.AccountID = ""
+		endpoint.ProjectID = ""
 	}
 	return endpoint
 }
@@ -1463,6 +1476,9 @@ func validateEndpoint(endpoint LogEndpoint) error {
 				return err
 			}
 		}
+		if err := validateVictoriaLogsTenant(endpoint.AccountID, endpoint.ProjectID); err != nil {
+			return err
+		}
 	case EndpointSinkES:
 		if err := validateHTTPURL(endpoint.WriteURL, "ES 下游端点写入地址"); err != nil {
 			return err
@@ -1481,6 +1497,25 @@ func validateEndpoint(endpoint LogEndpoint) error {
 		}
 		if err := validateKafkaBrokers(endpoint.WriteURL); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateVictoriaLogsTenant(accountID string, projectID string) error {
+	if (accountID == "") != (projectID == "") {
+		return apperr.InvalidRequest("VictoriaLogs AccountID 和 ProjectID 必须同时填写")
+	}
+	for _, item := range []struct {
+		name  string
+		value string
+	}{{"AccountID", accountID}, {"ProjectID", projectID}} {
+		name, value := item.name, item.value
+		if value == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(value, 10, 32); err != nil {
+			return apperr.InvalidRequest("VictoriaLogs " + name + " 必须是 uint32")
 		}
 	}
 	return nil
@@ -1809,10 +1844,47 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 	if !collectorExporterTargetsMatch(endpoints, endpoint) {
 		return apperr.InvalidRequest("collector_yaml exporter 写入地址必须与当前日志下游端点一致")
 	}
+	if err := validateVictoriaLogsCollectorTenant(exporters, endpoint); err != nil {
+		return err
+	}
 	if containsSecretLikeKey(root) {
 		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
 	}
 	return nil
+}
+
+func validateVictoriaLogsCollectorTenant(exporters *yaml.Node, endpoint LogEndpoint) error {
+	if endpoint.SinkType != EndpointSinkVL || endpoint.AccountID == "" {
+		return nil
+	}
+	if !collectorExporterTenantMatches(exporters, endpoint) {
+		return apperr.InvalidRequest("VictoriaLogs collector_yaml 必须携带匹配的 AccountID 和 ProjectID")
+	}
+	return nil
+}
+
+func collectorExporterTenantMatches(exporters *yaml.Node, endpoint LogEndpoint) bool {
+	for i := 0; i+1 < len(exporters.Content); i += 2 {
+		exporter := exporters.Content[i+1]
+		if exporter.Kind != yaml.MappingNode || !yamlNodeContainsString(yamlMappingValue(exporter, "logs_endpoint"), endpoint.WriteURL) {
+			continue
+		}
+		headers := yamlMappingValue(exporter, "headers")
+		if yamlScalarValue(yamlMappingValue(headers, "AccountID")) == endpoint.AccountID &&
+			yamlScalarValue(yamlMappingValue(headers, "ProjectID")) == endpoint.ProjectID {
+			return true
+		}
+	}
+	return false
+}
+
+func yamlNodeContainsString(node *yaml.Node, expected string) bool {
+	for _, value := range yamlStringValues(node) {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func collectorHasLogsPipeline(root *yaml.Node) bool {
