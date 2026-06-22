@@ -584,7 +584,7 @@ func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
 
 func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 	env := newTestRouter(t)
-	endpointBody := `{"name":"vl-prod","sink_type":"vl","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	endpointBody := `{"name":"vl-prod","sink_type":"vl","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","account_id":"9527","project_id":"9527","secret_ref":"secret://vl/prod","scope_type":"global"}`
 	createRecorder := httptest.NewRecorder()
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
 	createRequest.Header.Set("Content-Type", "application/json")
@@ -595,8 +595,10 @@ func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 		Data logs.LogEndpoint `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
+	require.Equal(t, "9527", created.Data.AccountID)
+	require.Equal(t, "9527", created.Data.ProjectID)
 
-	updateBody := `{"name":"vl-prod-fixed","sink_type":"vl","write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs-fixed:9428/select/logsql/query","vmui_url":"http://victorialogs-fixed:9428/select/vmui","secret_ref":"secret://vl/prod","scope_type":"global"}`
+	updateBody := `{"name":"vl-prod-fixed","sink_type":"vl","write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs-fixed:9428/select/logsql/query","vmui_url":"http://victorialogs-fixed:9428/select/vmui","account_id":"9528","project_id":"9529","secret_ref":"secret://vl/prod","scope_type":"global"}`
 	updateRecorder := httptest.NewRecorder()
 	updateRequest := httptest.NewRequest(http.MethodPatch, "/api/v1/logs/endpoints/"+created.Data.ID, bytes.NewBufferString(updateBody))
 	updateRequest.Header.Set("Content-Type", "application/json")
@@ -606,6 +608,23 @@ func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 	require.Contains(t, updateRecorder.Body.String(), `"id":"`+created.Data.ID+`"`)
 	require.Contains(t, updateRecorder.Body.String(), `"name":"vl-prod-fixed"`)
 	require.Contains(t, updateRecorder.Body.String(), `"write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs"`)
+	require.Contains(t, updateRecorder.Body.String(), `"account_id":"9528"`)
+	require.Contains(t, updateRecorder.Body.String(), `"project_id":"9529"`)
+}
+
+func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {
+	env := newTestRouter(t)
+
+	getRecorder := httptest.NewRecorder()
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/logs/cluster-config?cluster_id=test03&agent_namespace=novaobs-system", nil)
+	env.router.ServeHTTP(getRecorder, getRequest)
+	require.Equal(t, http.StatusNotFound, getRecorder.Code)
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/logs/cluster-config", bytes.NewBufferString(`{"cluster_id":"test03","agent_namespace":"novaobs-system","processor_patch":"processors: {}"}`))
+	putRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(putRecorder, putRequest)
+	require.Equal(t, http.StatusNotFound, putRecorder.Code)
 }
 
 func TestRouterSoftDeletesServiceWithoutBlockingDependencies(t *testing.T) {

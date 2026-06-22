@@ -330,6 +330,14 @@ func collectK8sRouteFragments(inputs []renderInput, suffixes map[string]string) 
 		fragment := strings.TrimSpace(input.Source.CollectorFragmentYAML)
 		if fragment == "" {
 			fragment = renderDefaultK8sRouteFragment(input, suffix)
+		} else if input.Endpoint.SinkType == EndpointSinkVL && input.Endpoint.AccountID != "" {
+			root, err := parseCollectorYAML(fragment)
+			if err != nil {
+				return k8sRouteFragmentBundle{}, fmt.Errorf("collector fragment 必须是合法 YAML: %w", err)
+			}
+			if err := validateVictoriaLogsCollectorTenant(yamlMappingValue(root, "exporters"), input.Endpoint); err != nil {
+				return k8sRouteFragmentBundle{}, err
+			}
 		}
 		sections, err := parseK8sRouteFragment(fragment)
 		if err != nil {
@@ -692,10 +700,18 @@ func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 		lines = append(lines, "    topic: "+yamlQuote(topic))
 		return strings.Join(lines, "\n")
 	default:
-		return strings.Join([]string{
+		lines := []string{
 			"  " + name + ":",
 			"    logs_endpoint: " + yamlQuote(endpoint.WriteURL),
-		}, "\n")
+		}
+		if endpoint.AccountID != "" && endpoint.ProjectID != "" {
+			lines = append(lines,
+				"    headers:",
+				"      AccountID: "+yamlQuote(endpoint.AccountID),
+				"      ProjectID: "+yamlQuote(endpoint.ProjectID),
+			)
+		}
+		return strings.Join(lines, "\n")
 	}
 }
 

@@ -332,6 +332,64 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 	require.ErrorContains(t, err, "Kafka 下游端点必须填写 topic")
 }
 
+func TestCreateVictoriaLogsEndpointPersistsTenantAndRendersHeaders(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-tenant-9527",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:   "http://vl.prod:9428/select/vmui/",
+		AccountID: "9527",
+		ProjectID: "9527",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "9527", endpoint.AccountID)
+	require.Equal(t, "9527", endpoint.ProjectID)
+	rendered := renderDownstreamExporterYAML(endpoint, "otlp_http/logs_downstream")
+	require.Contains(t, rendered, "headers:")
+	require.Contains(t, rendered, `AccountID: "9527"`)
+	require.Contains(t, rendered, `ProjectID: "9527"`)
+}
+
+func TestCreateVictoriaLogsEndpointValidatesTenantPair(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	base := LogEndpoint{
+		Name:      "vl-invalid-tenant",
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.prod:9428/select/logsql/query",
+		VMUIURL:   "http://vl.prod:9428/select/vmui/",
+		AccountID: "9527",
+	}
+
+	_, err := fixture.service.CreateEndpoint(ctx, base)
+	require.ErrorContains(t, err, "AccountID 和 ProjectID 必须同时填写")
+
+	base.ProjectID = "4294967296"
+	_, err = fixture.service.CreateEndpoint(ctx, base)
+	require.ErrorContains(t, err, "ProjectID 必须是 uint32")
+}
+
+func TestVictoriaLogsTenantCannotBeBypassedByCustomCollectorYAML(t *testing.T) {
+	endpoint := LogEndpoint{
+		SinkType:  EndpointSinkVL,
+		WriteURL:  "http://vl.prod:9428/insert/opentelemetry/v1/logs",
+		AccountID: "9527",
+		ProjectID: "9527",
+	}
+
+	err := validateCollectorYAML(validCollectorYAML(endpoint.WriteURL, ""), endpoint)
+	require.ErrorContains(t, err, "必须携带匹配的 AccountID 和 ProjectID")
+
+	raw := validCollectorYAML(endpoint.WriteURL, "    headers:\n      AccountID: \"9527\"\n      ProjectID: \"9527\"\n")
+	require.NoError(t, validateCollectorYAML(raw, endpoint))
+}
+
 func TestUpdateEndpointKeepsIDAndValidatesUniqueness(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))

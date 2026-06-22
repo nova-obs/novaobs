@@ -27,6 +27,8 @@ type LogEndpoint struct {
 	WriteURL    string    `json:"write_url" bson:"write_url"`
 	QueryURL    string    `json:"query_url" bson:"query_url"`
 	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
+	AccountID   string    `json:"account_id" bson:"account_id"`
+	ProjectID   string    `json:"project_id" bson:"project_id"`
 	SecretRef   string    `json:"secret_ref" bson:"secret_ref"`
 	ScopeType   string    `json:"scope_type" bson:"scope_type"`
 	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
