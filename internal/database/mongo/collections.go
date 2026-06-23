@@ -4,6 +4,9 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"time"
+
+	"novaobs/internal/database"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -591,22 +594,342 @@ func (s *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clus
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
 }
 
-// ---------- AlertRuleStore ----------
-type arStore struct{ col *mongo.Collection }
+// ---------- Alerting Repository ----------
 
-func (s *arStore) Insert(ctx context.Context, rule interface{}) error {
-	_, err := s.col.InsertOne(ctx, rule)
+type alertingStore struct {
+	client      *mongo.Client
+	rules       *mongo.Collection
+	updates     *mongo.Collection
+	deployments *mongo.Collection
+	artifacts   *mongo.Collection
+	instances   *mongo.Collection
+	events      *mongo.Collection
+	policies    *mongo.Collection
+	audits      *mongo.Collection
+}
+
+func (s *alertingStore) SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error {
+	session, err := s.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
+		if expectedCurrentUpdateID == "" {
+			if _, err := s.rules.InsertOne(tx, rule); err != nil {
+				if mongo.IsDuplicateKeyError(err) {
+					return nil, database.ErrConflict
+				}
+				return nil, err
+			}
+		} else {
+			ruleID := reflect.Indirect(reflect.ValueOf(rule)).FieldByName("ID").String()
+			result, err := s.rules.ReplaceOne(tx, bson.M{
+				"_id":               ruleID,
+				"current_update_id": expectedCurrentUpdateID,
+			}, rule)
+			if err != nil {
+				if mongo.IsDuplicateKeyError(err) {
+					return nil, database.ErrConflict
+				}
+				return nil, err
+			}
+			if result.MatchedCount == 0 {
+				return nil, database.ErrConflict
+			}
+		}
+		if _, err := s.updates.InsertOne(tx, update); err != nil {
+			return nil, err
+		}
+		if _, err := s.deployments.InsertOne(tx, deployment); err != nil {
+			return nil, err
+		}
+		if _, err := s.audits.InsertOne(tx, auditEvent); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
 	return err
 }
-func (s *arStore) FindAll(ctx context.Context, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+
+func (s *alertingStore) FindRules(ctx context.Context, serviceID string, state string, results interface{}) error {
+	query := bson.M{"spec.scope.service_id": bson.M{"$exists": true}}
+	if serviceID != "" {
+		query["spec.scope.service_id"] = serviceID
+	}
+	if state != "" {
+		query["state"] = state
+	}
+	cursor, err := s.rules.Find(ctx, query, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
 	if err != nil {
 		return err
 	}
 	return cursor.All(ctx, results)
 }
-func (s *arStore) Count(ctx context.Context) (int64, error) {
-	return s.col.CountDocuments(ctx, bson.M{})
+
+func (s *alertingStore) FindRuleByID(ctx context.Context, id string, result interface{}) error {
+	if err := s.rules.FindOne(ctx, bson.M{"_id": id}).Decode(result); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return database.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *alertingStore) FindUpdate(ctx context.Context, ruleID string, updateID string, result interface{}) error {
+	if err := s.updates.FindOne(ctx, bson.M{"_id": updateID, "rule_id": ruleID}).Decode(result); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return database.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *alertingStore) FindUpdates(ctx context.Context, ruleID string, limit int, results interface{}) error {
+	cursor, err := s.updates.Find(ctx, bson.M{"rule_id": ruleID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(int64(limit)))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *alertingStore) FindDeployments(ctx context.Context, ruleID string, status string, limit int, results interface{}) error {
+	query := bson.M{}
+	if ruleID != "" {
+		query["rule_id"] = ruleID
+	}
+	if status != "" {
+		query["status"] = status
+	}
+	find := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
+	if limit > 0 {
+		find.SetLimit(int64(limit))
+	}
+	cursor, err := s.deployments.Find(ctx, query, find)
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *alertingStore) ClaimDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error {
+	filter := bson.M{
+		"runtime_id": runtimeID,
+		"status":     bson.M{"$in": []string{"pending", "failed"}},
+		"attempt":    bson.M{"$lt": 5},
+		"$and": []bson.M{
+			{"$or": []bson.M{{"lease_expires_at": bson.M{"$exists": false}}, {"lease_expires_at": bson.M{"$lte": now}}}},
+			{"$or": []bson.M{{"next_attempt_at": bson.M{"$exists": false}}, {"next_attempt_at": bson.M{"$lte": now}}}},
+		},
+	}
+	update := bson.M{"$set": bson.M{
+		"status":           "validating",
+		"lease_owner":      workerID,
+		"lease_expires_at": now.Add(lease),
+		"updated_at":       now,
+	}}
+	err := s.deployments.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().
+		SetSort(bson.D{{Key: "created_at", Value: 1}}).
+		SetReturnDocument(options.After)).Decode(result)
+	if err == mongo.ErrNoDocuments {
+		return database.ErrNotFound
+	}
+	return err
+}
+
+func (s *alertingStore) FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error {
+	cursor, err := s.rules.Find(ctx, bson.M{"spec.scope.endpoint_id": runtimeID}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *alertingStore) CompleteDeployment(ctx context.Context, deployment interface{}, artifact interface{}) error {
+	deploymentDocument, err := toBSONMap(deployment)
+	if err != nil {
+		return err
+	}
+	deploymentID := deploymentDocument["_id"]
+	ruleID, _ := deploymentDocument["rule_id"].(string)
+	updateID, _ := deploymentDocument["update_id"].(string)
+	status, _ := deploymentDocument["status"].(string)
+	artifactDocument, err := toBSONMap(artifact)
+	if err != nil {
+		return err
+	}
+	session, err := s.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
+		result, err := s.deployments.ReplaceOne(tx, bson.M{"_id": deploymentID}, deployment)
+		if err != nil {
+			return nil, err
+		}
+		if result.MatchedCount == 0 {
+			return nil, database.ErrNotFound
+		}
+		if artifactID := artifactDocument["_id"]; artifactID != nil && artifactID != "" {
+			if _, err := s.artifacts.ReplaceOne(tx, bson.M{"_id": artifactID}, artifact, options.Replace().SetUpsert(true)); err != nil {
+				return nil, err
+			}
+		}
+		ruleUpdate := bson.M{}
+		if status == "applied" {
+			ruleUpdate = bson.M{"applied_update_id": updateID, "apply_status": "applied"}
+		} else if status == "failed" {
+			ruleUpdate = bson.M{"apply_status": "failed"}
+		}
+		if len(ruleUpdate) > 0 {
+			if _, err := s.rules.UpdateOne(tx, bson.M{"_id": ruleID, "current_update_id": updateID}, bson.M{"$set": ruleUpdate}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+	return err
+}
+
+func (s *alertingStore) ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error {
+	instanceDocument, err := toBSONMap(instance)
+	if err != nil {
+		return err
+	}
+	eventDocument, err := toBSONMap(event)
+	if err != nil {
+		return err
+	}
+	fingerprint := instanceDocument["_id"]
+	session, err := s.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
+		var previous bson.M
+		if err := s.instances.FindOne(tx, bson.M{"_id": fingerprint}).Decode(&previous); err == nil {
+			eventDocument["previous_state"] = previous["state"]
+		} else if err != mongo.ErrNoDocuments {
+			return nil, err
+		}
+		if _, err := s.events.InsertOne(tx, eventDocument); err != nil && !mongo.IsDuplicateKeyError(err) {
+			return nil, err
+		}
+		if _, err := s.instances.ReplaceOne(tx, bson.M{"_id": fingerprint}, instance, options.Replace().SetUpsert(true)); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	return err
+}
+
+func (s *alertingStore) FindAlertInstances(ctx context.Context, ruleID string, serviceID string, state string, limit int, results interface{}) error {
+	query := bson.M{}
+	if ruleID != "" {
+		query["rule_id"] = ruleID
+	}
+	if serviceID != "" {
+		query["service_id"] = serviceID
+	}
+	if state != "" {
+		query["state"] = state
+	}
+	find := options.Find().SetSort(bson.D{{Key: "last_received_at", Value: -1}})
+	if limit > 0 {
+		find.SetLimit(int64(limit))
+	}
+	cursor, err := s.instances.Find(ctx, query, find)
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *alertingStore) FindAlertEvents(ctx context.Context, ruleID string, fingerprint string, limit int, results interface{}) error {
+	query := bson.M{}
+	if ruleID != "" {
+		query["rule_id"] = ruleID
+	}
+	if fingerprint != "" {
+		query["fingerprint"] = fingerprint
+	}
+	find := options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}})
+	if limit > 0 {
+		find.SetLimit(int64(limit))
+	}
+	cursor, err := s.events.Find(ctx, query, find)
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *alertingStore) SaveNotificationPolicy(ctx context.Context, expectedUpdatedAt time.Time, policy interface{}, auditEvent interface{}) error {
+	policyDocument, err := toBSONMap(policy)
+	if err != nil {
+		return err
+	}
+	policyID := policyDocument["_id"]
+	session, err := s.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
+		if expectedUpdatedAt.IsZero() {
+			if _, err := s.policies.InsertOne(tx, policy); err != nil {
+				if mongo.IsDuplicateKeyError(err) {
+					return nil, database.ErrConflict
+				}
+				return nil, err
+			}
+		} else {
+			result, err := s.policies.ReplaceOne(tx, bson.M{"_id": policyID, "updated_at": expectedUpdatedAt}, policy)
+			if err != nil {
+				if mongo.IsDuplicateKeyError(err) {
+					return nil, database.ErrConflict
+				}
+				return nil, err
+			}
+			if result.MatchedCount == 0 {
+				return nil, database.ErrConflict
+			}
+		}
+		if _, err := s.audits.InsertOne(tx, auditEvent); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	return err
+}
+
+func (s *alertingStore) FindNotificationPolicyByID(ctx context.Context, id string, result interface{}) error {
+	if err := s.policies.FindOne(ctx, bson.M{"_id": id}).Decode(result); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return database.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *alertingStore) FindNotificationPolicies(ctx context.Context, serviceID string, enabledOnly bool, results interface{}) error {
+	query := bson.M{}
+	if serviceID != "" {
+		query["$or"] = []bson.M{{"service_id": serviceID}, {"service_id": ""}, {"service_id": bson.M{"$exists": false}}}
+	}
+	if enabledOnly {
+		query["enabled"] = true
+	}
+	cursor, err := s.policies.Find(ctx, query, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
 }
 
 // ---------- RBAC Stores ----------

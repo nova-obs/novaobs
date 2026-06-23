@@ -1,11 +1,13 @@
 package httpapi
 
 import (
-	"strings"
+	"context"
 
 	"novaobs/internal/alerting"
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/logs"
+	"novaobs/internal/platform/authctx"
+	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
 	"novaobs/pkg/response"
@@ -47,7 +49,8 @@ func getServiceObservabilityGraphHandler(deps Dependencies) gin.HandlerFunc {
 			writeError(ctx, err)
 			return
 		}
-		rules, err := serviceGraphAlertRules(deps.AlertService, service)
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		rules, err := serviceGraphAlertRules(ctx.Request.Context(), subject, deps.AlertService, service)
 		if err != nil {
 			writeError(ctx, err)
 			return
@@ -109,8 +112,8 @@ func serviceGraphLogRoutes(service logs.Service, serviceID string) (serviceGraph
 	return serviceGraphLogRoutesSummary{Total: len(routes), Routes: routes}, nil
 }
 
-func serviceGraphAlertRules(alertService alerting.Service, service servicecatalog.Service) ([]alerting.Rule, error) {
-	rules, err := alertService.List(bg)
+func serviceGraphAlertRules(ctx context.Context, subject platformrbac.Subject, alertService alerting.Service, service servicecatalog.Service) ([]alerting.Rule, error) {
+	rules, err := alertService.List(ctx, subject, alerting.RuleFilter{ServiceID: service.ID})
 	if err != nil {
 		return nil, err
 	}
@@ -124,9 +127,5 @@ func serviceGraphAlertRules(alertService alerting.Service, service servicecatalo
 }
 
 func alertRuleMatchesService(rule alerting.Rule, service servicecatalog.Service) bool {
-	query := strings.ToLower(rule.Query)
-	return strings.EqualFold(rule.OwnerTeam, service.OwnerTeam) ||
-		strings.EqualFold(rule.AlertRoute, service.AlertRoute) ||
-		strings.Contains(query, strings.ToLower(service.Name)) ||
-		strings.Contains(query, strings.ToLower(service.DisplayName))
+	return rule.Spec.Scope.ServiceID == service.ID
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"novaobs/internal/database"
 )
@@ -34,6 +35,12 @@ type Store struct {
 	lgps  map[string]interface{}
 	lgccs map[string]interface{}
 	ars   map[string]interface{}
+	arus  map[string]interface{}
+	ards  map[string]interface{}
+	arts  map[string]interface{}
+	aris  map[string]interface{}
+	ares  map[string]interface{}
+	arps  map[string]interface{}
 	rrs   map[string]interface{}
 	rbs   map[string]interface{}
 	pss   map[string]interface{}
@@ -72,6 +79,12 @@ func NewStore() *Store {
 		lgps:  map[string]interface{}{},
 		lgccs: map[string]interface{}{},
 		ars:   map[string]interface{}{},
+		arus:  map[string]interface{}{},
+		ards:  map[string]interface{}{},
+		arts:  map[string]interface{}{},
+		aris:  map[string]interface{}{},
+		ares:  map[string]interface{}{},
+		arps:  map[string]interface{}{},
 		rrs:   map[string]interface{}{},
 		rbs:   map[string]interface{}{},
 		pss:   map[string]interface{}{},
@@ -125,11 +138,11 @@ func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionS
 func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
 	return &logDeploymentManifestVersionStore{s}
 }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore       { return &logAgentPlanStore{s} }
+func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s} }
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s}
 }
-func (s *Store) AlertRules() database.AlertRuleStore             { return &arStore{s} }
+func (s *Store) Alerting() database.AlertingStore                { return &alertingStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore         { return &rbacBindingStore{s} }
 func (s *Store) PlatformSubjects() database.PlatformSubjectStore { return &platformSubjectStore{s} }
@@ -822,29 +835,428 @@ func (st *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clu
 	return copyValue(value, result)
 }
 
-// ---------- Alert Rules ----------
+// ---------- Alerting ----------
 
-type arStore struct{ s *Store }
+type alertingStore struct{ s *Store }
 
-func (st *arStore) Insert(ctx context.Context, v interface{}) error {
+func (st *alertingStore) SaveChange(_ context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
-	id := extractID(v)
-	if id == "" {
-		id = newID()
+	ruleID := extractID(rule)
+	if expectedCurrentUpdateID == "" {
+		if _, exists := st.s.ars[ruleID]; exists {
+			return database.ErrConflict
+		}
+		var candidate struct {
+			Spec struct {
+				Name  string `json:"name"`
+				Scope struct {
+					ServiceID string `json:"service_id"`
+				} `json:"scope"`
+			} `json:"spec"`
+		}
+		if err := copyValue(rule, &candidate); err != nil {
+			return err
+		}
+		for _, existing := range st.s.ars {
+			var index struct {
+				Spec struct {
+					Name  string `json:"name"`
+					Scope struct {
+						ServiceID string `json:"service_id"`
+					} `json:"scope"`
+				} `json:"spec"`
+			}
+			if err := copyValue(existing, &index); err != nil {
+				return err
+			}
+			if index.Spec.Scope.ServiceID == candidate.Spec.Scope.ServiceID && index.Spec.Name == candidate.Spec.Name {
+				return database.ErrConflict
+			}
+		}
+	} else {
+		stored, exists := st.s.ars[ruleID]
+		if !exists {
+			return database.ErrNotFound
+		}
+		var current struct {
+			CurrentUpdateID string `json:"current_update_id"`
+		}
+		if err := copyValue(stored, &current); err != nil {
+			return err
+		}
+		if current.CurrentUpdateID != expectedCurrentUpdateID {
+			return database.ErrConflict
+		}
 	}
-	st.s.ars[id] = v
+	st.s.ars[ruleID] = rule
+	st.s.arus[extractID(update)] = update
+	st.s.ards[extractID(deployment)] = deployment
+	st.s.aes[extractID(auditEvent)] = auditEvent
 	return nil
 }
-func (st *arStore) FindAll(ctx context.Context, results interface{}) error {
+
+func (st *alertingStore) FindRules(_ context.Context, serviceID string, state string, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
-	return copyAll(st.s.ars, results)
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.ars {
+		var index struct {
+			State string `json:"state"`
+			Spec  struct {
+				Scope struct {
+					ServiceID string `json:"service_id"`
+				} `json:"scope"`
+			} `json:"spec"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if serviceID != "" && index.Spec.Scope.ServiceID != serviceID {
+			continue
+		}
+		if state != "" && index.State != state {
+			continue
+		}
+		filtered[id] = raw
+	}
+	return copyAll(filtered, results)
 }
-func (st *arStore) Count(ctx context.Context) (int64, error) {
+
+func (st *alertingStore) FindRuleByID(_ context.Context, id string, result interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
-	return int64(len(st.s.ars)), nil
+	raw, ok := st.s.ars[id]
+	if !ok {
+		return database.ErrNotFound
+	}
+	return copyValue(raw, result)
+}
+
+func (st *alertingStore) FindUpdate(_ context.Context, ruleID string, updateID string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	raw, ok := st.s.arus[updateID]
+	if !ok {
+		return database.ErrNotFound
+	}
+	var index struct {
+		RuleID string `json:"rule_id"`
+	}
+	if err := copyValue(raw, &index); err != nil {
+		return err
+	}
+	if index.RuleID != ruleID {
+		return database.ErrNotFound
+	}
+	return copyValue(raw, result)
+}
+
+func (st *alertingStore) FindUpdates(_ context.Context, ruleID string, _ int, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.arus {
+		var index struct {
+			RuleID string `json:"rule_id"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if index.RuleID == ruleID {
+			filtered[id] = raw
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *alertingStore) FindDeployments(_ context.Context, ruleID string, status string, _ int, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.ards {
+		var index struct {
+			RuleID string `json:"rule_id"`
+			Status string `json:"status"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if ruleID != "" && index.RuleID != ruleID {
+			continue
+		}
+		if status != "" && index.Status != status {
+			continue
+		}
+		filtered[id] = raw
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *alertingStore) ClaimDeployment(_ context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	var selectedID string
+	var selectedCreatedAt time.Time
+	for id, raw := range st.s.ards {
+		var index struct {
+			RuntimeID      string    `json:"runtime_id"`
+			Status         string    `json:"status"`
+			Attempt        int       `json:"attempt"`
+			LeaseExpiresAt time.Time `json:"lease_expires_at"`
+			NextAttemptAt  time.Time `json:"next_attempt_at"`
+			CreatedAt      time.Time `json:"created_at"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if index.RuntimeID != runtimeID || (index.Status != "pending" && index.Status != "failed") {
+			continue
+		}
+		if index.Attempt >= 5 || index.LeaseExpiresAt.After(now) || index.NextAttemptAt.After(now) {
+			continue
+		}
+		if selectedID == "" || index.CreatedAt.Before(selectedCreatedAt) {
+			selectedID, selectedCreatedAt = id, index.CreatedAt
+		}
+	}
+	if selectedID == "" {
+		return database.ErrNotFound
+	}
+	document, err := documentMap(st.s.ards[selectedID])
+	if err != nil {
+		return err
+	}
+	document["status"] = "validating"
+	document["lease_owner"] = workerID
+	document["lease_expires_at"] = now.Add(lease)
+	document["updated_at"] = now
+	st.s.ards[selectedID] = document
+	return copyValue(document, result)
+}
+
+func (st *alertingStore) FindRuntimeRules(_ context.Context, runtimeID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.ars {
+		var index struct {
+			Spec struct {
+				Scope struct {
+					EndpointID string `json:"endpoint_id"`
+				} `json:"scope"`
+			} `json:"spec"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if index.Spec.Scope.EndpointID == runtimeID {
+			filtered[id] = raw
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *alertingStore) CompleteDeployment(_ context.Context, deployment interface{}, artifact interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	deploymentID := extractID(deployment)
+	if _, exists := st.s.ards[deploymentID]; !exists {
+		return database.ErrNotFound
+	}
+	st.s.ards[deploymentID] = deployment
+	if artifactID := extractID(artifact); artifactID != "" {
+		st.s.arts[artifactID] = artifact
+	}
+	var completed struct {
+		RuleID              string `json:"rule_id"`
+		UpdateID            string `json:"update_id"`
+		Status              string `json:"status"`
+		AppliedArtifactHash string `json:"applied_artifact_hash"`
+	}
+	if err := copyValue(deployment, &completed); err != nil {
+		return err
+	}
+	rawRule, exists := st.s.ars[completed.RuleID]
+	if !exists {
+		return database.ErrNotFound
+	}
+	rule, err := documentMap(rawRule)
+	if err != nil {
+		return err
+	}
+	if rule["current_update_id"] == completed.UpdateID {
+		if completed.Status == "applied" {
+			rule["applied_update_id"] = completed.UpdateID
+			rule["apply_status"] = "applied"
+		} else if completed.Status == "failed" {
+			rule["apply_status"] = "failed"
+		}
+		st.s.ars[completed.RuleID] = rule
+	}
+	return nil
+}
+
+func documentMap(value interface{}) (map[string]interface{}, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	document := map[string]interface{}{}
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return nil, err
+	}
+	return document, nil
+}
+
+func (st *alertingStore) ApplyAlertEvent(_ context.Context, instance interface{}, event interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	fingerprint := extractStringField(instance, "Fingerprint")
+	eventID := extractID(event)
+	if fingerprint == "" || eventID == "" {
+		return database.ErrConflict
+	}
+	if _, exists := st.s.ares[eventID]; !exists {
+		eventDocument, err := documentMap(event)
+		if err != nil {
+			return err
+		}
+		if previous, ok := st.s.aris[fingerprint]; ok {
+			var state struct {
+				State string `json:"state"`
+			}
+			if err := copyValue(previous, &state); err != nil {
+				return err
+			}
+			eventDocument["previous_state"] = state.State
+		}
+		st.s.ares[eventID] = eventDocument
+	}
+	st.s.aris[fingerprint] = instance
+	return nil
+}
+
+func (st *alertingStore) FindAlertInstances(_ context.Context, ruleID string, serviceID string, state string, _ int, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.aris {
+		var index struct {
+			RuleID    string `json:"rule_id"`
+			ServiceID string `json:"service_id"`
+			State     string `json:"state"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if (ruleID == "" || index.RuleID == ruleID) && (serviceID == "" || index.ServiceID == serviceID) && (state == "" || index.State == state) {
+			filtered[id] = raw
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *alertingStore) FindAlertEvents(_ context.Context, ruleID string, fingerprint string, _ int, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.ares {
+		var index struct {
+			RuleID      string `json:"rule_id"`
+			Fingerprint string `json:"fingerprint"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if (ruleID == "" || index.RuleID == ruleID) && (fingerprint == "" || index.Fingerprint == fingerprint) {
+			filtered[id] = raw
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *alertingStore) SaveNotificationPolicy(_ context.Context, expectedUpdatedAt time.Time, policy interface{}, auditEvent interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	policyID := extractID(policy)
+	var candidate struct {
+		Name      string `json:"name"`
+		ServiceID string `json:"service_id"`
+	}
+	if err := copyValue(policy, &candidate); err != nil {
+		return err
+	}
+	current, exists := st.s.arps[policyID]
+	if expectedUpdatedAt.IsZero() {
+		if exists {
+			return database.ErrConflict
+		}
+	} else {
+		if !exists {
+			return database.ErrNotFound
+		}
+		var index struct {
+			UpdatedAt time.Time `json:"updated_at"`
+		}
+		if err := copyValue(current, &index); err != nil {
+			return err
+		}
+		if !index.UpdatedAt.Equal(expectedUpdatedAt) {
+			return database.ErrConflict
+		}
+	}
+	for id, raw := range st.s.arps {
+		if id == policyID {
+			continue
+		}
+		var index struct {
+			Name      string `json:"name"`
+			ServiceID string `json:"service_id"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if index.Name == candidate.Name && index.ServiceID == candidate.ServiceID {
+			return database.ErrConflict
+		}
+	}
+	st.s.arps[policyID] = policy
+	st.s.aes[extractID(auditEvent)] = auditEvent
+	return nil
+}
+
+func (st *alertingStore) FindNotificationPolicyByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	policy, exists := st.s.arps[id]
+	if !exists {
+		return database.ErrNotFound
+	}
+	return copyValue(policy, result)
+}
+
+func (st *alertingStore) FindNotificationPolicies(_ context.Context, serviceID string, enabledOnly bool, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, raw := range st.s.arps {
+		var index struct {
+			ServiceID string `json:"service_id"`
+			Enabled   bool   `json:"enabled"`
+		}
+		if err := copyValue(raw, &index); err != nil {
+			return err
+		}
+		if serviceID != "" && index.ServiceID != "" && index.ServiceID != serviceID {
+			continue
+		}
+		if enabledOnly && !index.Enabled {
+			continue
+		}
+		filtered[id] = raw
+	}
+	return copyAll(filtered, results)
 }
 
 // ---------- RBAC Stores ----------

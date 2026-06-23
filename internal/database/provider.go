@@ -1,6 +1,15 @@
 package database
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+var (
+	ErrNotFound = errors.New("database_not_found")
+	ErrConflict = errors.New("database_conflict")
+)
 
 // Store is the top-level database abstraction.
 type Store interface {
@@ -23,7 +32,7 @@ type Store interface {
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
 	LogAgentPlans() LogAgentPlanStore
 	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
-	AlertRules() AlertRuleStore
+	Alerting() AlertingStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
 	PlatformSubjects() PlatformSubjectStore
@@ -171,11 +180,22 @@ type LogCollectorClusterConfigStore interface {
 	FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error
 }
 
-// AlertRuleStore manages alert rules.
-type AlertRuleStore interface {
-	Insert(ctx context.Context, rule interface{}) error
-	FindAll(ctx context.Context, results interface{}) error
-	Count(ctx context.Context) (int64, error)
+type AlertingStore interface {
+	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error
+	FindRules(ctx context.Context, serviceID string, state string, results interface{}) error
+	FindRuleByID(ctx context.Context, id string, result interface{}) error
+	FindUpdate(ctx context.Context, ruleID string, updateID string, result interface{}) error
+	FindUpdates(ctx context.Context, ruleID string, limit int, results interface{}) error
+	FindDeployments(ctx context.Context, ruleID string, status string, limit int, results interface{}) error
+	ClaimDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error
+	FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error
+	CompleteDeployment(ctx context.Context, deployment interface{}, artifact interface{}) error
+	ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error
+	FindAlertInstances(ctx context.Context, ruleID string, serviceID string, state string, limit int, results interface{}) error
+	FindAlertEvents(ctx context.Context, ruleID string, fingerprint string, limit int, results interface{}) error
+	SaveNotificationPolicy(ctx context.Context, expectedUpdatedAt time.Time, policy interface{}, auditEvent interface{}) error
+	FindNotificationPolicyByID(ctx context.Context, id string, result interface{}) error
+	FindNotificationPolicies(ctx context.Context, serviceID string, enabledOnly bool, results interface{}) error
 }
 
 type RBACRoleStore interface {

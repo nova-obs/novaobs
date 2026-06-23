@@ -7,6 +7,7 @@ import (
 
 	"novaobs/internal/database"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -36,6 +37,12 @@ type Store struct {
 	lgpCol  *mongo.Collection
 	lgccCol *mongo.Collection
 	arCol   *mongo.Collection
+	aruCol  *mongo.Collection
+	ardCol  *mongo.Collection
+	artCol  *mongo.Collection
+	ariCol  *mongo.Collection
+	areCol  *mongo.Collection
+	arpCol  *mongo.Collection
 	rrCol   *mongo.Collection
 	rbCol   *mongo.Collection
 	psCol   *mongo.Collection
@@ -62,7 +69,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		return nil, fmt.Errorf("Ping MongoDB 失败: %w", err)
 	}
 	db := client.Database(dbName)
-	return &Store{
+	store := &Store{
 		client:  client,
 		db:      db,
 		svcCol:  db.Collection("services"),
@@ -85,6 +92,12 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgpCol:  db.Collection("log_agent_plans"),
 		lgccCol: db.Collection("log_collector_cluster_configs"),
 		arCol:   db.Collection("alert_rules"),
+		aruCol:  db.Collection("alert_rule_updates"),
+		ardCol:  db.Collection("alert_deployments"),
+		artCol:  db.Collection("alert_artifacts"),
+		ariCol:  db.Collection("alert_instances"),
+		areCol:  db.Collection("alert_events"),
+		arpCol:  db.Collection("alert_notification_policies"),
 		rrCol:   db.Collection("rbac_roles"),
 		rbCol:   db.Collection("rbac_bindings"),
 		psCol:   db.Collection("platform_subjects"),
@@ -98,7 +111,46 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		knsCol:  db.Collection("k8s_namespaces"),
 		kdiCol:  db.Collection("k8s_deployment_inventory"),
 		kdhCol:  db.Collection("k8s_deployment_history"),
-	}, nil
+	}
+	if err := store.ensureAlertingIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("初始化告警索引失败: %w", err)
+	}
+	return store, nil
+}
+
+func (s *Store) ensureAlertingIndexes(ctx context.Context) error {
+	legacyRules, err := s.arCol.CountDocuments(ctx, bson.M{"spec": bson.M{"$exists": false}})
+	if err != nil {
+		return err
+	}
+	if legacyRules > 0 {
+		return fmt.Errorf("检测到 %d 条旧版告警规则；新模型无法无损推导服务、日志路由和通知策略，请先备份并显式清理旧数据", legacyRules)
+	}
+	_, err = s.arCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "spec.scope.service_id", Value: 1}, {Key: "spec.name", Value: 1}}, Options: options.Index().SetName("uniq_service_rule_name").SetUnique(true)},
+		{Keys: bson.D{{Key: "spec.scope.endpoint_id", Value: 1}, {Key: "state", Value: 1}}, Options: options.Index().SetName("runtime_enabled_rules")},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.ardCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "runtime_id", Value: 1}, {Key: "status", Value: 1}, {Key: "next_attempt_at", Value: 1}, {Key: "created_at", Value: 1}},
+		Options: options.Index().SetName("deployment_reconcile_queue"),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.areCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "rule_id", Value: 1}, {Key: "received_at", Value: -1}}, Options: options.Index().SetName("rule_event_history"),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.arpCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "service_id", Value: 1}, {Key: "name", Value: 1}}, Options: options.Index().SetName("uniq_service_policy_name").SetUnique(true),
+	})
+	return err
 }
 
 func (s *Store) Close(ctx context.Context) error {
@@ -144,9 +196,11 @@ func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPla
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s.lgccCol}
 }
-func (s *Store) AlertRules() database.AlertRuleStore       { return &arStore{s.arCol} }
-func (s *Store) RBACRoles() database.RBACRoleStore         { return &rbacRoleStore{s.rrCol} }
-func (s *Store) RBACBindings() database.RBACBindingStore   { return &rbacBindingStore{s.rbCol} }
+func (s *Store) Alerting() database.AlertingStore {
+	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, deployments: s.ardCol, artifacts: s.artCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}
+}
+func (s *Store) RBACRoles() database.RBACRoleStore       { return &rbacRoleStore{s.rrCol} }
+func (s *Store) RBACBindings() database.RBACBindingStore { return &rbacBindingStore{s.rbCol} }
 func (s *Store) PlatformSubjects() database.PlatformSubjectStore {
 	return &platformSubjectStore{s.psCol}
 }
