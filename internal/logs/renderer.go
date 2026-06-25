@@ -670,6 +670,8 @@ func downstreamExporterNameWithSuffix(endpoint LogEndpoint, suffix string) strin
 		return "elasticsearch/" + suffix
 	case EndpointSinkKafka:
 		return "kafka/" + suffix
+	case EndpointSinkOTel:
+		return "otlp_http/" + suffix
 	default:
 		return "otlp_http/" + suffix
 	}
@@ -699,6 +701,11 @@ func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 		topic := firstNonEmpty(endpoint.StreamName, "novaobs-logs")
 		lines = append(lines, "    topic: "+yamlQuote(topic))
 		return strings.Join(lines, "\n")
+	case EndpointSinkOTel:
+		return strings.Join([]string{
+			"  " + name + ":",
+			"    logs_endpoint: " + yamlQuote(endpoint.WriteURL),
+		}, "\n")
 	default:
 		lines := []string{
 			"  " + name + ":",

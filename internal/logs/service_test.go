@@ -330,6 +330,17 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 		ScopeType: EndpointScopeVM,
 	})
 	require.ErrorContains(t, err, "Kafka 下游端点必须填写 topic")
+
+	otelEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "otel-prod",
+		SinkType:  EndpointSinkOTel,
+		WriteURL:  "http://otel-gateway.prod:4318/v1/logs",
+		ScopeType: EndpointScopeVM,
+	})
+	require.NoError(t, err)
+	require.Equal(t, EndpointSinkOTel, otelEndpoint.SinkType)
+	rendered := renderDownstreamExporterYAML(otelEndpoint, "otlp_http/logs_downstream")
+	require.Contains(t, rendered, "logs_endpoint: \"http://otel-gateway.prod:4318/v1/logs\"")
 }
 
 func TestCreateVictoriaLogsEndpointPersistsTenantAndRendersHeaders(t *testing.T) {

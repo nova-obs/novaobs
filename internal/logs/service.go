@@ -1461,7 +1461,7 @@ func validateEndpoint(endpoint LogEndpoint) error {
 		return apperr.InvalidRequest("日志下游端点名称和写入地址不能为空")
 	}
 	if !validEndpointSinkType(endpoint.SinkType) {
-		return apperr.InvalidRequest("日志下游端点类型只支持 vl、es 或 kafka")
+		return apperr.InvalidRequest("日志下游端点类型只支持 vl、es、kafka 或 otel")
 	}
 	switch endpoint.SinkType {
 	case EndpointSinkVL:
@@ -1498,6 +1498,10 @@ func validateEndpoint(endpoint LogEndpoint) error {
 		if err := validateKafkaBrokers(endpoint.WriteURL); err != nil {
 			return err
 		}
+	case EndpointSinkOTel:
+		if err := validateHTTPURL(endpoint.WriteURL, "OTel 下游端点写入地址"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1522,7 +1526,7 @@ func validateVictoriaLogsTenant(accountID string, projectID string) error {
 }
 
 func validEndpointSinkType(value string) bool {
-	return value == EndpointSinkVL || value == EndpointSinkES || value == EndpointSinkKafka
+	return value == EndpointSinkVL || value == EndpointSinkES || value == EndpointSinkKafka || value == EndpointSinkOTel
 }
 
 func validateHTTPURL(raw string, label string) error {
