@@ -695,35 +695,211 @@ paths:
       responses:
         "200":
           description: 返回过滤后的日志
-  /alert-rules:
+  /alerts/rules:
     get:
-      summary: 告警规则列表
+      summary: 查询日志告警规则
       responses:
         "200":
           description: 返回告警规则列表
     post:
-      summary: 创建告警规则
+      summary: 创建并启用日志告警规则
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [name, rule_type]
-              properties:
-                name:
-                  type: string
-                rule_type:
-                  type: string
-                source:
-                  type: string
-                query:
-                  type: string
+              $ref: "#/components/schemas/AlertRuleChangeRequest"
+      responses:
+        "200":
+          description: 规则生产真值、更新记录和 Deployment 已原子创建
+        "412":
+          description: 历史日志测试凭据缺失或已失效
+  /alerts/rules/test:
+    post:
+      summary: 使用历史 VictoriaLogs 数据测试规则
+      responses:
+        "200":
+          description: 返回规范化 LogsQL、匹配数、实例预估和短期测试凭据
+  /alerts/rules/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 查询日志告警规则详情
+      responses:
+        "200":
+          description: 返回规则详情
+    put:
+      summary: 更新并直接启用日志告警规则
+      responses:
+        "200":
+          description: 已创建更新记录和待调和 Deployment
+  /alerts/rules/{id}/disable:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 停用规则
+      responses:
+        "200":
+          description: 已创建停用更新和待调和 Deployment
+  /alerts/rules/{id}/updates:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 查询弱化展示的规则更新记录
+      responses:
+        "200":
+          description: 返回更新记录
+  /alerts/rules/{id}/rollback:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 回退到指定更新记录
+      responses:
+        "200":
+          description: 已创建新的回退更新和待调和 Deployment
+  /alerts/rules/{id}/deployments:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 查询规则调和记录
+      responses:
+        "200":
+          description: 返回发布、回读和失败状态
+  /alerts/instances:
+    get:
+      summary: 查询当前告警实例投影
+      responses:
+        "200":
+          description: 返回当前 Pending、Firing 或 Resolved 实例
+  /alerts/events:
+    get:
+      summary: 查询告警状态更新记录
+      responses:
+        "200":
+          description: 返回不可变告警事件
+  /alerts/notification-policies:
+    get:
+      summary: 查询当前主体可见的通知策略
+      responses:
+        "200":
+          description: 返回全局和服务范围通知策略
+    post:
+      summary: 创建通知策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationPolicyInput"
       responses:
         "201":
-          description: 告警规则已创建
+          description: 通知策略和审计记录已原子创建
+  /alerts/notification-policies/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: 更新或停用通知策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationPolicyInput"
+      responses:
+        "200":
+          description: 通知策略和审计记录已原子更新
+  /alerts/webhook/alertmanager:
+    post:
+      summary: 接收 Alertmanager Firing/Resolved Webhook
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 事件已幂等写入并更新实例投影
+        "401":
+          description: Webhook 凭据无效
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
   schemas:
+    AlertRuleChangeRequest:
+      type: object
+      required: [spec, test_token]
+      properties:
+        spec:
+          $ref: "#/components/schemas/AlertRuleSpec"
+        test_token:
+          type: string
+        change_summary:
+          type: string
+          maxLength: 500
+    AlertRuleSpec:
+      type: object
+      required: [name, scope, query, trigger, grouping, notification]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        scope:
+          type: object
+          required: [service_id, log_route_id, endpoint_id, account_id, project_id]
+        query:
+          type: object
+          required: [mode, expression]
+          properties:
+            mode:
+              type: string
+              enum: [contains, exact, logsql]
+            expression:
+              type: string
+              maxLength: 16384
+        trigger:
+          type: object
+          description: 一期仅支持时间窗口累计匹配，不支持严格连续事件语义
+        grouping:
+          type: object
+          description: 最多 3 个分组字段、最多 100 个实例
+        notification:
+          type: object
+          required: [policy_id, severity, owner_team]
+    NotificationPolicyInput:
+      type: object
+      required: [name, alertmanager_receiver, enabled]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+        service_id:
+          type: string
+          description: 为空表示全局策略
+        alertmanager_receiver:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          description: Alertmanager 已配置 receiver 的稳定标识；不得传 URL 或凭据
+        enabled:
+          type: boolean
     Envelope:
       type: object
       required: [success, data, error, meta]

@@ -13,6 +13,7 @@ const (
 	EndpointSinkVL    = "vl"
 	EndpointSinkES    = "es"
 	EndpointSinkKafka = "kafka"
+	EndpointSinkOTel  = "otel"
 
 	ParseRuleRegex = "regex"
 	ParseRuleJSON  = "json"

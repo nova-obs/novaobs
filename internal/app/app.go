@@ -53,7 +53,6 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		collectorSvc,
 		svcRepo,
 	)
-	alertSvc := alerting.NewService(store.AlertRules())
 	rbacRepo := rbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
 	iamRepo := iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts())
 	if cfg.Server.Mode != gin.ReleaseMode {
@@ -69,6 +68,27 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		superSubjects = append(superSubjects, bootstrapAdmin)
 	}
 	rbacSvc := rbac.NewService(rbacRepo, rbac.WithSubjectResolver(iam.NewSubjectResolver(iamRepo)), rbac.WithSuperSubjects(superSubjects...))
+	alertScopeResolver := alerting.NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogEndpoints())
+	alertRepository := alerting.NewStoreRepository(store.Alerting())
+	alertPolicyResolver := alerting.NewStorePolicyResolver(alertRepository)
+	alertPolicySvc := alerting.NewPolicyService(alerting.PolicyDependencies{Repository: alertRepository, Authorizer: rbacSvc})
+	alertSvc := alerting.NewService(alerting.Dependencies{
+		Repository:      alertRepository,
+		Authorizer:      rbacSvc,
+		ScopeResolver:   alertScopeResolver,
+		Tester:          alerting.NewVictoriaLogsTester(alertScopeResolver, nil),
+		ReceiptSigner:   alerting.NewHMACTestReceiptSigner([]byte(cfg.Secret.Key)),
+		EventRepository: alertRepository,
+		PolicyResolver:  alertPolicyResolver,
+	})
+	alertWebhookToken := strings.TrimSpace(os.Getenv("NOVAOBS_ALERTMANAGER_WEBHOOK_TOKEN"))
+	if alertWebhookToken == "" {
+		if cfg.Server.Mode == gin.ReleaseMode {
+			return nil, fmt.Errorf("NOVAOBS_ALERTMANAGER_WEBHOOK_TOKEN 不能为空")
+		}
+		alertWebhookToken = cfg.Secret.Key
+	}
+	alertEventIngestor := alerting.NewEventIngestor(alertRepository, alertRepository, alertWebhookToken, nil)
 	iamRBACRepo := iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings())
 	iamSvc := iam.NewService(iamRepo, iamRBACRepo, rbacSvc)
 	if cfg.Server.Mode != gin.ReleaseMode {
@@ -145,6 +165,8 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		OnboardingService:      onboardingSvc,
 		LogsService:            logsSvc,
 		AlertService:           alertSvc,
+		AlertEventIngestor:     alertEventIngestor,
+		AlertPolicyService:     alertPolicySvc,
 		PlatformIAMService:     iamSvc,
 		K8sOpsModule:           k8sOpsModule,
 		OpAMPManager:           opampMgr,

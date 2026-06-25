@@ -51,6 +51,8 @@ type Dependencies struct {
 	OnboardingService      onboarding.Service
 	LogsService            logs.Service
 	AlertService           alerting.Service
+	AlertEventIngestor     alerting.EventIngestor
+	AlertPolicyService     alerting.PolicyService
 	PlatformIAMService     iam.Service
 	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
@@ -98,6 +100,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/health", healthHandler)
 	api.POST("/auth/login", platformauth.LoginHandler(deps.PlatformAuthService))
 	api.POST("/auth/logout", platformauth.LogoutHandler())
+	api.POST("/alerts/webhook/alertmanager", alertmanagerWebhookHandler(deps.AlertEventIngestor))
 
 	api = router.Group("/api/v1")
 	if deps.PlatformAuthService != nil {
@@ -151,8 +154,20 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
-	api.GET("/alert-rules", listAlertRulesHandler(deps.AlertService))
-	api.POST("/alert-rules", createAlertRuleHandler(deps.AlertService))
+	api.GET("/alerts/rules", listAlertRulesHandler(deps.AlertService))
+	api.POST("/alerts/rules/test", testAlertRuleHandler(deps.AlertService))
+	api.POST("/alerts/rules", createAlertRuleHandler(deps.AlertService))
+	api.GET("/alerts/rules/:id", getAlertRuleHandler(deps.AlertService))
+	api.PUT("/alerts/rules/:id", updateAlertRuleHandler(deps.AlertService))
+	api.POST("/alerts/rules/:id/disable", disableAlertRuleHandler(deps.AlertService))
+	api.GET("/alerts/rules/:id/updates", listAlertRuleUpdatesHandler(deps.AlertService))
+	api.POST("/alerts/rules/:id/rollback", rollbackAlertRuleHandler(deps.AlertService))
+	api.GET("/alerts/rules/:id/deployments", listAlertRuleDeploymentsHandler(deps.AlertService))
+	api.GET("/alerts/instances", listAlertInstancesHandler(deps.AlertService))
+	api.GET("/alerts/events", listAlertEventsHandler(deps.AlertService))
+	api.GET("/alerts/notification-policies", listNotificationPoliciesHandler(deps.AlertPolicyService))
+	api.POST("/alerts/notification-policies", createNotificationPolicyHandler(deps.AlertPolicyService))
+	api.PUT("/alerts/notification-policies/:id", updateNotificationPolicyHandler(deps.AlertPolicyService))
 	api.GET("/platform/me", iam.MeHandler(deps.PlatformIAMService))
 	api.GET("/platform/subjects", iam.ListSubjectsHandler(deps.PlatformIAMService))
 	api.GET("/platform/users", iam.ListUsersHandler(deps.PlatformIAMService))
@@ -275,7 +290,11 @@ func healthHandler(ctx *gin.Context) {
 func overviewHandler(deps Dependencies) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		services, _ := deps.ServiceRepo.List(bg)
-		rules, _ := deps.AlertService.List(bg)
+		subject, ok := alertSubject(ctx)
+		if !ok {
+			return
+		}
+		rules, _ := deps.AlertService.List(ctx.Request.Context(), subject, alerting.RuleFilter{})
 		onlineAgents := 0
 		if instances, err := deps.CollectorService.ListInstances(ctx.Request.Context(), ""); err == nil {
 			for _, instance := range instances {
@@ -764,9 +783,16 @@ func listOpAMPAgentsHandler(manager *opamp.Manager, collectorService collectorma
 
 func listAlertRulesHandler(service alerting.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		rules, err := service.List(bg)
+		subject, ok := alertSubject(ctx)
+		if !ok {
+			return
+		}
+		rules, err := service.List(ctx.Request.Context(), subject, alerting.RuleFilter{
+			ServiceID: strings.TrimSpace(ctx.Query("service_id")),
+			State:     strings.TrimSpace(ctx.Query("state")),
+		})
 		if err != nil {
-			writeError(ctx, err)
+			writeAlertingError(ctx, err)
 			return
 		}
 		response.OK(ctx, rules, gin.H{"total": len(rules)})
@@ -775,22 +801,52 @@ func listAlertRulesHandler(service alerting.Service) gin.HandlerFunc {
 
 func createAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		var body alerting.Rule
+		var body alerting.EnableRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
-			writeError(ctx, apperr.InvalidRequest("告警规则创建请求无效"))
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "告警规则请求格式不正确")
 			return
 		}
-		if body.Name == "" || body.RuleType == "" {
-			writeError(ctx, apperr.InvalidRequest("告警规则名称和类型不能为空"))
+		subject, ok := alertSubject(ctx)
+		if !ok {
 			return
 		}
-		rule, err := service.Create(bg, body)
+		result, err := service.Enable(ctx.Request.Context(), subject, body)
 		if err != nil {
-			writeError(ctx, err)
+			writeAlertingError(ctx, err)
 			return
 		}
-		response.Created(ctx, rule)
+		response.Created(ctx, result)
 	}
+}
+
+func writeAlertingError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, alerting.ErrInvalidSpec):
+		response.Error(ctx, http.StatusUnprocessableEntity, "invalid_alert_rule", err.Error())
+	case errors.Is(err, alerting.ErrPermissionDenied):
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权管理该范围的告警资源")
+	case errors.Is(err, alerting.ErrNotFound):
+		response.Error(ctx, http.StatusNotFound, "alert_rule_not_found", "告警规则不存在")
+	case errors.Is(err, alerting.ErrConflict):
+		response.Error(ctx, http.StatusConflict, "alert_rule_conflict", "告警规则已被其他操作更新，请刷新后重试")
+	case errors.Is(err, alerting.ErrQueryFailed):
+		response.Error(ctx, http.StatusBadGateway, "alert_query_failed", "VictoriaLogs 查询失败")
+	case errors.Is(err, alerting.ErrUnavailable):
+		response.Error(ctx, http.StatusServiceUnavailable, "alert_service_unavailable", "告警服务暂不可用")
+	case errors.Is(err, alerting.ErrTestRequired):
+		response.Error(ctx, http.StatusPreconditionFailed, "alert_test_required", "规则内容已变化，请重新测试后再启用")
+	default:
+		response.ErrorWithCause(ctx, http.StatusInternalServerError, "alert_rule_failed", "告警规则操作失败", err)
+	}
+}
+
+func alertSubject(ctx *gin.Context) (platformrbac.Subject, bool) {
+	subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+	if !ok || subject.ID == "" || subject.Type == "" {
+		response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+		return platformrbac.Subject{}, false
+	}
+	return subject, true
 }
 
 func getServiceFromPath(ctx *gin.Context, repo servicecatalog.Repository) (servicecatalog.Service, bool) {

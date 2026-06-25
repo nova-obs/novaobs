@@ -157,10 +157,11 @@ func newTestRouter(t *testing.T) testEnv {
 	admin := platformrbac.DevAdminSubject()
 	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
 	require.NoError(t, platformrbac.EnsurePlatformDefaults(rbacRepo, admin))
+	rbacSvc := platformrbac.NewService(rbacRepo, platformrbac.WithSuperSubjects(admin))
 	iamSvc := iam.NewService(
 		iam.NewStoreRepository(store.IAMUsers(), store.IAMGroups(), store.IAMMemberships(), store.IAMServiceAccounts()),
 		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
-		platformrbac.NewService(rbacRepo),
+		rbacSvc,
 	)
 	k8sModule := k8sops.NewModule()
 	logsSvc := logs.NewService(
@@ -186,11 +187,18 @@ func newTestRouter(t *testing.T) testEnv {
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogsService:            logsSvc,
-		AlertService:           alerting.NewService(store.AlertRules()),
-		PlatformIAMService:     iamSvc,
-		K8sOpsModule:           k8sModule,
-		OpAMPManager:           manager,
-		DefaultSubject:         admin,
+		AlertService: alerting.NewService(alerting.Dependencies{
+			Repository: alerting.NewStoreRepository(store.Alerting()),
+			Authorizer: rbacSvc,
+		}),
+		AlertPolicyService: alerting.NewPolicyService(alerting.PolicyDependencies{
+			Repository: alerting.NewStoreRepository(store.Alerting()),
+			Authorizer: rbacSvc,
+		}),
+		PlatformIAMService: iamSvc,
+		K8sOpsModule:       k8sModule,
+		OpAMPManager:       manager,
+		DefaultSubject:     admin,
 	})
 	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
 }
@@ -301,7 +309,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/k8s/rbac/roles?cluster_id=prod&namespace=orders",
 		"/api/v1/k8s/rbac/bindings?cluster_id=prod&namespace=orders",
 		"/api/v1/opamp/agents",
-		"/api/v1/alert-rules",
+		"/api/v1/alerts/rules",
 		"/api/v1/platform/me",
 		"/api/v1/platform/subjects",
 		"/api/v1/platform/users",
@@ -358,14 +366,18 @@ func TestRouterReturnsServiceObservabilityGraph(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	alertSvc := alerting.NewService(env.store.AlertRules())
-	_, err = alertSvc.Create(ctx, alerting.Rule{
-		Name:       "orders-error-count",
-		Query:      `service.name="orders-api" level=error`,
-		OwnerTeam:  "orders-team",
-		AlertRoute: "orders-alerts",
-		Status:     "active",
+	alertSvc := alerting.NewService(alerting.Dependencies{
+		Repository: alerting.NewStoreRepository(env.store.Alerting()),
+		Authorizer: platformrbac.NewService(platformrbac.NewStoreRepository(env.store.RBACRoles(), env.store.RBACBindings()), platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject())),
 	})
+	_, err = alertSvc.Enable(ctx, platformrbac.DevAdminSubject(), alerting.EnableRequest{Spec: alerting.RuleSpec{
+		Name:         "orders-error-count",
+		Scope:        alerting.RuleScope{ServiceID: env.service.ID, ServiceName: "orders-api", LogRouteID: "route-orders", EndpointID: "vl-prod", AccountID: "1", ProjectID: "1"},
+		Query:        alerting.QuerySpec{Mode: alerting.QueryModeContains, Expression: "level=error"},
+		Trigger:      alerting.TriggerSpec{Mode: alerting.TriggerModeWindow, Aggregation: alerting.AggregationCount, Operator: alerting.OperatorGTE, Threshold: 1, Window: "1m", EvaluationInterval: "30s"},
+		Grouping:     alerting.GroupingSpec{MaxInstances: 100},
+		Notification: alerting.NotificationSpec{PolicyID: "orders-oncall", Severity: alerting.SeverityCritical, OwnerTeam: "orders-team"},
+	}})
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
@@ -512,7 +524,7 @@ func TestRouterCreatesResources(t *testing.T) {
 		body string
 	}{
 		{path: "/api/v1/services", body: `{"name":"inventory-api","environment":"prod","owner_team":"inventory-team","alert_route":"inventory-prod"}`},
-		{path: "/api/v1/alert-rules", body: `{"name":"inventory-error-count","rule_type":"count","source":"logs","query":"level=error"}`},
+		{path: "/api/v1/alerts/rules", body: `{"spec":{"name":"inventory-error-count","scope":{"service_id":"service-inventory","service_name":"inventory-api","log_route_id":"route-inventory","endpoint_id":"vl-prod","account_id":"1","project_id":"1"},"query":{"mode":"contains","expression":"level=error"},"trigger":{"mode":"window","aggregation":"count","operator":"gte","threshold":1,"window":"1m","evaluation_interval":"30s"},"grouping":{"max_instances":100},"notification":{"policy_id":"inventory-oncall","severity":"critical","owner_team":"inventory-team"}}}`},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, item.path, bytes.NewBufferString(item.body))

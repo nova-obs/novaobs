@@ -1,0 +1,35 @@
+package alerting
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"novaobs/internal/database/memstore"
+	"novaobs/internal/platform/audit"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestStoreRepositoryEnrichesRuntimeRulesWithManagedReceiver(t *testing.T) {
+	store := memstore.NewStore()
+	repository := NewStoreRepository(store.Alerting())
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	policy := validNotificationPolicy()
+	policy.CreatedAt, policy.UpdatedAt = now, now
+	require.NoError(t, repository.SavePolicy(context.Background(), time.Time{}, policy, audit.Event{ID: "audit-policy"}))
+	spec := validRuleSpec()
+	spec.Notification.PolicyID = policy.ID
+	spec.Notification.AlertmanagerReceiver = ""
+	rule := Rule{ID: "rule-a", Spec: spec, State: RuleStateEnabled, CurrentUpdateID: "update-a", CreatedAt: now, UpdatedAt: now}
+	require.NoError(t, repository.SaveChange(context.Background(), ChangeSet{
+		Rule: rule, Update: UpdateRecord{ID: "update-a", RuleID: rule.ID},
+		Deployment: Deployment{ID: "deployment-a", RuleID: rule.ID, RuntimeID: "vmalert-logs:" + spec.Scope.EndpointID},
+		Audit:      audit.Event{ID: "audit-rule"},
+	}))
+
+	rules, err := repository.ListRuntimeRules(context.Background(), "vmalert-logs:"+spec.Scope.EndpointID)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	require.Equal(t, policy.AlertmanagerReceiver, rules[0].Spec.Notification.AlertmanagerReceiver)
+}
