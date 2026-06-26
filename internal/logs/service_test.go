@@ -133,6 +133,21 @@ func TestCreateVLEndpointRejectsRootWriteURL(t *testing.T) {
 	require.ErrorContains(t, err, "/insert/opentelemetry/v1/logs")
 }
 
+func TestCreateK8sEndpointRejectsUnregisteredCluster(t *testing.T) {
+	fixture := newLogsFixture(t, nil)
+
+	_, err := fixture.service.CreateEndpoint(context.Background(), LogEndpoint{
+		Name:      "vl-unknown",
+		WriteURL:  "http://vl.unknown:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.unknown:9428/select/logsql/query",
+		VMUIURL:   "http://vl.unknown:9428/select/vmui",
+		ScopeType: EndpointScopeK8sCluster,
+		ClusterID: "unknown-cluster",
+	})
+
+	require.ErrorContains(t, err, "只能绑定已登记的 K8s 集群")
+}
+
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -1777,6 +1792,9 @@ func (fakeClusterService) List(ctx context.Context, filter k8sopscluster.ListFil
 }
 
 func (fakeClusterService) Get(ctx context.Context, id string) (k8sopscluster.Cluster, error) {
+	if id != "test03" {
+		return k8sopscluster.Cluster{}, k8sopscluster.ErrClusterNotFound
+	}
 	return k8sopscluster.Cluster{ID: id, Name: id, Status: "active"}, nil
 }
 

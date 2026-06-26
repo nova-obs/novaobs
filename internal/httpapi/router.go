@@ -50,6 +50,7 @@ type Dependencies struct {
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
 	LogsService            logs.Service
+	AlertRuntimeService    alerting.LogRuntimeService
 	AlertService           alerting.Service
 	AlertEventIngestor     alerting.EventIngestor
 	AlertPolicyService     alerting.PolicyService
@@ -147,6 +148,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
 	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
+	api.POST("/logs/endpoints/:id/vmalert-runtime/publish", publishLogsEndpointVmalertRuntimeHandler(deps.AlertRuntimeService))
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
@@ -162,7 +164,6 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/alerts/rules/:id/disable", disableAlertRuleHandler(deps.AlertService))
 	api.GET("/alerts/rules/:id/updates", listAlertRuleUpdatesHandler(deps.AlertService))
 	api.POST("/alerts/rules/:id/rollback", rollbackAlertRuleHandler(deps.AlertService))
-	api.GET("/alerts/rules/:id/deployments", listAlertRuleDeploymentsHandler(deps.AlertService))
 	api.GET("/alerts/instances", listAlertInstancesHandler(deps.AlertService))
 	api.GET("/alerts/events", listAlertEventsHandler(deps.AlertService))
 	api.GET("/alerts/notification-policies", listNotificationPoliciesHandler(deps.AlertPolicyService))

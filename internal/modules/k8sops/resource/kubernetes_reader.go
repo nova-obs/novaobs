@@ -84,7 +84,7 @@ func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]Resour
 	for _, kind := range kinds {
 		current, err := r.listKind(ctx, client, filter, kind)
 		if err != nil {
-			if bestEffort && errors.Is(err, ErrUnsupportedKind) {
+			if errors.Is(err, ErrUnsupportedKind) && (bestEffort || isKnownListKind(kind)) {
 				continue
 			}
 			return nil, err
@@ -206,6 +206,36 @@ func (r KubernetesReader) listKind(ctx context.Context, client kubernetes.Interf
 			items = append(items, deploymentSummary(filter.ClusterID, item))
 		}
 		return items, nil
+	case "statefulset":
+		result, err := client.AppsV1().StatefulSets(filter.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for _, item := range result.Items {
+			items = append(items, statefulSetSummary(filter.ClusterID, item))
+		}
+		return items, nil
+	case "daemonset":
+		result, err := client.AppsV1().DaemonSets(filter.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for _, item := range result.Items {
+			items = append(items, daemonSetSummary(filter.ClusterID, item))
+		}
+		return items, nil
+	case "replicaset":
+		result, err := client.AppsV1().ReplicaSets(filter.Namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for _, item := range result.Items {
+			items = append(items, replicaSetSummary(filter.ClusterID, item))
+		}
+		return items, nil
 	case "service":
 		result, err := client.CoreV1().Services(filter.Namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -245,6 +275,12 @@ func (r KubernetesReader) getObject(ctx context.Context, identity Identity) (met
 		object, err = client.CoreV1().Pods(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
 	case "deployment":
 		object, err = client.AppsV1().Deployments(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
+	case "statefulset":
+		object, err = client.AppsV1().StatefulSets(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
+	case "daemonset":
+		object, err = client.AppsV1().DaemonSets(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
+	case "replicaset":
+		object, err = client.AppsV1().ReplicaSets(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
 	case "service":
 		object, err = client.CoreV1().Services(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
 	case "configmap":
@@ -284,6 +320,15 @@ func listKinds(kind string) []string {
 		"DestinationRule",
 		"EnvoyFilter",
 	}
+}
+
+func isKnownListKind(kind string) bool {
+	for _, item := range listKinds("") {
+		if strings.EqualFold(item, strings.TrimSpace(kind)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r KubernetesReader) listDynamicKind(ctx context.Context, filter ListFilter, kind string) ([]ResourceSummary, error) {
@@ -442,6 +487,33 @@ func deploymentSummary(clusterID string, item appsv1.Deployment) ResourceSummary
 	}
 }
 
+func statefulSetSummary(clusterID string, item appsv1.StatefulSet) ResourceSummary {
+	return ResourceSummary{
+		Identity:  Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "StatefulSet", Name: item.Name, UID: string(item.UID)},
+		Status:    statefulSetStatus(item),
+		Labels:    copyLabels(item.Labels),
+		UpdatedAt: item.CreationTimestamp.Time,
+	}
+}
+
+func daemonSetSummary(clusterID string, item appsv1.DaemonSet) ResourceSummary {
+	return ResourceSummary{
+		Identity:  Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "DaemonSet", Name: item.Name, UID: string(item.UID)},
+		Status:    daemonSetStatus(item),
+		Labels:    copyLabels(item.Labels),
+		UpdatedAt: item.CreationTimestamp.Time,
+	}
+}
+
+func replicaSetSummary(clusterID string, item appsv1.ReplicaSet) ResourceSummary {
+	return ResourceSummary{
+		Identity:  Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "ReplicaSet", Name: item.Name, UID: string(item.UID)},
+		Status:    replicaSetStatus(item),
+		Labels:    copyLabels(item.Labels),
+		UpdatedAt: item.CreationTimestamp.Time,
+	}
+}
+
 func serviceSummary(clusterID string, item corev1.Service) ResourceSummary {
 	return ResourceSummary{
 		Identity:  Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "v1", Kind: "Service", Name: item.Name, UID: string(item.UID)},
@@ -464,6 +536,12 @@ func identityFromObject(clusterID string, object metav1.Object) Identity {
 	switch item := object.(type) {
 	case *appsv1.Deployment:
 		return Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "Deployment", Name: item.Name, UID: string(item.UID)}
+	case *appsv1.StatefulSet:
+		return Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "StatefulSet", Name: item.Name, UID: string(item.UID)}
+	case *appsv1.DaemonSet:
+		return Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "DaemonSet", Name: item.Name, UID: string(item.UID)}
+	case *appsv1.ReplicaSet:
+		return Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "apps/v1", Kind: "ReplicaSet", Name: item.Name, UID: string(item.UID)}
 	case *corev1.Pod:
 		return Identity{ClusterID: clusterID, Namespace: item.Namespace, APIVersion: "v1", Kind: "Pod", Name: item.Name, UID: string(item.UID)}
 	case *corev1.Service:
@@ -479,6 +557,12 @@ func statusForObject(object metav1.Object) string {
 	switch item := object.(type) {
 	case *appsv1.Deployment:
 		return deploymentStatus(*item)
+	case *appsv1.StatefulSet:
+		return statefulSetStatus(*item)
+	case *appsv1.DaemonSet:
+		return daemonSetStatus(*item)
+	case *appsv1.ReplicaSet:
+		return replicaSetStatus(*item)
 	case *corev1.Pod:
 		return podStatus(*item)
 	default:
@@ -508,6 +592,36 @@ func podStatus(item corev1.Pod) string {
 }
 
 func deploymentStatus(item appsv1.Deployment) string {
+	desired := int32(1)
+	if item.Spec.Replicas != nil {
+		desired = *item.Spec.Replicas
+	}
+	if desired == 0 || item.Status.ReadyReplicas >= desired && item.Status.AvailableReplicas >= desired {
+		return "healthy"
+	}
+	return "warning"
+}
+
+func statefulSetStatus(item appsv1.StatefulSet) string {
+	desired := int32(1)
+	if item.Spec.Replicas != nil {
+		desired = *item.Spec.Replicas
+	}
+	if desired == 0 || item.Status.ReadyReplicas >= desired {
+		return "healthy"
+	}
+	return "warning"
+}
+
+func daemonSetStatus(item appsv1.DaemonSet) string {
+	desired := item.Status.DesiredNumberScheduled
+	if desired == 0 || item.Status.CurrentNumberScheduled >= desired && item.Status.NumberReady >= desired {
+		return "healthy"
+	}
+	return "warning"
+}
+
+func replicaSetStatus(item appsv1.ReplicaSet) string {
 	desired := int32(1)
 	if item.Spec.Replicas != nil {
 		desired = *item.Spec.Replicas

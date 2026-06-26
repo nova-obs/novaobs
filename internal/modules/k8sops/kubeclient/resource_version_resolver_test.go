@@ -84,6 +84,55 @@ func TestResourceVersionResolverCoversStartorchVersionCandidates(t *testing.T) {
 	}
 }
 
+func TestResourceVersionResolverUsesKubernetes126ServedAPIs(t *testing.T) {
+	resolver := NewResourceVersionResolver(CapabilitySnapshot{
+		ServerVersion: "v1.26.15",
+		Resources: []APIResource{
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "pods", Kind: "Pod", Namespaced: true},
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "services", Kind: "Service", Namespaced: true},
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "configmaps", Kind: "ConfigMap", Namespaced: true},
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Namespaced: true},
+			{Group: "", Version: "v1", GroupVersion: "v1", Resource: "persistentvolumes", Kind: "PersistentVolume", Namespaced: false},
+			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "deployments", Kind: "Deployment", Namespaced: true},
+			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "statefulsets", Kind: "StatefulSet", Namespaced: true},
+			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "daemonsets", Kind: "DaemonSet", Namespaced: true},
+			{Group: "apps", Version: "v1", GroupVersion: "apps/v1", Resource: "replicasets", Kind: "ReplicaSet", Namespaced: true},
+			{Group: "autoscaling", Version: "v2", GroupVersion: "autoscaling/v2", Resource: "horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler", Namespaced: true},
+			{Group: "networking.k8s.io", Version: "v1", GroupVersion: "networking.k8s.io/v1", Resource: "ingresses", Kind: "Ingress", Namespaced: true},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "roles", Kind: "Role", Namespaced: true},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "rolebindings", Kind: "RoleBinding", Namespaced: true},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "clusterroles", Kind: "ClusterRole", Namespaced: false},
+			{Group: "rbac.authorization.k8s.io", Version: "v1", GroupVersion: "rbac.authorization.k8s.io/v1", Resource: "clusterrolebindings", Kind: "ClusterRoleBinding", Namespaced: false},
+		},
+	})
+
+	cases := []struct {
+		name       string
+		apiVersion string
+		kind       string
+		want       string
+	}{
+		{name: "deployment", apiVersion: "apps/v1", kind: "Deployment", want: "apps/v1"},
+		{name: "statefulset", apiVersion: "apps/v1", kind: "StatefulSet", want: "apps/v1"},
+		{name: "daemonset", apiVersion: "apps/v1", kind: "DaemonSet", want: "apps/v1"},
+		{name: "replicaset", apiVersion: "apps/v1", kind: "ReplicaSet", want: "apps/v1"},
+		{name: "hpa v2", apiVersion: "autoscaling/v2", kind: "HorizontalPodAutoscaler", want: "autoscaling/v2"},
+		{name: "hpa v2beta2 migrated", apiVersion: "autoscaling/v2beta2", kind: "HorizontalPodAutoscaler", want: "autoscaling/v2"},
+		{name: "ingress v1", apiVersion: "networking.k8s.io/v1", kind: "Ingress", want: "networking.k8s.io/v1"},
+		{name: "ingress extensions migrated", apiVersion: "extensions/v1beta1", kind: "Ingress", want: "networking.k8s.io/v1"},
+		{name: "clusterrole v1beta1 migrated", apiVersion: "rbac.authorization.k8s.io/v1beta1", kind: "ClusterRole", want: "rbac.authorization.k8s.io/v1"},
+		{name: "clusterrolebinding v1beta1 migrated", apiVersion: "rbac.authorization.k8s.io/v1beta1", kind: "ClusterRoleBinding", want: "rbac.authorization.k8s.io/v1"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved, err := resolver.Resolve(ResourceVersionRequest{APIVersion: tt.apiVersion, Kind: tt.kind})
+
+			require.NoError(t, err)
+			require.Equal(t, tt.want, resolved.APIVersion)
+		})
+	}
+}
+
 func TestResourceVersionResolverFallsBackAcrossHPAAndIngressVersions(t *testing.T) {
 	resolver := NewResourceVersionResolver(CapabilitySnapshot{
 		Resources: []APIResource{

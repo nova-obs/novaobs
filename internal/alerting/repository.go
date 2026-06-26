@@ -12,20 +12,18 @@ import (
 )
 
 // Repository 保存告警控制面的生产真值。SaveChange 必须原子校验
-// ExpectedCurrentUpdateID，并同时写入 Rule、UpdateRecord 和 Deployment。
+// ExpectedCurrentUpdateID，并同时写入 Rule、UpdateRecord 和 Audit。
 type Repository interface {
 	SaveChange(ctx context.Context, change ChangeSet) error
 	ListRules(ctx context.Context, filter RuleFilter) ([]Rule, error)
 	GetRule(ctx context.Context, id string) (Rule, error)
 	GetUpdate(ctx context.Context, ruleID string, updateID string) (UpdateRecord, error)
 	ListUpdates(ctx context.Context, ruleID string, limit int) ([]UpdateRecord, error)
-	ListDeployments(ctx context.Context, filter DeploymentFilter) ([]Deployment, error)
 }
 
 type ChangeSet struct {
 	Rule                    Rule
 	Update                  UpdateRecord
-	Deployment              Deployment
 	Audit                   audit.Event
 	ExpectedCurrentUpdateID string
 }
@@ -37,7 +35,7 @@ func NewStoreRepository(store database.AlertingStore) StoreRepository {
 }
 
 func (r StoreRepository) SaveChange(ctx context.Context, change ChangeSet) error {
-	err := r.store.SaveChange(ctx, change.ExpectedCurrentUpdateID, change.Rule, change.Update, change.Deployment, change.Audit)
+	err := r.store.SaveChange(ctx, change.ExpectedCurrentUpdateID, change.Rule, change.Update, change.Audit)
 	return mapStoreError(err)
 }
 
@@ -74,24 +72,6 @@ func (r StoreRepository) ListUpdates(ctx context.Context, ruleID string, limit i
 	return items, nil
 }
 
-func (r StoreRepository) ListDeployments(ctx context.Context, filter DeploymentFilter) ([]Deployment, error) {
-	var items []Deployment
-	if err := r.store.FindDeployments(ctx, filter.RuleID, filter.Status, filter.Limit, &items); err != nil {
-		return nil, mapStoreError(err)
-	}
-	slices.SortFunc(items, func(a, b Deployment) int { return b.CreatedAt.Compare(a.CreatedAt) })
-	if filter.Limit > 0 && len(items) > filter.Limit {
-		items = items[:filter.Limit]
-	}
-	return items, nil
-}
-
-func (r StoreRepository) ClaimNextDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration) (Deployment, error) {
-	var deployment Deployment
-	err := r.store.ClaimDeployment(ctx, workerID, runtimeID, now, lease, &deployment)
-	return deployment, mapStoreError(err)
-}
-
 func (r StoreRepository) ListRuntimeRules(ctx context.Context, runtimeID string) ([]Rule, error) {
 	var rules []Rule
 	endpointID := strings.TrimPrefix(runtimeID, "vmalert-logs:")
@@ -115,8 +95,13 @@ func (r StoreRepository) ListRuntimeRules(ctx context.Context, runtimeID string)
 	return rules, nil
 }
 
-func (r StoreRepository) CompleteDeployment(ctx context.Context, deployment Deployment, artifact Artifact) error {
-	return mapStoreError(r.store.CompleteDeployment(ctx, deployment, artifact))
+func (r StoreRepository) MarkRuntimeRulesApplied(ctx context.Context, runtimeID string, appliedAt time.Time) (int, error) {
+	endpointID := strings.TrimPrefix(runtimeID, "vmalert-logs:")
+	if endpointID == "" || endpointID == runtimeID && strings.Contains(runtimeID, ":") {
+		return 0, ErrInvalidSpec
+	}
+	applied, err := r.store.MarkRuntimeRulesApplied(ctx, endpointID, appliedAt.UTC())
+	return int(applied), mapStoreError(err)
 }
 
 func (r StoreRepository) ApplyEvent(ctx context.Context, instance AlertInstance, event AlertEvent) error {

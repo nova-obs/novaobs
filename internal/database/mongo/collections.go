@@ -597,18 +597,16 @@ func (s *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clus
 // ---------- Alerting Repository ----------
 
 type alertingStore struct {
-	client      *mongo.Client
-	rules       *mongo.Collection
-	updates     *mongo.Collection
-	deployments *mongo.Collection
-	artifacts   *mongo.Collection
-	instances   *mongo.Collection
-	events      *mongo.Collection
-	policies    *mongo.Collection
-	audits      *mongo.Collection
+	client    *mongo.Client
+	rules     *mongo.Collection
+	updates   *mongo.Collection
+	instances *mongo.Collection
+	events    *mongo.Collection
+	policies  *mongo.Collection
+	audits    *mongo.Collection
 }
 
-func (s *alertingStore) SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error {
+func (s *alertingStore) SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, auditEvent interface{}) error {
 	session, err := s.client.StartSession()
 	if err != nil {
 		return err
@@ -639,9 +637,6 @@ func (s *alertingStore) SaveChange(ctx context.Context, expectedCurrentUpdateID 
 			}
 		}
 		if _, err := s.updates.InsertOne(tx, update); err != nil {
-			return nil, err
-		}
-		if _, err := s.deployments.InsertOne(tx, deployment); err != nil {
 			return nil, err
 		}
 		if _, err := s.audits.InsertOne(tx, auditEvent); err != nil {
@@ -695,50 +690,6 @@ func (s *alertingStore) FindUpdates(ctx context.Context, ruleID string, limit in
 	return cursor.All(ctx, results)
 }
 
-func (s *alertingStore) FindDeployments(ctx context.Context, ruleID string, status string, limit int, results interface{}) error {
-	query := bson.M{}
-	if ruleID != "" {
-		query["rule_id"] = ruleID
-	}
-	if status != "" {
-		query["status"] = status
-	}
-	find := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
-	if limit > 0 {
-		find.SetLimit(int64(limit))
-	}
-	cursor, err := s.deployments.Find(ctx, query, find)
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
-func (s *alertingStore) ClaimDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error {
-	filter := bson.M{
-		"runtime_id": runtimeID,
-		"status":     bson.M{"$in": []string{"pending", "failed"}},
-		"attempt":    bson.M{"$lt": 5},
-		"$and": []bson.M{
-			{"$or": []bson.M{{"lease_expires_at": bson.M{"$exists": false}}, {"lease_expires_at": bson.M{"$lte": now}}}},
-			{"$or": []bson.M{{"next_attempt_at": bson.M{"$exists": false}}, {"next_attempt_at": bson.M{"$lte": now}}}},
-		},
-	}
-	update := bson.M{"$set": bson.M{
-		"status":           "validating",
-		"lease_owner":      workerID,
-		"lease_expires_at": now.Add(lease),
-		"updated_at":       now,
-	}}
-	err := s.deployments.FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().
-		SetSort(bson.D{{Key: "created_at", Value: 1}}).
-		SetReturnDocument(options.After)).Decode(result)
-	if err == mongo.ErrNoDocuments {
-		return database.ErrNotFound
-	}
-	return err
-}
-
 func (s *alertingStore) FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error {
 	cursor, err := s.rules.Find(ctx, bson.M{"spec.scope.endpoint_id": runtimeID}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 	if err != nil {
@@ -747,51 +698,18 @@ func (s *alertingStore) FindRuntimeRules(ctx context.Context, runtimeID string, 
 	return cursor.All(ctx, results)
 }
 
-func (s *alertingStore) CompleteDeployment(ctx context.Context, deployment interface{}, artifact interface{}) error {
-	deploymentDocument, err := toBSONMap(deployment)
-	if err != nil {
-		return err
-	}
-	deploymentID := deploymentDocument["_id"]
-	ruleID, _ := deploymentDocument["rule_id"].(string)
-	updateID, _ := deploymentDocument["update_id"].(string)
-	status, _ := deploymentDocument["status"].(string)
-	artifactDocument, err := toBSONMap(artifact)
-	if err != nil {
-		return err
-	}
-	session, err := s.client.StartSession()
-	if err != nil {
-		return err
-	}
-	defer session.EndSession(ctx)
-	_, err = session.WithTransaction(ctx, func(tx mongo.SessionContext) (interface{}, error) {
-		result, err := s.deployments.ReplaceOne(tx, bson.M{"_id": deploymentID}, deployment)
-		if err != nil {
-			return nil, err
-		}
-		if result.MatchedCount == 0 {
-			return nil, database.ErrNotFound
-		}
-		if artifactID := artifactDocument["_id"]; artifactID != nil && artifactID != "" {
-			if _, err := s.artifacts.ReplaceOne(tx, bson.M{"_id": artifactID}, artifact, options.Replace().SetUpsert(true)); err != nil {
-				return nil, err
-			}
-		}
-		ruleUpdate := bson.M{}
-		if status == "applied" {
-			ruleUpdate = bson.M{"applied_update_id": updateID, "apply_status": "applied"}
-		} else if status == "failed" {
-			ruleUpdate = bson.M{"apply_status": "failed"}
-		}
-		if len(ruleUpdate) > 0 {
-			if _, err := s.rules.UpdateOne(tx, bson.M{"_id": ruleID, "current_update_id": updateID}, bson.M{"$set": ruleUpdate}); err != nil {
-				return nil, err
-			}
-		}
-		return nil, nil
+func (s *alertingStore) MarkRuntimeRulesApplied(ctx context.Context, endpointID string, appliedAt time.Time) (int64, error) {
+	result, err := s.rules.UpdateMany(ctx, bson.M{"spec.scope.endpoint_id": endpointID}, mongo.Pipeline{
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "apply_status", Value: "applied"},
+			{Key: "applied_update_id", Value: "$current_update_id"},
+			{Key: "updated_at", Value: appliedAt},
+		}}},
 	})
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.MatchedCount, nil
 }
 
 func (s *alertingStore) ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error {

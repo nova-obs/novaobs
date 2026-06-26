@@ -181,15 +181,13 @@ type LogCollectorClusterConfigStore interface {
 }
 
 type AlertingStore interface {
-	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error
+	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, auditEvent interface{}) error
 	FindRules(ctx context.Context, serviceID string, state string, results interface{}) error
 	FindRuleByID(ctx context.Context, id string, result interface{}) error
 	FindUpdate(ctx context.Context, ruleID string, updateID string, result interface{}) error
 	FindUpdates(ctx context.Context, ruleID string, limit int, results interface{}) error
-	FindDeployments(ctx context.Context, ruleID string, status string, limit int, results interface{}) error
-	ClaimDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error
 	FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error
-	CompleteDeployment(ctx context.Context, deployment interface{}, artifact interface{}) error
+	MarkRuntimeRulesApplied(ctx context.Context, endpointID string, appliedAt time.Time) (int64, error)
 	ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error
 	FindAlertInstances(ctx context.Context, ruleID string, serviceID string, state string, limit int, results interface{}) error
 	FindAlertEvents(ctx context.Context, ruleID string, fingerprint string, limit int, results interface{}) error

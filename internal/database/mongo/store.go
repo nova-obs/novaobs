@@ -38,8 +38,6 @@ type Store struct {
 	lgccCol *mongo.Collection
 	arCol   *mongo.Collection
 	aruCol  *mongo.Collection
-	ardCol  *mongo.Collection
-	artCol  *mongo.Collection
 	ariCol  *mongo.Collection
 	areCol  *mongo.Collection
 	arpCol  *mongo.Collection
@@ -93,8 +91,6 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgccCol: db.Collection("log_collector_cluster_configs"),
 		arCol:   db.Collection("alert_rules"),
 		aruCol:  db.Collection("alert_rule_updates"),
-		ardCol:  db.Collection("alert_deployments"),
-		artCol:  db.Collection("alert_artifacts"),
 		ariCol:  db.Collection("alert_instances"),
 		areCol:  db.Collection("alert_events"),
 		arpCol:  db.Collection("alert_notification_policies"),
@@ -130,13 +126,6 @@ func (s *Store) ensureAlertingIndexes(ctx context.Context) error {
 	_, err = s.arCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "spec.scope.service_id", Value: 1}, {Key: "spec.name", Value: 1}}, Options: options.Index().SetName("uniq_service_rule_name").SetUnique(true)},
 		{Keys: bson.D{{Key: "spec.scope.endpoint_id", Value: 1}, {Key: "state", Value: 1}}, Options: options.Index().SetName("runtime_enabled_rules")},
-	})
-	if err != nil {
-		return err
-	}
-	_, err = s.ardCol.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "runtime_id", Value: 1}, {Key: "status", Value: 1}, {Key: "next_attempt_at", Value: 1}, {Key: "created_at", Value: 1}},
-		Options: options.Index().SetName("deployment_reconcile_queue"),
 	})
 	if err != nil {
 		return err
@@ -197,7 +186,7 @@ func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigS
 	return &logCollectorClusterConfigStore{s.lgccCol}
 }
 func (s *Store) Alerting() database.AlertingStore {
-	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, deployments: s.ardCol, artifacts: s.artCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}
+	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}
 }
 func (s *Store) RBACRoles() database.RBACRoleStore       { return &rbacRoleStore{s.rrCol} }
 func (s *Store) RBACBindings() database.RBACBindingStore { return &rbacBindingStore{s.rbCol} }

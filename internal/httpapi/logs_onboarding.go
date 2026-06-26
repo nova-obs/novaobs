@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"novaobs/internal/alerting"
 	"novaobs/internal/logs"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
@@ -93,6 +94,27 @@ func updateLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 			return
 		}
 		response.OK(ctx, endpoint, gin.H{})
+	}
+}
+
+func publishLogsEndpointVmalertRuntimeHandler(service alerting.LogRuntimeService) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body alerting.LogRuntimePublishRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil && ctx.Request.ContentLength > 0 {
+			writeError(ctx, apperr.InvalidRequest("vmalert Runtime 发布请求无效"))
+			return
+		}
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		result, err := service.Publish(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, result, gin.H{})
 	}
 }
 

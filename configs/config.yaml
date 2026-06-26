@@ -6,6 +6,8 @@ database:
   driver: "mongodb"
   uri: "mongodb://admin:mongodb_test@10.72.161.91:27017,10.72.161.92:27017,10.72.161.93:27017/"
   ##uri: "mongodb://admin:mongodb_test@127.0.0.1:27017/"
+secret:
+  key: "8c343df27c779cdf62d030966753bb31"
 collector_template: |
   receivers:
     kafka/syslog:

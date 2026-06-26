@@ -155,6 +155,11 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		k8sOpsModule.Deploy,
 		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAOBS_LOGS_AGENT_OPAMP_ENDPOINT")),
 	)
+	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
+		Endpoints:      store.LogEndpoints(),
+		Repository:     alertRepository,
+		K8sDeployments: k8sOpsModule.Deploy,
+	})
 
 	deps := httpapi.Dependencies{
 		Store:                  store,
@@ -164,6 +169,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboardingSvc,
 		LogsService:            logsSvc,
+		AlertRuntimeService:    alertRuntimeSvc,
 		AlertService:           alertSvc,
 		AlertEventIngestor:     alertEventIngestor,
 		AlertPolicyService:     alertPolicySvc,
