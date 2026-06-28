@@ -30,6 +30,7 @@ import (
 	platformauth "novaobs/internal/platform/auth"
 	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/iam"
+	platformimages "novaobs/internal/platform/images"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
@@ -50,10 +51,12 @@ type Dependencies struct {
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
 	LogsService            logs.Service
+	AlertRuntimeService    alerting.LogRuntimeService
 	AlertService           alerting.Service
 	AlertEventIngestor     alerting.EventIngestor
 	AlertPolicyService     alerting.PolicyService
 	PlatformIAMService     iam.Service
+	PlatformImageService   platformimages.Service
 	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
 	CollectorTemplate      string
@@ -147,6 +150,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
 	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
+	api.POST("/logs/endpoints/:id/vmalert-runtime/publish", publishLogsEndpointVmalertRuntimeHandler(deps.AlertRuntimeService))
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
@@ -162,7 +166,6 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/alerts/rules/:id/disable", disableAlertRuleHandler(deps.AlertService))
 	api.GET("/alerts/rules/:id/updates", listAlertRuleUpdatesHandler(deps.AlertService))
 	api.POST("/alerts/rules/:id/rollback", rollbackAlertRuleHandler(deps.AlertService))
-	api.GET("/alerts/rules/:id/deployments", listAlertRuleDeploymentsHandler(deps.AlertService))
 	api.GET("/alerts/instances", listAlertInstancesHandler(deps.AlertService))
 	api.GET("/alerts/events", listAlertEventsHandler(deps.AlertService))
 	api.GET("/alerts/notification-policies", listNotificationPoliciesHandler(deps.AlertPolicyService))
@@ -189,6 +192,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/platform/bindings", iam.CreateBindingHandler(deps.PlatformIAMService))
 	api.DELETE("/platform/bindings/:id", iam.DeleteBindingHandler(deps.PlatformIAMService))
 	api.GET("/platform/effective-permissions", iam.EffectivePermissionsHandler(deps.PlatformIAMService))
+	api.GET("/platform/images", platformimages.ListHandler(deps.PlatformImageService))
+	api.PUT("/platform/images", platformimages.UpsertHandler(deps.PlatformImageService))
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
 	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))

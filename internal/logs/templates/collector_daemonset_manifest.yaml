@@ -91,7 +91,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: otelcol
-          image: hub-test.service.ucloud.cn/logsplatfrom/opentelemetry-collector-contrib:0.153.0
+          image: __NOVAOBS_IMAGE_OTEL_COLLECTOR__
           args: ["--config=/conf/collector.yaml"]
           ports:
             - name: metrics

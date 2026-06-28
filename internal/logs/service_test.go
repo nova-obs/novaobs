@@ -133,6 +133,21 @@ func TestCreateVLEndpointRejectsRootWriteURL(t *testing.T) {
 	require.ErrorContains(t, err, "/insert/opentelemetry/v1/logs")
 }
 
+func TestCreateK8sEndpointRejectsUnregisteredCluster(t *testing.T) {
+	fixture := newLogsFixture(t, nil)
+
+	_, err := fixture.service.CreateEndpoint(context.Background(), LogEndpoint{
+		Name:      "vl-unknown",
+		WriteURL:  "http://vl.unknown:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.unknown:9428/select/logsql/query",
+		VMUIURL:   "http://vl.unknown:9428/select/vmui",
+		ScopeType: EndpointScopeK8sCluster,
+		ClusterID: "unknown-cluster",
+	})
+
+	require.ErrorContains(t, err, "只能绑定已登记的 K8s 集群")
+}
+
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -1184,6 +1199,31 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
 }
 
+func TestK8sDaemonSetUsesImageTemplateOverride(t *testing.T) {
+	input := renderInput{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:   SourceTypeK8sStdout,
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-001"},
+	}
+
+	rendered, err := renderK8sDaemonSetBundleWithTemplateValues([]renderInput{input}, "", map[string]string{
+		"__NOVAOBS_IMAGE_OTEL_COLLECTOR__": "harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, rendered.ManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
+	require.Contains(t, rendered.DeploymentManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
+	require.NotContains(t, rendered.ManifestYAML, "__NOVAOBS_IMAGE_OTEL_COLLECTOR__")
+}
+
 func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
 	input := renderInput{
 		ServiceName: "utrace-api",
@@ -1777,6 +1817,9 @@ func (fakeClusterService) List(ctx context.Context, filter k8sopscluster.ListFil
 }
 
 func (fakeClusterService) Get(ctx context.Context, id string) (k8sopscluster.Cluster, error) {
+	if id != "test03" {
+		return k8sopscluster.Cluster{}, k8sopscluster.ErrClusterNotFound
+	}
 	return k8sopscluster.Cluster{ID: id, Name: id, Status: "active"}, nil
 }
 

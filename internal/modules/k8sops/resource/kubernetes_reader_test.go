@@ -61,6 +61,59 @@ func TestKubernetesReaderListsDeploymentSummaries(t *testing.T) {
 	require.Equal(t, createdAt, items[0].UpdatedAt)
 }
 
+func TestKubernetesReaderListsAppsWorkloadSummaries(t *testing.T) {
+	createdAt := time.Date(2026, 6, 25, 9, 30, 0, 0, time.UTC)
+	replicas := int32(3)
+	client := fake.NewSimpleClientset(
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders-db", Namespace: "orders", UID: "uid-sts", CreationTimestamp: metav1.NewTime(createdAt)},
+			Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+			Status:     appsv1.StatefulSetStatus{ReadyReplicas: 3},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-agent", Namespace: "orders", UID: "uid-ds", CreationTimestamp: metav1.NewTime(createdAt)},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 3,
+				CurrentNumberScheduled: 3,
+				NumberReady:            3,
+			},
+		},
+		&appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders-api-7d9", Namespace: "orders", UID: "uid-rs", CreationTimestamp: metav1.NewTime(createdAt)},
+			Spec:       appsv1.ReplicaSetSpec{Replicas: &replicas},
+			Status:     appsv1.ReplicaSetStatus{ReadyReplicas: 3, AvailableReplicas: 3},
+		},
+	)
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client})
+
+	for _, tt := range []struct {
+		kind string
+		name string
+		uid  string
+	}{
+		{kind: "StatefulSet", name: "orders-db", uid: "uid-sts"},
+		{kind: "DaemonSet", name: "node-agent", uid: "uid-ds"},
+		{kind: "ReplicaSet", name: "orders-api-7d9", uid: "uid-rs"},
+	} {
+		t.Run(tt.kind, func(t *testing.T) {
+			items, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders", Kind: tt.kind})
+
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			require.Equal(t, Identity{
+				ClusterID:  "prod",
+				Namespace:  "orders",
+				APIVersion: "apps/v1",
+				Kind:       tt.kind,
+				Name:       tt.name,
+				UID:        tt.uid,
+			}, items[0].Identity)
+			require.Equal(t, "healthy", items[0].Status)
+			require.Equal(t, createdAt, items[0].UpdatedAt)
+		})
+	}
+}
+
 func TestKubernetesReaderReadsDetailAndYAML(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -88,6 +141,49 @@ func TestKubernetesReaderReadsDetailAndYAML(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, rendered.YAML, "kind: Pod")
 	require.True(t, strings.Contains(rendered.YAML, "name: orders-api-7d9"))
+}
+
+func TestKubernetesReaderReadsAppsWorkloadYAML(t *testing.T) {
+	replicas := int32(1)
+	client := fake.NewSimpleClientset(
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders-db", Namespace: "orders", UID: "uid-sts"},
+			Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
+			Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-agent", Namespace: "orders", UID: "uid-ds"},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 1,
+				CurrentNumberScheduled: 1,
+				NumberReady:            1,
+			},
+		},
+		&appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders-api-7d9", Namespace: "orders", UID: "uid-rs"},
+			Spec:       appsv1.ReplicaSetSpec{Replicas: &replicas},
+			Status:     appsv1.ReplicaSetStatus{ReadyReplicas: 1, AvailableReplicas: 1},
+		},
+	)
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client})
+
+	for _, identity := range []Identity{
+		{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "StatefulSet", Name: "orders-db", UID: "uid-sts"},
+		{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "DaemonSet", Name: "node-agent", UID: "uid-ds"},
+		{ClusterID: "prod", Namespace: "orders", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "orders-api-7d9", UID: "uid-rs"},
+	} {
+		t.Run(identity.Kind, func(t *testing.T) {
+			detail, err := reader.GetDetail(context.Background(), DetailQuery{Identity: identity})
+			require.NoError(t, err)
+			require.Equal(t, "healthy", detail.Status)
+
+			rendered, err := reader.GetYAML(context.Background(), DetailQuery{Identity: identity})
+			require.NoError(t, err)
+			require.Contains(t, rendered.YAML, "apiVersion: apps/v1")
+			require.Contains(t, rendered.YAML, "kind: "+identity.Kind)
+			require.Contains(t, rendered.YAML, "name: "+identity.Name)
+		})
+	}
 }
 
 func TestKubernetesReaderListsIstioResourceWithResolvedVersion(t *testing.T) {
@@ -132,14 +228,12 @@ func TestKubernetesReaderListsIstioResourceWithResolvedVersion(t *testing.T) {
 func TestKubernetesReaderListsStartorchResourceKindsWithResolvedVersion(t *testing.T) {
 	pvcGVR := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
 	pvGVR := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}
-	replicaSetGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}
 	envoyFilterGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters"}
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
 			pvcGVR:         "PersistentVolumeClaimList",
 			pvGVR:          "PersistentVolumeList",
-			replicaSetGVR:  "ReplicaSetList",
 			envoyFilterGVR: "EnvoyFilterList",
 		},
 		&unstructured.Unstructured{Object: map[string]any{
@@ -157,15 +251,6 @@ func TestKubernetesReaderListsStartorchResourceKindsWithResolvedVersion(t *testi
 			"metadata": map[string]any{
 				"name": "pv-orders",
 				"uid":  "uid-pv",
-			},
-		}},
-		&unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "apps/v1",
-			"kind":       "ReplicaSet",
-			"metadata": map[string]any{
-				"name":      "orders-api-7d9",
-				"namespace": "orders",
-				"uid":       "uid-rs",
 			},
 		}},
 		&unstructured.Unstructured{Object: map[string]any{
@@ -187,7 +272,6 @@ func TestKubernetesReaderListsStartorchResourceKindsWithResolvedVersion(t *testi
 					{Name: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Namespaced: true},
 					{Name: "persistentvolumes", Kind: "PersistentVolume", Namespaced: false},
 				}},
-				{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "replicasets", Kind: "ReplicaSet", Namespaced: true}}},
 				{GroupVersion: "networking.istio.io/v1alpha3", APIResources: []metav1.APIResource{{Name: "envoyfilters", Kind: "EnvoyFilter", Namespaced: true}}},
 			}},
 			FakedServerVersion: &version.Info{GitVersion: "v1.30.2"},
@@ -203,7 +287,6 @@ func TestKubernetesReaderListsStartorchResourceKindsWithResolvedVersion(t *testi
 	}{
 		{kind: "PersistentVolumeClaim", wantName: "orders-data", wantAPI: "v1", wantNS: "orders", wantStatus: "active"},
 		{kind: "PersistentVolume", wantName: "pv-orders", wantAPI: "v1", wantNS: "", wantStatus: "active"},
-		{kind: "ReplicaSet", wantName: "orders-api-7d9", wantAPI: "apps/v1", wantNS: "orders", wantStatus: "active"},
 		{kind: "EnvoyFilter", wantName: "orders-filter", wantAPI: "networking.istio.io/v1alpha3", wantNS: "orders", wantStatus: "active"},
 	} {
 		t.Run(tt.kind, func(t *testing.T) {
@@ -218,6 +301,15 @@ func TestKubernetesReaderListsStartorchResourceKindsWithResolvedVersion(t *testi
 			require.Equal(t, tt.wantStatus, items[0].Status)
 		})
 	}
+}
+
+func TestKubernetesReaderReturnsEmptyForKnownUnavailableKind(t *testing.T) {
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: fake.NewSimpleClientset()})
+
+	items, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Namespace: "orders", Kind: "VirtualService"})
+
+	require.NoError(t, err)
+	require.Empty(t, items)
 }
 
 func TestKubernetesReaderReadsClusterScopedPersistentVolumeYAML(t *testing.T) {

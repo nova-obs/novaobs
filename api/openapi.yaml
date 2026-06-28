@@ -695,6 +695,58 @@ paths:
       responses:
         "200":
           description: 返回过滤后的日志
+  /logs/endpoints:
+    get:
+      summary: 查询日志下游端点
+      responses:
+        "200":
+          description: 返回 VictoriaLogs、OTel、ES 或 Kafka 日志下游端点
+    post:
+      summary: 创建日志下游端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogEndpointInput"
+      responses:
+        "201":
+          description: 日志下游端点已创建
+  /logs/endpoints/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: 更新日志下游端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogEndpointInput"
+      responses:
+        "200":
+          description: 返回更新后的日志下游端点
+  /logs/endpoints/{id}/vmalert-runtime/publish:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 部署端点级 vmalert Runtime
+      description: 每个 K8s 集群级 VictoriaLogs 端点对应一个 vmalert Runtime；接口会生成包含规则 ConfigMap、vmalert Deployment 和 Service 的 K8s 清单，并写入 datasource 与 notifier 参数。首次请求返回待确认 YAML 与 confirmation token，携带 token 后执行部署。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogRuntimePublishRequest"
+      responses:
+        "200":
+          description: 返回 K8s 发布预览或应用结果、manifest YAML 和 artifact hash
   /alerts/rules:
     get:
       summary: 查询日志告警规则
@@ -711,7 +763,7 @@ paths:
               $ref: "#/components/schemas/AlertRuleChangeRequest"
       responses:
         "200":
-          description: 规则生产真值、更新记录和 Deployment 已原子创建
+          description: 规则生产真值、更新记录和审计已原子创建，规则等待 Runtime 发布
         "412":
           description: 历史日志测试凭据缺失或已失效
   /alerts/rules/test:
@@ -735,7 +787,7 @@ paths:
       summary: 更新并直接启用日志告警规则
       responses:
         "200":
-          description: 已创建更新记录和待调和 Deployment
+          description: 已创建更新记录，规则等待 Runtime 发布
   /alerts/rules/{id}/disable:
     parameters:
       - name: id
@@ -746,7 +798,7 @@ paths:
       summary: 停用规则
       responses:
         "200":
-          description: 已创建停用更新和待调和 Deployment
+          description: 已创建停用更新，规则等待 Runtime 发布
   /alerts/rules/{id}/updates:
     parameters:
       - name: id
@@ -768,18 +820,7 @@ paths:
       summary: 回退到指定更新记录
       responses:
         "200":
-          description: 已创建新的回退更新和待调和 Deployment
-  /alerts/rules/{id}/deployments:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema: { type: string }
-    get:
-      summary: 查询规则调和记录
-      responses:
-        "200":
-          description: 返回发布、回读和失败状态
+          description: 已创建新的回退更新，规则等待 Runtime 发布
   /alerts/instances:
     get:
       summary: 查询当前告警实例投影
@@ -842,6 +883,60 @@ components:
       type: http
       scheme: bearer
   schemas:
+    LogEndpointInput:
+      type: object
+      required: [name, sink_type, write_url, scope_type]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        sink_type:
+          type: string
+          enum: [vl, otel, es, kafka]
+        stream_name:
+          type: string
+        write_url:
+          type: string
+        query_url:
+          type: string
+        vmui_url:
+          type: string
+        alertmanager_url:
+          type: string
+          description: K8s 集群级 VictoriaLogs 端点部署 vmalert Runtime 时使用的 Alertmanager notify 地址
+        account_id:
+          type: string
+        project_id:
+          type: string
+        secret_ref:
+          type: string
+        scope_type:
+          type: string
+          enum: [global, k8s_cluster, vm]
+        cluster_id:
+          type: string
+          description: K8s 集群级日志下游端点必须选择已登记 K8s 集群 ID
+        status:
+          type: string
+          enum: [active, disabled]
+    LogRuntimePublishRequest:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+          description: 已登记 K8s 集群 ID，必须与日志端点绑定集群一致
+        namespace:
+          type: string
+          default: novaobs-system
+          description: 固定平台 namespace；非 novaobs-system 会被拒绝
+        alertmanager_url:
+          type: string
+          description: 可覆盖端点保存的 Alertmanager URL；为空时使用端点配置
+        preview_id:
+          type: string
+        confirmation_token:
+          type: string
     AlertRuleChangeRequest:
       type: object
       required: [spec, test_token]

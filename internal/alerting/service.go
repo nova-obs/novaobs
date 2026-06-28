@@ -2,7 +2,6 @@ package alerting
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"novaobs/internal/platform/audit"
@@ -61,9 +60,8 @@ type RollbackRequest struct {
 }
 
 type ChangeResult struct {
-	Rule       Rule         `json:"rule"`
-	Update     UpdateRecord `json:"update"`
-	Deployment Deployment   `json:"deployment"`
+	Rule   Rule         `json:"rule"`
+	Update UpdateRecord `json:"update"`
 }
 
 type denyAuthorizer struct{}
@@ -173,7 +171,6 @@ func (s Service) Enable(ctx context.Context, subject platformrbac.Subject, req E
 	actor := actorFromSubject(subject)
 	ruleID := s.newID()
 	updateID := s.newID()
-	deploymentID := s.newID()
 	auditID := s.newID()
 	inputHash, err := spec.InputHash()
 	if err != nil {
@@ -204,8 +201,7 @@ func (s Service) Enable(ctx context.Context, subject platformrbac.Subject, req E
 			AuditID:        auditID,
 			CreatedAt:      now,
 		},
-		Deployment: newDeployment(deploymentID, ruleID, updateID, spec.Scope.EndpointID, now),
-		Audit:      newAuditEvent(auditID, actor, ruleID, spec, UpdateActionCreate, now),
+		Audit: newAuditEvent(auditID, actor, ruleID, spec, UpdateActionCreate, now),
 	}
 	if err := s.repository.SaveChange(ctx, change); err != nil {
 		return ChangeResult{}, err
@@ -399,16 +395,6 @@ func (s Service) ListUpdates(ctx context.Context, subject platformrbac.Subject, 
 	return s.repository.ListUpdates(ctx, ruleID, limit)
 }
 
-func (s Service) ListDeployments(ctx context.Context, subject platformrbac.Subject, ruleID string, limit int) ([]Deployment, error) {
-	if _, err := s.Get(ctx, subject, ruleID); err != nil {
-		return nil, err
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	}
-	return s.repository.ListDeployments(ctx, DeploymentFilter{RuleID: ruleID, Limit: limit})
-}
-
 func (s Service) saveExistingChange(ctx context.Context, subject platformrbac.Subject, current Rule, spec RuleSpec, state string, action string, sourceUpdateID string, summary string) (ChangeResult, error) {
 	inputHash, err := spec.InputHash()
 	if err != nil {
@@ -417,7 +403,6 @@ func (s Service) saveExistingChange(ctx context.Context, subject platformrbac.Su
 	now := s.clock().UTC()
 	actor := actorFromSubject(subject)
 	updateID := s.newID()
-	deploymentID := s.newID()
 	auditID := s.newID()
 	updated := current
 	updated.Spec = spec
@@ -442,7 +427,6 @@ func (s Service) saveExistingChange(ctx context.Context, subject platformrbac.Su
 			AuditID:        auditID,
 			CreatedAt:      now,
 		},
-		Deployment:              newDeployment(deploymentID, current.ID, updateID, spec.Scope.EndpointID, now),
 		Audit:                   newAuditEvent(auditID, actor, current.ID, spec, action, now),
 		ExpectedCurrentUpdateID: current.CurrentUpdateID,
 	}
@@ -462,18 +446,6 @@ func (s Service) allowed(subject platformrbac.Subject, scope RuleScope, action s
 		Scope:    platformrbac.Scope{ServiceID: scope.ServiceID},
 	})
 	return decision.Allowed
-}
-
-func newDeployment(id string, ruleID string, updateID string, endpointID string, now time.Time) Deployment {
-	return Deployment{
-		ID:        id,
-		RuleID:    ruleID,
-		UpdateID:  updateID,
-		RuntimeID: fmt.Sprintf("vmalert-logs:%s", endpointID),
-		Status:    DeploymentStatusPending,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
 }
 
 func actorFromSubject(subject platformrbac.Subject) Actor {
@@ -509,5 +481,5 @@ func defaultSummary(value string, fallback string) string {
 }
 
 func resultFromChange(change ChangeSet) ChangeResult {
-	return ChangeResult{Rule: change.Rule, Update: change.Update, Deployment: change.Deployment}
+	return ChangeResult{Rule: change.Rule, Update: change.Update}
 }

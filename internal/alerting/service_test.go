@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEnableCreatesProductionRuleUpdateAndDeploymentWithoutDraft(t *testing.T) {
+func TestEnableCreatesProductionRuleAndUpdateWithoutDraft(t *testing.T) {
 	repo := newFakeRepository()
 	service := newTestService(repo)
 
@@ -26,8 +26,6 @@ func TestEnableCreatesProductionRuleUpdateAndDeploymentWithoutDraft(t *testing.T
 	require.NotEmpty(t, result.Rule.CurrentUpdateID)
 	require.Equal(t, UpdateActionCreate, result.Update.Action)
 	require.Equal(t, testSubject().ID, result.Update.Actor.ID)
-	require.Equal(t, DeploymentStatusPending, result.Deployment.Status)
-	require.Equal(t, result.Update.ID, result.Deployment.UpdateID)
 	require.Len(t, repo.changes, 1)
 }
 
@@ -217,10 +215,6 @@ func (r *fakeRepository) ListUpdates(_ context.Context, ruleID string, _ int) ([
 		}
 	}
 	return out, nil
-}
-
-func (r *fakeRepository) ListDeployments(_ context.Context, _ DeploymentFilter) ([]Deployment, error) {
-	return nil, nil
 }
 
 type allowAuthorizer struct{}

@@ -5,13 +5,15 @@
 > 范围：NovaObs 告警中心、查询式日志规则、日志派生指标、vmalert Runtime、Alertmanager 通知闭环  
 > 明确延期：流式日志告警、严格连续事件匹配、Kafka 状态计算进入二期
 
+> 2026-06-26 更新：本文中的 `cmd/alert-controller`、MongoDB Deployment lease 和共享规则目录写入器方案已废弃。当前实现改为端点级 vmalert Runtime 发布：K8s 集群级 VictoriaLogs 端点保存 Alertmanager URL，NovaObs API 在端点页预览/应用包含 `ConfigMap + Deployment + Service` 的 vmalert 清单，规则 artifact 作为 ConfigMap 挂载给该端点唯一 Runtime。历史正文仅保留早期决策背景，不能再作为实施基线。
+
 ## 0. 架构决策摘要
 
 下一阶段按以下结论实施，不再继续扩展当前只有列表和创建能力的 `AlertRule` 占位模型：
 
 1. **不引入 Flink，不自研日志规则执行引擎。**一期只实现查询式日志告警，执行器采用社区版 vmalert。
-2. **规则管理集中在 NovaObs。**MongoDB 保存当前规则、更新记录、Deployment、Runtime 期望状态、通知策略和审计，是唯一控制面生产真值；产品不引入草稿态，也不突出“版本”概念。
-3. **新增部署进程，但不新建代码仓库。**在现有 `novaobs` Go Module 中新增 `cmd/alert-controller`；HTTP API 继续由 `cmd/server` 承载。
+2. **规则管理集中在 NovaObs。**MongoDB 保存当前规则、更新记录、通知策略、告警事件和审计，是唯一控制面生产真值；产品不引入草稿态，也不突出“版本”概念。
+3. **不再新增独立部署进程。**端点级 vmalert Runtime 由 `cmd/server` 通过 K8s 安全部署能力预览和应用；旧 `cmd/alert-controller` 方案已废弃。
 4. **vmalert 是外部 Runtime，不是 NovaObs 业务服务。**NovaObs 负责生成、发布、核对和回滚规则产物，vmalert 只负责周期查询、计算、状态机和向 Alertmanager 发送告警。
 5. **独立 VictoriaLogs Endpoint 默认对应独立日志 Runtime。**同一 Endpoint 下的多个业务和 VictoriaLogs 租户共享 Runtime；不按业务、不按规则启动 vmalert。
 6. **日志和指标使用独立 vmalert Runtime。**`vmalert-logs` 查询 VictoriaLogs；`vmalert-metrics` 查询 VictoriaMetrics。不要让一个进程同时承担两类故障域。
@@ -586,21 +588,18 @@ sequenceDiagram
     participant U as User
     participant API as novaobs server
     participant DB as MongoDB
-    participant C as alert-controller
-    participant VL as VictoriaLogs
-    participant V as vmalert
+    participant K as K8s API
+    participant V as vmalert Runtime
 
     U->>API: 历史测试后启用规则
-    API->>DB: 创建 Deployment(pending) + 审计
-    C->>DB: 获取 lease
-    C->>VL: 历史测试/语法验证
-    C->>C: 编译完整 Runtime YAML
-    C->>DB: 保存 Artifact + 更新 desired hash
-    C->>C: 原子替换 Runtime 规则文件
-    C->>V: POST /-/reload
-    C->>V: GET /api/v1/rules
-    C->>DB: 写 applied hash / error
-    API-->>U: 展示最终发布状态
+    API->>DB: 保存 Rule(pending) + Update + 审计
+    U->>API: 在日志端点页预览 Runtime
+    API->>API: 编译端点下 enabled 规则为完整 artifact
+    API->>K: 预览 ConfigMap + Deployment + Service
+    U->>API: 确认应用 Runtime
+    API->>K: 应用 vmalert Runtime 清单
+    API->>DB: 标记端点下规则 applied
+    API-->>U: 展示 Runtime 发布状态
 ```
 
 ### 10.2 原子性要求
@@ -637,8 +636,6 @@ PUT    /alerts/rules/{id}
 POST   /alerts/rules/{id}/disable
 GET    /alerts/rules/{id}/updates
 POST   /alerts/rules/{id}/rollback
-GET    /alerts/rules/{id}/deployments
-
 GET    /alerts/instances
 GET    /alerts/events
 
@@ -653,7 +650,7 @@ Alertmanager 使用独立 Bearer Token 调用：
 POST /api/v1/alerts/webhook/alertmanager
 ```
 
-创建、更新、停用和回退都会产生 Deployment 与审计；用户不需要理解单独的“发布”动作。
+创建、更新、停用和回退都会产生规则更新记录与审计，并把规则应用状态置为 `pending`；Runtime 发布入口在日志端点配置页。
 
 ## 12. IAM、权限与审计
 
@@ -779,10 +776,6 @@ alert_rules
   index(log_endpoint_id, enabled)
 
 alert_rule_updates
-  index(rule_id, created_at desc)
-
-alert_rule_deployments
-  index(status, lease_expires_at, created_at)
   index(rule_id, created_at desc)
 
 alert_runtimes

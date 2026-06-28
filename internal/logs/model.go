@@ -20,22 +20,23 @@ const (
 )
 
 type LogEndpoint struct {
-	ID          string    `json:"id" bson:"_id"`
-	Name        string    `json:"name" bson:"name"`
-	Description string    `json:"description" bson:"description"`
-	SinkType    string    `json:"sink_type" bson:"sink_type"`
-	StreamName  string    `json:"stream_name" bson:"stream_name"`
-	WriteURL    string    `json:"write_url" bson:"write_url"`
-	QueryURL    string    `json:"query_url" bson:"query_url"`
-	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
-	AccountID   string    `json:"account_id" bson:"account_id"`
-	ProjectID   string    `json:"project_id" bson:"project_id"`
-	SecretRef   string    `json:"secret_ref" bson:"secret_ref"`
-	ScopeType   string    `json:"scope_type" bson:"scope_type"`
-	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
-	Status      string    `json:"status" bson:"status"`
-	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
+	ID              string    `json:"id" bson:"_id"`
+	Name            string    `json:"name" bson:"name"`
+	Description     string    `json:"description" bson:"description"`
+	SinkType        string    `json:"sink_type" bson:"sink_type"`
+	StreamName      string    `json:"stream_name" bson:"stream_name"`
+	WriteURL        string    `json:"write_url" bson:"write_url"`
+	QueryURL        string    `json:"query_url" bson:"query_url"`
+	VMUIURL         string    `json:"vmui_url" bson:"vmui_url"`
+	AlertmanagerURL string    `json:"alertmanager_url" bson:"alertmanager_url"`
+	AccountID       string    `json:"account_id" bson:"account_id"`
+	ProjectID       string    `json:"project_id" bson:"project_id"`
+	SecretRef       string    `json:"secret_ref" bson:"secret_ref"`
+	ScopeType       string    `json:"scope_type" bson:"scope_type"`
+	ClusterID       string    `json:"cluster_id" bson:"cluster_id"`
+	Status          string    `json:"status" bson:"status"`
+	CreatedAt       time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 type LogSource struct {

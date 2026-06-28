@@ -40,6 +40,7 @@ type Store interface {
 	IAMGroups() IAMGroupStore
 	IAMMemberships() IAMMembershipStore
 	IAMServiceAccounts() IAMServiceAccountStore
+	PlatformImages() PlatformImageStore
 	Secrets() SecretStore
 	AuditEvents() AuditEventStore
 	K8sClusters() K8sClusterStore
@@ -181,15 +182,13 @@ type LogCollectorClusterConfigStore interface {
 }
 
 type AlertingStore interface {
-	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error
+	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, auditEvent interface{}) error
 	FindRules(ctx context.Context, serviceID string, state string, results interface{}) error
 	FindRuleByID(ctx context.Context, id string, result interface{}) error
 	FindUpdate(ctx context.Context, ruleID string, updateID string, result interface{}) error
 	FindUpdates(ctx context.Context, ruleID string, limit int, results interface{}) error
-	FindDeployments(ctx context.Context, ruleID string, status string, limit int, results interface{}) error
-	ClaimDeployment(ctx context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error
 	FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error
-	CompleteDeployment(ctx context.Context, deployment interface{}, artifact interface{}) error
+	MarkRuntimeRulesApplied(ctx context.Context, endpointID string, appliedAt time.Time) (int64, error)
 	ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error
 	FindAlertInstances(ctx context.Context, ruleID string, serviceID string, state string, limit int, results interface{}) error
 	FindAlertEvents(ctx context.Context, ruleID string, fingerprint string, limit int, results interface{}) error
@@ -245,6 +244,11 @@ type IAMServiceAccountStore interface {
 	FindAll(ctx context.Context, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Delete(ctx context.Context, id string) error
+}
+
+type PlatformImageStore interface {
+	Upsert(ctx context.Context, key string, image interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 }
 
 type SecretStore interface {

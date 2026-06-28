@@ -124,21 +124,6 @@ func rollbackAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 	}
 }
 
-func listAlertRuleDeploymentsHandler(service alerting.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		subject, ok := alertSubject(ctx)
-		if !ok {
-			return
-		}
-		items, err := service.ListDeployments(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), alertListLimit(ctx.Query("limit")))
-		if err != nil {
-			writeAlertingError(ctx, err)
-			return
-		}
-		response.OK(ctx, items, gin.H{"total": len(items)})
-	}
-}
-
 func alertListLimit(raw string) int {
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 1 || value > 100 {

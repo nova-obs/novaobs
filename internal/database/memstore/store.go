@@ -36,8 +36,6 @@ type Store struct {
 	lgccs map[string]interface{}
 	ars   map[string]interface{}
 	arus  map[string]interface{}
-	ards  map[string]interface{}
-	arts  map[string]interface{}
 	aris  map[string]interface{}
 	ares  map[string]interface{}
 	arps  map[string]interface{}
@@ -48,6 +46,7 @@ type Store struct {
 	igns  map[string]interface{}
 	imbs  map[string]interface{}
 	isas  map[string]interface{}
+	imgs  map[string]interface{}
 	secs  map[string]interface{}
 	aes   map[string]interface{}
 	kcls  map[string]interface{}
@@ -80,8 +79,6 @@ func NewStore() *Store {
 		lgccs: map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		arus:  map[string]interface{}{},
-		ards:  map[string]interface{}{},
-		arts:  map[string]interface{}{},
 		aris:  map[string]interface{}{},
 		ares:  map[string]interface{}{},
 		arps:  map[string]interface{}{},
@@ -92,6 +89,7 @@ func NewStore() *Store {
 		igns:  map[string]interface{}{},
 		imbs:  map[string]interface{}{},
 		isas:  map[string]interface{}{},
+		imgs:  map[string]interface{}{},
 		secs:  map[string]interface{}{},
 		aes:   map[string]interface{}{},
 		kcls:  map[string]interface{}{},
@@ -152,10 +150,11 @@ func (s *Store) IAMMemberships() database.IAMMembershipStore     { return &iamMe
 func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
 	return &iamServiceAccountStore{s}
 }
-func (s *Store) Secrets() database.SecretStore             { return &secretStore{s} }
-func (s *Store) AuditEvents() database.AuditEventStore     { return &auditEventStore{s} }
-func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s} }
+func (s *Store) PlatformImages() database.PlatformImageStore { return &platformImageStore{s} }
+func (s *Store) Secrets() database.SecretStore               { return &secretStore{s} }
+func (s *Store) AuditEvents() database.AuditEventStore       { return &auditEventStore{s} }
+func (s *Store) K8sClusters() database.K8sClusterStore       { return &k8sClusterStore{s} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore   { return &k8sNamespaceStore{s} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s}
 }
@@ -839,7 +838,7 @@ func (st *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clu
 
 type alertingStore struct{ s *Store }
 
-func (st *alertingStore) SaveChange(_ context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, deployment interface{}, auditEvent interface{}) error {
+func (st *alertingStore) SaveChange(_ context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, auditEvent interface{}) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
 	ruleID := extractID(rule)
@@ -891,7 +890,6 @@ func (st *alertingStore) SaveChange(_ context.Context, expectedCurrentUpdateID s
 	}
 	st.s.ars[ruleID] = rule
 	st.s.arus[extractID(update)] = update
-	st.s.ards[extractID(deployment)] = deployment
 	st.s.aes[extractID(auditEvent)] = auditEvent
 	return nil
 }
@@ -970,71 +968,6 @@ func (st *alertingStore) FindUpdates(_ context.Context, ruleID string, _ int, re
 	return copyAll(filtered, results)
 }
 
-func (st *alertingStore) FindDeployments(_ context.Context, ruleID string, status string, _ int, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for id, raw := range st.s.ards {
-		var index struct {
-			RuleID string `json:"rule_id"`
-			Status string `json:"status"`
-		}
-		if err := copyValue(raw, &index); err != nil {
-			return err
-		}
-		if ruleID != "" && index.RuleID != ruleID {
-			continue
-		}
-		if status != "" && index.Status != status {
-			continue
-		}
-		filtered[id] = raw
-	}
-	return copyAll(filtered, results)
-}
-
-func (st *alertingStore) ClaimDeployment(_ context.Context, workerID string, runtimeID string, now time.Time, lease time.Duration, result interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	var selectedID string
-	var selectedCreatedAt time.Time
-	for id, raw := range st.s.ards {
-		var index struct {
-			RuntimeID      string    `json:"runtime_id"`
-			Status         string    `json:"status"`
-			Attempt        int       `json:"attempt"`
-			LeaseExpiresAt time.Time `json:"lease_expires_at"`
-			NextAttemptAt  time.Time `json:"next_attempt_at"`
-			CreatedAt      time.Time `json:"created_at"`
-		}
-		if err := copyValue(raw, &index); err != nil {
-			return err
-		}
-		if index.RuntimeID != runtimeID || (index.Status != "pending" && index.Status != "failed") {
-			continue
-		}
-		if index.Attempt >= 5 || index.LeaseExpiresAt.After(now) || index.NextAttemptAt.After(now) {
-			continue
-		}
-		if selectedID == "" || index.CreatedAt.Before(selectedCreatedAt) {
-			selectedID, selectedCreatedAt = id, index.CreatedAt
-		}
-	}
-	if selectedID == "" {
-		return database.ErrNotFound
-	}
-	document, err := documentMap(st.s.ards[selectedID])
-	if err != nil {
-		return err
-	}
-	document["status"] = "validating"
-	document["lease_owner"] = workerID
-	document["lease_expires_at"] = now.Add(lease)
-	document["updated_at"] = now
-	st.s.ards[selectedID] = document
-	return copyValue(document, result)
-}
-
 func (st *alertingStore) FindRuntimeRules(_ context.Context, runtimeID string, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
@@ -1057,44 +990,36 @@ func (st *alertingStore) FindRuntimeRules(_ context.Context, runtimeID string, r
 	return copyAll(filtered, results)
 }
 
-func (st *alertingStore) CompleteDeployment(_ context.Context, deployment interface{}, artifact interface{}) error {
+func (st *alertingStore) MarkRuntimeRulesApplied(_ context.Context, endpointID string, appliedAt time.Time) (int64, error) {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
-	deploymentID := extractID(deployment)
-	if _, exists := st.s.ards[deploymentID]; !exists {
-		return database.ErrNotFound
-	}
-	st.s.ards[deploymentID] = deployment
-	if artifactID := extractID(artifact); artifactID != "" {
-		st.s.arts[artifactID] = artifact
-	}
-	var completed struct {
-		RuleID              string `json:"rule_id"`
-		UpdateID            string `json:"update_id"`
-		Status              string `json:"status"`
-		AppliedArtifactHash string `json:"applied_artifact_hash"`
-	}
-	if err := copyValue(deployment, &completed); err != nil {
-		return err
-	}
-	rawRule, exists := st.s.ars[completed.RuleID]
-	if !exists {
-		return database.ErrNotFound
-	}
-	rule, err := documentMap(rawRule)
-	if err != nil {
-		return err
-	}
-	if rule["current_update_id"] == completed.UpdateID {
-		if completed.Status == "applied" {
-			rule["applied_update_id"] = completed.UpdateID
-			rule["apply_status"] = "applied"
-		} else if completed.Status == "failed" {
-			rule["apply_status"] = "failed"
+	var applied int64
+	for id, raw := range st.s.ars {
+		var index struct {
+			CurrentUpdateID string `json:"current_update_id"`
+			Spec            struct {
+				Scope struct {
+					EndpointID string `json:"endpoint_id"`
+				} `json:"scope"`
+			} `json:"spec"`
 		}
-		st.s.ars[completed.RuleID] = rule
+		if err := copyValue(raw, &index); err != nil {
+			return applied, err
+		}
+		if index.Spec.Scope.EndpointID != endpointID {
+			continue
+		}
+		rule, err := documentMap(raw)
+		if err != nil {
+			return applied, err
+		}
+		rule["apply_status"] = "applied"
+		rule["applied_update_id"] = index.CurrentUpdateID
+		rule["updated_at"] = appliedAt
+		st.s.ars[id] = rule
+		applied++
 	}
-	return nil
+	return applied, nil
 }
 
 func documentMap(value interface{}) (map[string]interface{}, error) {
@@ -1491,6 +1416,21 @@ func (st *iamServiceAccountStore) Delete(ctx context.Context, id string) error {
 	defer st.s.mu.Unlock()
 	delete(st.s.isas, id)
 	return nil
+}
+
+type platformImageStore struct{ s *Store }
+
+func (st *platformImageStore) Upsert(ctx context.Context, key string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.imgs[key] = v
+	return nil
+}
+
+func (st *platformImageStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.imgs, results)
 }
 
 // ---------- Secret Store ----------

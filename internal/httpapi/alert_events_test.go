@@ -20,10 +20,9 @@ func TestAlertmanagerWebhookRequiresTokenAndPersistsEvent(t *testing.T) {
 	store := memstore.NewStore()
 	repository := alerting.NewStoreRepository(store.Alerting())
 	require.NoError(t, repository.SaveChange(context.Background(), alerting.ChangeSet{
-		Rule:       alerting.Rule{ID: "rule-a", Spec: alerting.RuleSpec{Scope: alerting.RuleScope{ServiceID: "service-a"}}, State: alerting.RuleStateEnabled},
-		Update:     alerting.UpdateRecord{ID: "update-a", RuleID: "rule-a"},
-		Deployment: alerting.Deployment{ID: "deployment-a", RuleID: "rule-a"},
-		Audit:      audit.Event{ID: "audit-a"},
+		Rule:   alerting.Rule{ID: "rule-a", Spec: alerting.RuleSpec{Scope: alerting.RuleScope{ServiceID: "service-a"}}, State: alerting.RuleStateEnabled},
+		Update: alerting.UpdateRecord{ID: "update-a", RuleID: "rule-a"},
+		Audit:  audit.Event{ID: "audit-a"},
 	}))
 	handler := alertmanagerWebhookHandler(alerting.NewEventIngestor(repository, repository, "webhook-secret", nil))
 	router := gin.New()

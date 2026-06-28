@@ -39,6 +39,10 @@ type K8sDeploymentService interface {
 	Apply(ctx context.Context, subject platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error)
 }
 
+type ImageTemplateValueService interface {
+	TemplateValues(ctx context.Context) (map[string]string, error)
+}
+
 type Service struct {
 	endpoints        database.LogEndpointStore
 	sources          database.LogSourceStore
@@ -53,6 +57,7 @@ type Service struct {
 	k8sClusters      K8sClusterService
 	k8sResources     K8sResourceService
 	k8sDeployments   K8sDeploymentService
+	imageTemplates   ImageTemplateValueService
 	deployment       agentDeploymentOptions
 }
 
@@ -65,6 +70,12 @@ type ServiceOption func(*Service)
 func WithAgentOpAMPEndpoint(endpoint string) ServiceOption {
 	return func(s *Service) {
 		s.deployment.OpAMPEndpoint = strings.TrimSpace(endpoint)
+	}
+}
+
+func WithImageTemplateValues(service ImageTemplateValueService) ServiceOption {
+	return func(s *Service) {
+		s.imageTemplates = service
 	}
 }
 
@@ -179,6 +190,9 @@ func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogE
 	if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == "" {
 		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级日志下游端点必须填写 cluster_id")
 	}
+	if err := s.ensureEndpointClusterRegistered(ctx, endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
 	existing, err := s.ListEndpoints(ctx)
 	if err != nil {
 		return LogEndpoint{}, err
@@ -223,6 +237,9 @@ func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndp
 	if endpoint.ScopeType == EndpointScopeK8sCluster && endpoint.ClusterID == "" {
 		return LogEndpoint{}, apperr.InvalidRequest("K8s 集群级日志下游端点必须填写 cluster_id")
 	}
+	if err := s.ensureEndpointClusterRegistered(ctx, endpoint); err != nil {
+		return LogEndpoint{}, err
+	}
 	all, err := s.ListEndpoints(ctx)
 	if err != nil {
 		return LogEndpoint{}, err
@@ -244,6 +261,22 @@ func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndp
 		return LogEndpoint{}, err
 	}
 	return endpoint, nil
+}
+
+func (s Service) ensureEndpointClusterRegistered(ctx context.Context, endpoint LogEndpoint) error {
+	if endpoint.ScopeType != EndpointScopeK8sCluster {
+		return nil
+	}
+	if s.k8sClusters == nil {
+		return nil
+	}
+	if _, err := s.k8sClusters.Get(ctx, endpoint.ClusterID); err != nil {
+		if errors.Is(err, k8sopscluster.ErrClusterNotFound) || errors.Is(err, k8sopscluster.ErrInvalidClusterRequest) {
+			return apperr.InvalidRequest("日志下游端点只能绑定已登记的 K8s 集群")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s Service) ListEndpoints(ctx context.Context) ([]LogEndpoint, error) {
@@ -1190,7 +1223,16 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 			processorPatch = clusterCfg.ProcessorPatch
 		}
 	}
-	rendered, err := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	var rendered renderedRouteConfig
+	if s.imageTemplates == nil {
+		rendered, err = renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	} else {
+		templateValues, valuesErr := s.imageTemplates.TemplateValues(ctx)
+		if valuesErr != nil {
+			return renderedRouteConfig{}, valuesErr
+		}
+		rendered, err = renderK8sDaemonSetBundleWithTemplateValues(inputs, processorPatch, templateValues)
+	}
 	if err != nil {
 		return renderedRouteConfig{}, apperr.InvalidRequest(err.Error())
 	}
@@ -1433,6 +1475,7 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.WriteURL = strings.TrimSpace(endpoint.WriteURL)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
 	endpoint.VMUIURL = strings.TrimSpace(endpoint.VMUIURL)
+	endpoint.AlertmanagerURL = strings.TrimSpace(endpoint.AlertmanagerURL)
 	endpoint.AccountID = strings.TrimSpace(endpoint.AccountID)
 	endpoint.ProjectID = strings.TrimSpace(endpoint.ProjectID)
 	endpoint.SecretRef = strings.TrimSpace(endpoint.SecretRef)
@@ -1452,6 +1495,7 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	if endpoint.SinkType != EndpointSinkVL {
 		endpoint.AccountID = ""
 		endpoint.ProjectID = ""
+		endpoint.AlertmanagerURL = ""
 	}
 	return endpoint
 }
@@ -1473,6 +1517,11 @@ func validateEndpoint(endpoint LogEndpoint) error {
 		}
 		for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
 			if err := validateHTTPURL(rawURL, "VL 下游端点地址"); err != nil {
+				return err
+			}
+		}
+		if endpoint.AlertmanagerURL != "" {
+			if err := validateHTTPURL(endpoint.AlertmanagerURL, "Alertmanager 通知地址"); err != nil {
 				return err
 			}
 		}

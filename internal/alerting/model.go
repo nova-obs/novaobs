@@ -42,11 +42,9 @@ const (
 	RuleStateEnabled  = "enabled"
 	RuleStateDisabled = "disabled"
 
-	ApplyStatusPending    = "pending"
-	ApplyStatusPublishing = "publishing"
-	ApplyStatusApplied    = "applied"
-	ApplyStatusFailed     = "failed"
-	ApplyStatusRolledBack = "rolled_back"
+	ApplyStatusPending = "pending"
+	ApplyStatusApplied = "applied"
+	ApplyStatusFailed  = "failed"
 
 	EvaluationHealthUnknown = "unknown"
 	EvaluationHealthOK      = "ok"
@@ -57,13 +55,6 @@ const (
 	UpdateActionUpdate   = "update"
 	UpdateActionDisable  = "disable"
 	UpdateActionRollback = "rollback"
-
-	DeploymentStatusPending    = "pending"
-	DeploymentStatusValidating = "validating"
-	DeploymentStatusPublishing = "publishing"
-	DeploymentStatusApplied    = "applied"
-	DeploymentStatusFailed     = "failed"
-	DeploymentStatusRolledBack = "rolled_back"
 )
 
 type Rule struct {
@@ -163,24 +154,6 @@ type UpdateRecord struct {
 	CreatedAt      time.Time `json:"created_at" bson:"created_at"`
 }
 
-type Deployment struct {
-	ID                   string    `json:"id" bson:"_id"`
-	RuleID               string    `json:"rule_id" bson:"rule_id"`
-	UpdateID             string    `json:"update_id" bson:"update_id"`
-	RuntimeID            string    `json:"runtime_id" bson:"runtime_id"`
-	Status               string    `json:"status" bson:"status"`
-	DesiredArtifactHash  string    `json:"desired_artifact_hash,omitempty" bson:"desired_artifact_hash,omitempty"`
-	AppliedArtifactHash  string    `json:"applied_artifact_hash,omitempty" bson:"applied_artifact_hash,omitempty"`
-	PreviousArtifactHash string    `json:"previous_artifact_hash,omitempty" bson:"previous_artifact_hash,omitempty"`
-	Attempt              int       `json:"attempt" bson:"attempt"`
-	LastError            string    `json:"last_error,omitempty" bson:"last_error,omitempty"`
-	LeaseOwner           string    `json:"-" bson:"lease_owner,omitempty"`
-	LeaseExpiresAt       time.Time `json:"-" bson:"lease_expires_at,omitempty"`
-	NextAttemptAt        time.Time `json:"next_attempt_at,omitempty" bson:"next_attempt_at,omitempty"`
-	CreatedAt            time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
-}
-
 type Artifact struct {
 	ID        string    `json:"id" bson:"_id"`
 	RuntimeID string    `json:"runtime_id" bson:"runtime_id"`
@@ -193,12 +166,6 @@ type Artifact struct {
 type RuleFilter struct {
 	ServiceID string
 	State     string
-}
-
-type DeploymentFilter struct {
-	RuleID string
-	Status string
-	Limit  int
 }
 
 type TestRequest struct {

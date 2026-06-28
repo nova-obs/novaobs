@@ -18,6 +18,8 @@ import (
 	"novaobs/internal/database/memstore"
 	"novaobs/internal/logs"
 	"novaobs/internal/modules/k8sops"
+	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
+	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -38,6 +40,33 @@ type testEnv struct {
 	service servicecatalog.Service
 	group   collectormanagement.CollectorGroup
 	manager *opamp.Manager
+}
+
+type testRuntimeDeploymentService struct{}
+
+func (testRuntimeDeploymentService) Preview(_ context.Context, _ platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error) {
+	return k8sopsdeployment.OperationResult{
+		Status:            "previewed",
+		Message:           "previewed",
+		PreviewID:         "preview-runtime",
+		ConfirmationToken: "confirm-runtime",
+		AuditID:           "audit-runtime-preview",
+		Resources: []k8sopsdeployment.ResourceIdentity{{
+			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system",
+		}},
+	}, nil
+}
+
+func (testRuntimeDeploymentService) Apply(_ context.Context, _ platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error) {
+	return k8sopsdeployment.OperationResult{
+		Status:    "applied",
+		Message:   "applied",
+		PreviewID: req.PreviewID,
+		AuditID:   "audit-runtime-apply",
+		Resources: []k8sopsdeployment.ResourceIdentity{{
+			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system",
+		}},
+	}, nil
 }
 
 func TestErrorLogMiddlewareLogsServerErrorsWithCause(t *testing.T) {
@@ -163,7 +192,10 @@ func newTestRouter(t *testing.T) testEnv {
 		iam.NewStoreRBACRepository(store.RBACRoles(), store.RBACBindings()),
 		rbacSvc,
 	)
-	k8sModule := k8sops.NewModule()
+	alertRepository := alerting.NewStoreRepository(store.Alerting())
+	k8sModule := k8sops.NewModuleWithSecurity(nil, nil, nil, k8sopscluster.NewMemoryRepository([]k8sopscluster.Cluster{
+		{ID: "prod-1", Name: "prod-1", Status: "active"},
+	}))
 	logsSvc := logs.NewService(
 		store.LogEndpoints(),
 		store.LogSources(),
@@ -179,6 +211,11 @@ func newTestRouter(t *testing.T) testEnv {
 		k8sModule.Resource,
 		k8sModule.Deploy,
 	)
+	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
+		Endpoints:      store.LogEndpoints(),
+		Repository:     alertRepository,
+		K8sDeployments: testRuntimeDeploymentService{},
+	})
 	router := NewRouter(Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
@@ -187,12 +224,13 @@ func newTestRouter(t *testing.T) testEnv {
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogsService:            logsSvc,
+		AlertRuntimeService:    alertRuntimeSvc,
 		AlertService: alerting.NewService(alerting.Dependencies{
-			Repository: alerting.NewStoreRepository(store.Alerting()),
+			Repository: alertRepository,
 			Authorizer: rbacSvc,
 		}),
 		AlertPolicyService: alerting.NewPolicyService(alerting.PolicyDependencies{
-			Repository: alerting.NewStoreRepository(store.Alerting()),
+			Repository: alertRepository,
 			Authorizer: rbacSvc,
 		}),
 		PlatformIAMService: iamSvc,
@@ -622,6 +660,33 @@ func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 	require.Contains(t, updateRecorder.Body.String(), `"write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs"`)
 	require.Contains(t, updateRecorder.Body.String(), `"account_id":"9528"`)
 	require.Contains(t, updateRecorder.Body.String(), `"project_id":"9529"`)
+}
+
+func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
+	env := newTestRouter(t)
+	endpointBody := `{"name":"vl-prod","sink_type":"vl","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","scope_type":"k8s_cluster","cluster_id":"prod-1"}`
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))
+	createRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(createRecorder, createRequest)
+	require.Equal(t, http.StatusCreated, createRecorder.Code)
+	var created struct {
+		Data logs.LogEndpoint `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
+	require.Empty(t, created.Data.AlertmanagerURL)
+
+	publishRecorder := httptest.NewRecorder()
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alertmanager_url":"http://alertmanager:9093"}`))
+	publishRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(publishRecorder, publishRequest)
+
+	require.Equal(t, http.StatusOK, publishRecorder.Code)
+	require.Contains(t, publishRecorder.Body.String(), `"runtime_id":"vmalert-logs:`+created.Data.ID+`"`)
+	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
+	require.Contains(t, publishRecorder.Body.String(), `"manifest_yaml"`)
+	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victorialogs:9428")
+	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://alertmanager:9093")
 }
 
 func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {

@@ -23,13 +23,31 @@ func TestStoreRepositoryEnrichesRuntimeRulesWithManagedReceiver(t *testing.T) {
 	spec.Notification.AlertmanagerReceiver = ""
 	rule := Rule{ID: "rule-a", Spec: spec, State: RuleStateEnabled, CurrentUpdateID: "update-a", CreatedAt: now, UpdatedAt: now}
 	require.NoError(t, repository.SaveChange(context.Background(), ChangeSet{
-		Rule: rule, Update: UpdateRecord{ID: "update-a", RuleID: rule.ID},
-		Deployment: Deployment{ID: "deployment-a", RuleID: rule.ID, RuntimeID: "vmalert-logs:" + spec.Scope.EndpointID},
-		Audit:      audit.Event{ID: "audit-rule"},
+		Rule: rule, Update: UpdateRecord{ID: "update-a", RuleID: rule.ID}, Audit: audit.Event{ID: "audit-rule"},
 	}))
 
 	rules, err := repository.ListRuntimeRules(context.Background(), "vmalert-logs:"+spec.Scope.EndpointID)
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	require.Equal(t, policy.AlertmanagerReceiver, rules[0].Spec.Notification.AlertmanagerReceiver)
+}
+
+func TestStoreRepositoryMarksRuntimeRulesApplied(t *testing.T) {
+	store := memstore.NewStore()
+	repository := NewStoreRepository(store.Alerting())
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	spec := validRuleSpec()
+	rule := Rule{ID: "rule-a", Spec: spec, State: RuleStateDisabled, ApplyStatus: ApplyStatusPending, CurrentUpdateID: "update-a", CreatedAt: now, UpdatedAt: now}
+	require.NoError(t, repository.SaveChange(context.Background(), ChangeSet{
+		Rule: rule, Update: UpdateRecord{ID: "update-a", RuleID: rule.ID}, Audit: audit.Event{ID: "audit-rule"},
+	}))
+
+	applied, err := repository.MarkRuntimeRulesApplied(context.Background(), "vmalert-logs:"+spec.Scope.EndpointID, now.Add(time.Minute))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, applied)
+	var stored Rule
+	require.NoError(t, store.Alerting().FindRuleByID(context.Background(), rule.ID, &stored))
+	require.Equal(t, ApplyStatusApplied, stored.ApplyStatus)
+	require.Equal(t, rule.CurrentUpdateID, stored.AppliedUpdateID)
 }
