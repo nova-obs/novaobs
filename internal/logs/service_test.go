@@ -1199,6 +1199,31 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
 }
 
+func TestK8sDaemonSetUsesImageTemplateOverride(t *testing.T) {
+	input := renderInput{
+		ServiceName: "utrace-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:   SourceTypeK8sStdout,
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-001"},
+	}
+
+	rendered, err := renderK8sDaemonSetBundleWithTemplateValues([]renderInput{input}, "", map[string]string{
+		"__NOVAOBS_IMAGE_OTEL_COLLECTOR__": "harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, rendered.ManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
+	require.Contains(t, rendered.DeploymentManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
+	require.NotContains(t, rendered.ManifestYAML, "__NOVAOBS_IMAGE_OTEL_COLLECTOR__")
+}
+
 func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
 	input := renderInput{
 		ServiceName: "utrace-api",

@@ -39,6 +39,10 @@ type K8sDeploymentService interface {
 	Apply(ctx context.Context, subject platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error)
 }
 
+type ImageTemplateValueService interface {
+	TemplateValues(ctx context.Context) (map[string]string, error)
+}
+
 type Service struct {
 	endpoints        database.LogEndpointStore
 	sources          database.LogSourceStore
@@ -53,6 +57,7 @@ type Service struct {
 	k8sClusters      K8sClusterService
 	k8sResources     K8sResourceService
 	k8sDeployments   K8sDeploymentService
+	imageTemplates   ImageTemplateValueService
 	deployment       agentDeploymentOptions
 }
 
@@ -65,6 +70,12 @@ type ServiceOption func(*Service)
 func WithAgentOpAMPEndpoint(endpoint string) ServiceOption {
 	return func(s *Service) {
 		s.deployment.OpAMPEndpoint = strings.TrimSpace(endpoint)
+	}
+}
+
+func WithImageTemplateValues(service ImageTemplateValueService) ServiceOption {
+	return func(s *Service) {
+		s.imageTemplates = service
 	}
 }
 
@@ -1212,7 +1223,16 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 			processorPatch = clusterCfg.ProcessorPatch
 		}
 	}
-	rendered, err := renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	var rendered renderedRouteConfig
+	if s.imageTemplates == nil {
+		rendered, err = renderK8sDaemonSetBundleWithHashes(inputs, processorPatch)
+	} else {
+		templateValues, valuesErr := s.imageTemplates.TemplateValues(ctx)
+		if valuesErr != nil {
+			return renderedRouteConfig{}, valuesErr
+		}
+		rendered, err = renderK8sDaemonSetBundleWithTemplateValues(inputs, processorPatch, templateValues)
+	}
 	if err != nil {
 		return renderedRouteConfig{}, apperr.InvalidRequest(err.Error())
 	}

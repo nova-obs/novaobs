@@ -24,6 +24,7 @@ import (
 	"novaobs/internal/platform/audit"
 	platformauth "novaobs/internal/platform/auth"
 	"novaobs/internal/platform/iam"
+	platformimages "novaobs/internal/platform/images"
 	"novaobs/internal/platform/rbac"
 	"novaobs/internal/platform/secret"
 	"novaobs/internal/servicecatalog"
@@ -121,6 +122,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	)
 	auditSvc := audit.NewService(audit.NewStoreRepository(store.AuditEvents()))
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
+	imageSvc := platformimages.NewService(platformimages.NewStoreRepository(store.PlatformImages()))
 	clusterCredentialSvc := cluster.NewCredentialService(secretSvc, rbacSvc, auditSvc)
 	k8sClientProvider := kubeclient.NewProvider(clusterCredentialSvc)
 	k8sOpsModule := k8sops.NewModuleWithSecurity(
@@ -154,11 +156,13 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		k8sOpsModule.Resource,
 		k8sOpsModule.Deploy,
 		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAOBS_LOGS_AGENT_OPAMP_ENDPOINT")),
+		logs.WithImageTemplateValues(imageSvc),
 	)
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:      store.LogEndpoints(),
 		Repository:     alertRepository,
 		K8sDeployments: k8sOpsModule.Deploy,
+		ImageTemplates: imageSvc,
 	})
 
 	deps := httpapi.Dependencies{
@@ -174,6 +178,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		AlertEventIngestor:     alertEventIngestor,
 		AlertPolicyService:     alertPolicySvc,
 		PlatformIAMService:     iamSvc,
+		PlatformImageService:   imageSvc,
 		K8sOpsModule:           k8sOpsModule,
 		OpAMPManager:           opampMgr,
 		CollectorTemplate:      cfg.CollectorTemplate,

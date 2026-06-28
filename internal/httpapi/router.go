@@ -30,6 +30,7 @@ import (
 	platformauth "novaobs/internal/platform/auth"
 	"novaobs/internal/platform/authctx"
 	"novaobs/internal/platform/iam"
+	platformimages "novaobs/internal/platform/images"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 	"novaobs/pkg/apperr"
@@ -55,6 +56,7 @@ type Dependencies struct {
 	AlertEventIngestor     alerting.EventIngestor
 	AlertPolicyService     alerting.PolicyService
 	PlatformIAMService     iam.Service
+	PlatformImageService   platformimages.Service
 	K8sOpsModule           k8sops.Module
 	OpAMPManager           *opamp.Manager
 	CollectorTemplate      string
@@ -190,6 +192,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/platform/bindings", iam.CreateBindingHandler(deps.PlatformIAMService))
 	api.DELETE("/platform/bindings/:id", iam.DeleteBindingHandler(deps.PlatformIAMService))
 	api.GET("/platform/effective-permissions", iam.EffectivePermissionsHandler(deps.PlatformIAMService))
+	api.GET("/platform/images", platformimages.ListHandler(deps.PlatformImageService))
+	api.PUT("/platform/images", platformimages.UpsertHandler(deps.PlatformImageService))
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
 	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))

@@ -40,6 +40,7 @@ type Store interface {
 	IAMGroups() IAMGroupStore
 	IAMMemberships() IAMMembershipStore
 	IAMServiceAccounts() IAMServiceAccountStore
+	PlatformImages() PlatformImageStore
 	Secrets() SecretStore
 	AuditEvents() AuditEventStore
 	K8sClusters() K8sClusterStore
@@ -243,6 +244,11 @@ type IAMServiceAccountStore interface {
 	FindAll(ctx context.Context, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Delete(ctx context.Context, id string) error
+}
+
+type PlatformImageStore interface {
+	Upsert(ctx context.Context, key string, image interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
 }
 
 type SecretStore interface {

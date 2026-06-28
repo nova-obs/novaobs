@@ -1033,6 +1033,22 @@ func (s *iamServiceAccountStore) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// ---------- PlatformImageStore ----------
+type platformImageStore struct{ col *mongo.Collection }
+
+func (s *platformImageStore) Upsert(ctx context.Context, key string, image interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": key}, image, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *platformImageStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"_id": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
 // ---------- SecretStore ----------
 type secretStore struct{ col *mongo.Collection }
 

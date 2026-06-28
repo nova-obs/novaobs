@@ -13,6 +13,7 @@ import (
 	"novaobs/internal/database"
 	"novaobs/internal/logs"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	platformimages "novaobs/internal/platform/images"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/apperr"
 
@@ -21,7 +22,6 @@ import (
 
 const (
 	defaultVmalertNamespace = "novaobs-system"
-	defaultVmalertImage     = "hub-test.service.ucloud.cn/logsplatfrom/vmalert:v1.0.0"
 )
 
 type LogRuntimeRepository interface {
@@ -34,10 +34,15 @@ type LogRuntimeDeploymentService interface {
 	Apply(ctx context.Context, subject platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error)
 }
 
+type LogRuntimeImageTemplateService interface {
+	TemplateValues(ctx context.Context) (map[string]string, error)
+}
+
 type LogRuntimeDependencies struct {
 	Endpoints      database.LogEndpointStore
 	Repository     LogRuntimeRepository
 	K8sDeployments LogRuntimeDeploymentService
+	ImageTemplates LogRuntimeImageTemplateService
 	Clock          func() time.Time
 }
 
@@ -45,6 +50,7 @@ type LogRuntimeService struct {
 	endpoints      database.LogEndpointStore
 	repository     LogRuntimeRepository
 	k8sDeployments LogRuntimeDeploymentService
+	imageTemplates LogRuntimeImageTemplateService
 	clock          func() time.Time
 }
 
@@ -83,7 +89,7 @@ func NewLogRuntimeService(deps LogRuntimeDependencies) LogRuntimeService {
 	if clock == nil {
 		clock = time.Now
 	}
-	return LogRuntimeService{endpoints: deps.Endpoints, repository: deps.Repository, k8sDeployments: deps.K8sDeployments, clock: clock}
+	return LogRuntimeService{endpoints: deps.Endpoints, repository: deps.Repository, k8sDeployments: deps.K8sDeployments, imageTemplates: deps.ImageTemplates, clock: clock}
 }
 
 func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Subject, endpointID string, req LogRuntimePublishRequest) (LogRuntimePublishResult, error) {
@@ -110,7 +116,14 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 	if err != nil {
 		return LogRuntimePublishResult{}, err
 	}
-	manifest := renderLogRuntimeManifest(runtime, artifact)
+	templateValues := platformimages.DefaultTemplateValues
+	if s.imageTemplates != nil {
+		templateValues, err = s.imageTemplates.TemplateValues(ctx)
+		if err != nil {
+			return LogRuntimePublishResult{}, err
+		}
+	}
+	manifest := platformimages.ApplyTemplateValues(renderLogRuntimeManifest(runtime, artifact), templateValues)
 	manifestHash := hashText(manifest)
 	operation := k8sopsdeployment.OperationRequest{
 		ClusterID:      runtime.ClusterID,
@@ -283,7 +296,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"    spec:",
 		"      containers:",
 		"        - name: vmalert",
-		"          image: " + quoteYAML(defaultVmalertImage),
+		"          image: " + quoteYAML(platformimages.VmalertImagePlaceholder),
 		"          args:",
 		"            - " + quoteYAML("-rule=/etc/vmalert/rules/*.yaml"),
 		"            - " + quoteYAML("-rule.defaultRuleType=vlogs"),

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"text/template"
 
+	platformimages "novaobs/internal/platform/images"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -85,12 +87,16 @@ func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
 }
 
 func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch string) (renderedRouteConfig, error) {
+	return renderK8sDaemonSetBundleWithTemplateValues(inputs, processorPatch, platformimages.DefaultTemplateValues)
+}
+
+func renderK8sDaemonSetBundleWithTemplateValues(inputs []renderInput, processorPatch string, templateValues map[string]string) (renderedRouteConfig, error) {
 	collectorYAML, collectorHash, err := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
 	if err != nil {
 		return renderedRouteConfig{}, err
 	}
-	deploymentManifest := renderK8sDeploymentManifestYAML(inputs)
-	yaml := renderK8sDaemonSetBundleYAML(inputs, collectorYAML, collectorHash)
+	deploymentManifest := renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, templateValues)
+	yaml := renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, collectorYAML, collectorHash, templateValues)
 	return renderedRouteConfig{
 		ManifestYAML:           yaml,
 		CollectorYAML:          collectorYAML,
@@ -102,6 +108,10 @@ func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch str
 }
 
 func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
+	return renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, platformimages.DefaultTemplateValues)
+}
+
+func renderK8sDeploymentManifestYAMLWithTemplateValues(inputs []renderInput, templateValues map[string]string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
@@ -124,7 +134,7 @@ func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
 		panic(fmt.Sprintf("render k8s deployment manifest template: %v", err))
 	}
-	return buffer.String()
+	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
 }
 
 func renderRouteIDs(inputs []renderInput) []string {
@@ -137,6 +147,10 @@ func renderRouteIDs(inputs []renderInput) []string {
 }
 
 func renderK8sDaemonSetBundleYAML(inputs []renderInput, collectorConfig string, configHash string) string {
+	return renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, collectorConfig, configHash, platformimages.DefaultTemplateValues)
+}
+
+func renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs []renderInput, collectorConfig string, configHash string, templateValues map[string]string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
@@ -159,7 +173,7 @@ func renderK8sDaemonSetBundleYAML(inputs []renderInput, collectorConfig string, 
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
 		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
 	}
-	return buffer.String()
+	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
 }
 
 func k8sRuntimeLogMounts() []k8sRuntimeLogMount {

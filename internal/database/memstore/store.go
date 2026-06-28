@@ -46,6 +46,7 @@ type Store struct {
 	igns  map[string]interface{}
 	imbs  map[string]interface{}
 	isas  map[string]interface{}
+	imgs  map[string]interface{}
 	secs  map[string]interface{}
 	aes   map[string]interface{}
 	kcls  map[string]interface{}
@@ -88,6 +89,7 @@ func NewStore() *Store {
 		igns:  map[string]interface{}{},
 		imbs:  map[string]interface{}{},
 		isas:  map[string]interface{}{},
+		imgs:  map[string]interface{}{},
 		secs:  map[string]interface{}{},
 		aes:   map[string]interface{}{},
 		kcls:  map[string]interface{}{},
@@ -148,10 +150,11 @@ func (s *Store) IAMMemberships() database.IAMMembershipStore     { return &iamMe
 func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
 	return &iamServiceAccountStore{s}
 }
-func (s *Store) Secrets() database.SecretStore             { return &secretStore{s} }
-func (s *Store) AuditEvents() database.AuditEventStore     { return &auditEventStore{s} }
-func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s} }
+func (s *Store) PlatformImages() database.PlatformImageStore { return &platformImageStore{s} }
+func (s *Store) Secrets() database.SecretStore               { return &secretStore{s} }
+func (s *Store) AuditEvents() database.AuditEventStore       { return &auditEventStore{s} }
+func (s *Store) K8sClusters() database.K8sClusterStore       { return &k8sClusterStore{s} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore   { return &k8sNamespaceStore{s} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s}
 }
@@ -1413,6 +1416,21 @@ func (st *iamServiceAccountStore) Delete(ctx context.Context, id string) error {
 	defer st.s.mu.Unlock()
 	delete(st.s.isas, id)
 	return nil
+}
+
+type platformImageStore struct{ s *Store }
+
+func (st *platformImageStore) Upsert(ctx context.Context, key string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.imgs[key] = v
+	return nil
+}
+
+func (st *platformImageStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.imgs, results)
 }
 
 // ---------- Secret Store ----------
