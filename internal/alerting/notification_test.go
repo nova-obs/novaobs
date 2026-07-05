@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNotificationPolicyValidateRequiresStableAlertmanagerReceiver(t *testing.T) {
+func TestNotificationPolicyValidateRequiresStableReceiver(t *testing.T) {
 	policy := validNotificationPolicy()
 	require.NoError(t, policy.Validate())
-	policy.AlertmanagerReceiver = "https://secret.example/hook"
+	policy.Receiver = "https://secret.example/hook"
 	require.ErrorIs(t, policy.Validate(), ErrInvalidSpec)
 }
 
@@ -25,21 +25,21 @@ func TestPolicyServiceCreateAndUpdateAreAudited(t *testing.T) {
 	})
 
 	created, err := service.Create(context.Background(), testSubject(), CreateNotificationPolicyRequest{
-		Name: "支付值班", AlertmanagerReceiver: "pay-oncall", Enabled: true,
+		Name: "支付值班", Receiver: "pay-oncall", Enabled: true,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "pay-oncall", created.AlertmanagerReceiver)
+	require.Equal(t, "pay-oncall", created.Receiver)
 	require.Len(t, repository.audits, 1)
 
 	updated, err := service.Update(context.Background(), testSubject(), created.ID, UpdateNotificationPolicyRequest{
-		Name: "支付值班（主）", AlertmanagerReceiver: "pay-oncall", Enabled: true,
+		Name: "支付值班（主）", Receiver: "pay-oncall", Enabled: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "支付值班（主）", updated.Name)
 	require.Len(t, repository.audits, 2)
 
 	_, err = service.Update(context.Background(), testSubject(), created.ID, UpdateNotificationPolicyRequest{
-		Name: "支付值班", AlertmanagerReceiver: "another-receiver", Enabled: true,
+		Name: "支付值班", Receiver: "another-receiver", Enabled: true,
 	})
 	require.ErrorIs(t, err, ErrInvalidSpec)
 }
@@ -60,7 +60,7 @@ func TestPolicyServiceFailsClosedWithoutPermission(t *testing.T) {
 	repository := &fakePolicyRepository{}
 	service := NewPolicyService(PolicyDependencies{Repository: repository, Authorizer: policyDenyAuthorizer{}})
 	_, err := service.Create(context.Background(), testSubject(), CreateNotificationPolicyRequest{
-		Name: "支付值班", AlertmanagerReceiver: "pay-oncall", Enabled: true,
+		Name: "支付值班", Receiver: "pay-oncall", Enabled: true,
 	})
 	require.ErrorIs(t, err, ErrPermissionDenied)
 	require.Empty(t, repository.audits)
@@ -68,7 +68,7 @@ func TestPolicyServiceFailsClosedWithoutPermission(t *testing.T) {
 
 func validNotificationPolicy() NotificationPolicy {
 	return NotificationPolicy{
-		ID: "policy-a", Name: "支付值班", AlertmanagerReceiver: "pay-oncall", Enabled: true,
+		ID: "policy-a", Name: "支付值班", Receiver: "pay-oncall", Enabled: true,
 	}
 }
 

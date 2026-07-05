@@ -49,8 +49,8 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 	document := vmalertDocument{Groups: []vmalertGroup{}}
 	ruleIDs := make([]string, 0, len(enabled))
 	for _, rule := range enabled {
-		if !alertmanagerReceiverPattern.MatchString(rule.Spec.Notification.AlertmanagerReceiver) {
-			return Artifact{}, fmt.Errorf("规则 %s 未解析到有效的 Alertmanager receiver", rule.ID)
+		if !notificationReceiverPattern.MatchString(rule.Spec.Notification.Receiver) {
+			return Artifact{}, fmt.Errorf("规则 %s 未解析到有效的通知 receiver", rule.ID)
 		}
 		expr, err := CompileAlertQuery(rule.Spec)
 		if err != nil {
@@ -77,7 +77,7 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 				"severity":               rule.Spec.Notification.Severity,
 				"owner_team":             rule.Spec.Notification.OwnerTeam,
 				"notification_policy_id": rule.Spec.Notification.PolicyID,
-				"notification_receiver":  rule.Spec.Notification.AlertmanagerReceiver,
+				"notification_receiver":  rule.Spec.Notification.Receiver,
 			},
 			Annotations: annotations,
 		}}

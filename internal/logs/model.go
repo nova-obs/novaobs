@@ -15,28 +15,33 @@ const (
 	EndpointSinkKafka = "kafka"
 	EndpointSinkOTel  = "otel"
 
+	LogTargetSourceExternalVLogs = "external_vlogs"
+
+	LogTargetStatusPendingVerification = "pending_verification"
+	LogTargetStatusVerified            = "verified"
+	LogTargetStatusDisabled            = "disabled"
+
 	ParseRuleRegex = "regex"
 	ParseRuleJSON  = "json"
 )
 
 type LogEndpoint struct {
-	ID              string    `json:"id" bson:"_id"`
-	Name            string    `json:"name" bson:"name"`
-	Description     string    `json:"description" bson:"description"`
-	SinkType        string    `json:"sink_type" bson:"sink_type"`
-	StreamName      string    `json:"stream_name" bson:"stream_name"`
-	WriteURL        string    `json:"write_url" bson:"write_url"`
-	QueryURL        string    `json:"query_url" bson:"query_url"`
-	VMUIURL         string    `json:"vmui_url" bson:"vmui_url"`
-	AlertmanagerURL string    `json:"alertmanager_url" bson:"alertmanager_url"`
-	AccountID       string    `json:"account_id" bson:"account_id"`
-	ProjectID       string    `json:"project_id" bson:"project_id"`
-	SecretRef       string    `json:"secret_ref" bson:"secret_ref"`
-	ScopeType       string    `json:"scope_type" bson:"scope_type"`
-	ClusterID       string    `json:"cluster_id" bson:"cluster_id"`
-	Status          string    `json:"status" bson:"status"`
-	CreatedAt       time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at" bson:"updated_at"`
+	ID          string    `json:"id" bson:"_id"`
+	Name        string    `json:"name" bson:"name"`
+	Description string    `json:"description" bson:"description"`
+	SinkType    string    `json:"sink_type" bson:"sink_type"`
+	StreamName  string    `json:"stream_name" bson:"stream_name"`
+	WriteURL    string    `json:"write_url" bson:"write_url"`
+	QueryURL    string    `json:"query_url" bson:"query_url"`
+	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
+	AccountID   string    `json:"account_id" bson:"account_id"`
+	ProjectID   string    `json:"project_id" bson:"project_id"`
+	SecretRef   string    `json:"secret_ref" bson:"secret_ref"`
+	ScopeType   string    `json:"scope_type" bson:"scope_type"`
+	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
+	Status      string    `json:"status" bson:"status"`
+	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 type LogSource struct {
@@ -122,6 +127,31 @@ type LogRoute struct {
 	LastPreviewID       string          `json:"last_preview_id" bson:"last_preview_id"`
 	CreatedAt           time.Time       `json:"created_at" bson:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at" bson:"updated_at"`
+}
+
+type LogTarget struct {
+	ID               string     `json:"id" bson:"_id"`
+	Name             string     `json:"name" bson:"name"`
+	ServiceID        string     `json:"service_id" bson:"service_id"`
+	EndpointID       string     `json:"endpoint_id" bson:"endpoint_id"`
+	SourceKind       string     `json:"source_kind" bson:"source_kind"`
+	LogRouteID       string     `json:"log_route_id,omitempty" bson:"log_route_id,omitempty"`
+	BaseFilter       string     `json:"base_filter" bson:"base_filter"`
+	Status           string     `json:"status" bson:"status"`
+	LastProbeStatus  string     `json:"last_probe_status" bson:"last_probe_status"`
+	LastProbeMessage string     `json:"last_probe_message" bson:"last_probe_message"`
+	LastProbeAt      *time.Time `json:"last_probe_at,omitempty" bson:"last_probe_at,omitempty"`
+	LastSeenLogAt    *time.Time `json:"last_seen_log_at,omitempty" bson:"last_seen_log_at,omitempty"`
+	CreatedBy        ActorRef   `json:"created_by" bson:"created_by"`
+	UpdatedBy        ActorRef   `json:"updated_by" bson:"updated_by"`
+	CreatedAt        time.Time  `json:"created_at" bson:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" bson:"updated_at"`
+}
+
+type ActorRef struct {
+	ID   string `json:"id" bson:"id"`
+	Type string `json:"type" bson:"type"`
+	Name string `json:"name" bson:"name"`
 }
 
 type LogAgentPlan struct {
@@ -216,12 +246,28 @@ type PublishRouteRequest struct {
 	ConfirmationToken string `json:"confirmation_token"`
 }
 
+type CreateLogTargetRequest struct {
+	Name       string `json:"name"`
+	ServiceID  string `json:"service_id"`
+	EndpointID string `json:"endpoint_id"`
+	SourceKind string `json:"source_kind"`
+	BaseFilter string `json:"base_filter"`
+}
+
+type UpdateLogTargetRequest struct {
+	Name       string `json:"name"`
+	EndpointID string `json:"endpoint_id"`
+	BaseFilter string `json:"base_filter"`
+	Status     string `json:"status"`
+}
+
 type Workspace struct {
 	Services        []ServiceSummary    `json:"services"`
 	CollectorGroups []AgentGroupSummary `json:"collector_groups"`
 	Clusters        []ClusterSummary    `json:"clusters"`
 	Endpoints       []LogEndpoint       `json:"endpoints"`
 	Routes          []LogRouteView      `json:"routes"`
+	Targets         []LogTargetView     `json:"targets"`
 }
 
 type ServiceSummary struct {
@@ -258,6 +304,12 @@ type ClusterSummary struct {
 	Status     string `json:"status"`
 	AccessMode string `json:"access_mode"`
 	ReadOnly   bool   `json:"read_only"`
+}
+
+type LogTargetView struct {
+	Target   LogTarget       `json:"target"`
+	Service  *ServiceSummary `json:"service,omitempty"`
+	Endpoint *LogEndpoint    `json:"endpoint,omitempty"`
 }
 
 type Workload struct {

@@ -35,8 +35,11 @@ func compileQuery(spec RuleSpec, applyTimeWindow bool, applyThreshold bool) (str
 	if err != nil {
 		return "", err
 	}
-	serviceFilter := strconv.Quote("service.name") + ":=" + strconv.Quote(spec.Scope.ServiceName)
-	query := serviceFilter + " AND (" + filter + ")"
+	scopeFilter := strconv.Quote("service.name") + ":=" + strconv.Quote(spec.Scope.ServiceName)
+	if spec.Scope.BaseFilter != "" {
+		scopeFilter = "(" + spec.Scope.BaseFilter + ")"
+	}
+	query := scopeFilter + " AND (" + filter + ")"
 	if applyTimeWindow {
 		query = "_time:" + spec.Trigger.Window + " AND " + query
 	}

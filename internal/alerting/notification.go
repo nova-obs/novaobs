@@ -14,19 +14,19 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-var alertmanagerReceiverPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var notificationReceiverPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 type NotificationPolicy struct {
-	ID                   string    `json:"id" bson:"_id"`
-	Name                 string    `json:"name" bson:"name"`
-	Description          string    `json:"description,omitempty" bson:"description,omitempty"`
-	ServiceID            string    `json:"service_id,omitempty" bson:"service_id,omitempty"`
-	AlertmanagerReceiver string    `json:"alertmanager_receiver" bson:"alertmanager_receiver"`
-	Enabled              bool      `json:"enabled" bson:"enabled"`
-	CreatedBy            Actor     `json:"created_by" bson:"created_by"`
-	UpdatedBy            Actor     `json:"updated_by" bson:"updated_by"`
-	CreatedAt            time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at" bson:"updated_at"`
+	ID          string    `json:"id" bson:"_id"`
+	Name        string    `json:"name" bson:"name"`
+	Description string    `json:"description,omitempty" bson:"description,omitempty"`
+	ServiceID   string    `json:"service_id,omitempty" bson:"service_id,omitempty"`
+	Receiver    string    `json:"receiver" bson:"receiver"`
+	Enabled     bool      `json:"enabled" bson:"enabled"`
+	CreatedBy   Actor     `json:"created_by" bson:"created_by"`
+	UpdatedBy   Actor     `json:"updated_by" bson:"updated_by"`
+	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 func (p NotificationPolicy) Normalize() NotificationPolicy {
@@ -34,7 +34,7 @@ func (p NotificationPolicy) Normalize() NotificationPolicy {
 	p.Name = strings.TrimSpace(p.Name)
 	p.Description = strings.TrimSpace(p.Description)
 	p.ServiceID = strings.TrimSpace(p.ServiceID)
-	p.AlertmanagerReceiver = strings.TrimSpace(p.AlertmanagerReceiver)
+	p.Receiver = strings.TrimSpace(p.Receiver)
 	return p
 }
 
@@ -43,18 +43,18 @@ func (p NotificationPolicy) Validate() error {
 	if p.Name == "" || len(p.Name) > 120 {
 		return invalidSpec("notification_policy.name", "通知策略名称不能为空且不能超过 120 个字符")
 	}
-	if !alertmanagerReceiverPattern.MatchString(p.AlertmanagerReceiver) {
-		return invalidSpec("notification_policy.alertmanager_receiver", "Alertmanager receiver 必须是稳定标识，不能填写 URL 或凭据")
+	if !notificationReceiverPattern.MatchString(p.Receiver) {
+		return invalidSpec("notification_policy.receiver", "通知 receiver 必须是稳定标识，不能填写 URL 或凭据")
 	}
 	return nil
 }
 
 type CreateNotificationPolicyRequest struct {
-	Name                 string `json:"name"`
-	Description          string `json:"description"`
-	ServiceID            string `json:"service_id"`
-	AlertmanagerReceiver string `json:"alertmanager_receiver"`
-	Enabled              bool   `json:"enabled"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ServiceID   string `json:"service_id"`
+	Receiver    string `json:"receiver"`
+	Enabled     bool   `json:"enabled"`
 }
 
 type UpdateNotificationPolicyRequest = CreateNotificationPolicyRequest
@@ -156,8 +156,8 @@ func (s PolicyService) Update(ctx context.Context, subject platformrbac.Subject,
 	if err := updated.Validate(); err != nil {
 		return NotificationPolicy{}, err
 	}
-	if updated.AlertmanagerReceiver != current.AlertmanagerReceiver {
-		return NotificationPolicy{}, invalidSpec("notification_policy.alertmanager_receiver", "Receiver 标识创建后不可修改；请新建策略后更新规则关联")
+	if updated.Receiver != current.Receiver {
+		return NotificationPolicy{}, invalidSpec("notification_policy.receiver", "Receiver 标识创建后不可修改；请新建策略后更新规则关联")
 	}
 	if !s.allowed(subject, current.ServiceID, "manage") || !s.allowed(subject, updated.ServiceID, "manage") {
 		return NotificationPolicy{}, ErrPermissionDenied
@@ -204,7 +204,7 @@ func (s PolicyService) allowed(subject platformrbac.Subject, serviceID string, a
 func policyFromRequest(request CreateNotificationPolicyRequest) NotificationPolicy {
 	return NotificationPolicy{
 		Name: request.Name, Description: request.Description, ServiceID: request.ServiceID,
-		AlertmanagerReceiver: request.AlertmanagerReceiver, Enabled: request.Enabled,
+		Receiver: request.Receiver, Enabled: request.Enabled,
 	}
 }
 
@@ -213,7 +213,7 @@ func policyAudit(id string, actor Actor, policy NotificationPolicy, action strin
 		ID: id, Actor: audit.Actor{ID: actor.ID, Name: actor.Name},
 		Resource: audit.Resource{Type: "alerts.notification-policy", Name: policy.ID},
 		Action:   action, Scope: policy.ServiceID,
-		RequestSummary: map[string]any{"name": policy.Name, "service_id": policy.ServiceID, "alertmanager_receiver": policy.AlertmanagerReceiver, "enabled": policy.Enabled},
+		RequestSummary: map[string]any{"name": policy.Name, "service_id": policy.ServiceID, "receiver": policy.Receiver, "enabled": policy.Enabled},
 		Result:         "accepted", CreatedAt: now,
 	}
 }

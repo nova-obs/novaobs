@@ -518,6 +518,46 @@ func (s *logRouteStore) Update(ctx context.Context, id string, route interface{}
 	return nil
 }
 
+type logTargetStore struct{ col *mongo.Collection }
+
+func (s *logTargetStore) Insert(ctx context.Context, target interface{}) error {
+	_, err := s.col.InsertOne(ctx, target)
+	return err
+}
+
+func (s *logTargetStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logTargetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logTargetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *logTargetStore) Update(ctx context.Context, id string, target interface{}) error {
+	oid, _ := objectID(id)
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, target)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 type logCollectorConfigVersionStore struct{ col *mongo.Collection }
 
 func (s *logCollectorConfigVersionStore) Upsert(ctx context.Context, hash string, version interface{}) error {

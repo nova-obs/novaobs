@@ -12,6 +12,15 @@ func TestRuleSpecValidateAccepts一期查询式日志规则(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRuleSpecValidateAcceptsExternalLogTargetScope(t *testing.T) {
+	spec := validRuleSpec()
+	spec.Scope.LogRouteID = ""
+	spec.Scope.LogTargetID = "target-orders"
+	spec.Scope.BaseFilter = `"stream":"orders"`
+
+	require.NoError(t, spec.Validate())
+}
+
 func TestRuleSpecValidateRejects严格连续语义(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Trigger.Mode = TriggerModeConsecutive
@@ -115,10 +124,10 @@ func validRuleSpec() RuleSpec {
 		},
 		Grouping: GroupingSpec{Fields: []string{"deployment.environment"}, MaxInstances: 100},
 		Notification: NotificationSpec{
-			PolicyID:             "pay-team-oncall",
-			Severity:             SeverityCritical,
-			OwnerTeam:            "pay-team",
-			AlertmanagerReceiver: "pay-oncall",
+			PolicyID:  "pay-team-oncall",
+			Severity:  SeverityCritical,
+			OwnerTeam: "pay-team",
+			Receiver:  "pay-oncall",
 		},
 	}
 }

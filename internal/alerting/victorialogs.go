@@ -17,9 +17,10 @@ import (
 const maxVictoriaLogsResponseBytes = 2 << 20
 
 type QueryTarget struct {
-	QueryURL  string
-	AccountID string
-	ProjectID string
+	QueryURL   string
+	AccountID  string
+	ProjectID  string
+	BaseFilter string
 }
 
 type QueryTargetResolver interface {
@@ -52,6 +53,9 @@ func (t VictoriaLogsTester) Test(ctx context.Context, req TestRequest) (TestResu
 	}
 	if target.AccountID != req.Spec.Scope.AccountID || target.ProjectID != req.Spec.Scope.ProjectID {
 		return TestResult{}, fmt.Errorf("%w: VictoriaLogs 租户与规则范围不一致", ErrQueryFailed)
+	}
+	if req.Spec.Scope.BaseFilter == "" {
+		req.Spec.Scope.BaseFilter = target.BaseFilter
 	}
 	query, err := CompileTestQuery(req.Spec)
 	if err != nil {

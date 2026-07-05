@@ -103,7 +103,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/health", healthHandler)
 	api.POST("/auth/login", platformauth.LoginHandler(deps.PlatformAuthService))
 	api.POST("/auth/logout", platformauth.LogoutHandler())
-	api.POST("/alerts/webhook/alertmanager", alertmanagerWebhookHandler(deps.AlertEventIngestor))
+	api.POST("/alerts/ingest", alertIngestHandler(deps.AlertEventIngestor))
+
+	vmalertNotifierAPI := router.Group("/api/v2")
+	vmalertNotifierAPI.POST("/alerts", alertIngestHandler(deps.AlertEventIngestor))
 
 	api = router.Group("/api/v1")
 	if deps.PlatformAuthService != nil {
@@ -151,6 +154,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
 	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
 	api.POST("/logs/endpoints/:id/vmalert-runtime/publish", publishLogsEndpointVmalertRuntimeHandler(deps.AlertRuntimeService))
+	api.GET("/logs/targets", listLogsTargetsHandler(deps.LogsService))
+	api.POST("/logs/targets", createLogsTargetHandler(deps.LogsService))
+	api.PATCH("/logs/targets/:id", updateLogsTargetHandler(deps.LogsService))
+	api.POST("/logs/targets/:id/probe", probeLogsTargetHandler(deps.LogsService))
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))

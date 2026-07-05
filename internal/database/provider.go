@@ -28,6 +28,7 @@ type Store interface {
 	LogEndpoints() LogEndpointStore
 	LogSources() LogSourceStore
 	LogRoutes() LogRouteStore
+	LogTargets() LogTargetStore
 	LogCollectorConfigVersions() LogCollectorConfigVersionStore
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
 	LogAgentPlans() LogAgentPlanStore
@@ -158,6 +159,14 @@ type LogRouteStore interface {
 	FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, route interface{}) error
+}
+
+type LogTargetStore interface {
+	Insert(ctx context.Context, target interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, target interface{}) error
 }
 
 type LogCollectorConfigVersionStore interface {

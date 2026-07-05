@@ -62,12 +62,7 @@ type AlertEventFilter struct {
 	Limit       int
 }
 
-type AlertmanagerWebhook struct {
-	Status string              `json:"status"`
-	Alerts []AlertmanagerAlert `json:"alerts"`
-}
-
-type AlertmanagerAlert struct {
+type AlertIngestAlert struct {
 	Status       string            `json:"status"`
 	Labels       map[string]string `json:"labels"`
 	Annotations  map[string]string `json:"annotations"`
@@ -101,7 +96,7 @@ func NewEventIngestor(repository EventRepository, rules EventRuleResolver, token
 	return EventIngestor{repository: repository, rules: rules, tokenHash: sha256.Sum256([]byte(token)), clock: clock}
 }
 
-func (i EventIngestor) Ingest(ctx context.Context, token string, webhook AlertmanagerWebhook) (int, error) {
+func (i EventIngestor) IngestAlerts(ctx context.Context, token string, alerts []AlertIngestAlert) (int, error) {
 	providedHash := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(i.tokenHash[:], providedHash[:]) != 1 || strings.TrimSpace(token) == "" {
 		return 0, ErrPermissionDenied
@@ -110,8 +105,8 @@ func (i EventIngestor) Ingest(ctx context.Context, token string, webhook Alertma
 		return 0, ErrUnavailable
 	}
 	receivedAt := i.clock().UTC()
-	for _, alert := range webhook.Alerts {
-		instance, event, err := normalizeAlertmanagerEvent(alert, receivedAt)
+	for _, alert := range alerts {
+		instance, event, err := normalizeAlertIngestEvent(alert, receivedAt)
 		if err != nil {
 			return 0, err
 		}
@@ -122,7 +117,7 @@ func (i EventIngestor) Ingest(ctx context.Context, token string, webhook Alertma
 			return 0, err
 		}
 	}
-	return len(webhook.Alerts), nil
+	return len(alerts), nil
 }
 
 func (i EventIngestor) validateRule(ctx context.Context, instance AlertInstance) error {
@@ -145,7 +140,7 @@ func (i EventIngestor) validateRule(ctx context.Context, instance AlertInstance)
 	return nil
 }
 
-func normalizeAlertmanagerEvent(alert AlertmanagerAlert, receivedAt time.Time) (AlertInstance, AlertEvent, error) {
+func normalizeAlertIngestEvent(alert AlertIngestAlert, receivedAt time.Time) (AlertInstance, AlertEvent, error) {
 	ruleID := strings.TrimSpace(alert.Labels["novaobs_rule_id"])
 	serviceID := strings.TrimSpace(alert.Labels["service_id"])
 	if ruleID == "" || serviceID == "" || len(ruleID) > 128 || len(serviceID) > 128 {
@@ -155,10 +150,15 @@ func normalizeAlertmanagerEvent(alert AlertmanagerAlert, receivedAt time.Time) (
 		return AlertInstance{}, AlertEvent{}, invalidSpec("metadata", "告警事件标签或注解无效")
 	}
 	state := AlertStateFiring
-	if strings.EqualFold(alert.Status, AlertStateResolved) {
+	status := strings.TrimSpace(alert.Status)
+	if status == "" && !alert.EndsAt.IsZero() && !alert.EndsAt.After(receivedAt) {
 		state = AlertStateResolved
-	} else if !strings.EqualFold(alert.Status, AlertStateFiring) {
-		return AlertInstance{}, AlertEvent{}, invalidSpec("status", "Alertmanager 告警状态无效")
+	} else if status == "" || strings.EqualFold(status, AlertStateFiring) {
+		state = AlertStateFiring
+	} else if strings.EqualFold(status, AlertStateResolved) {
+		state = AlertStateResolved
+	} else {
+		return AlertInstance{}, AlertEvent{}, invalidSpec("status", "告警接入状态无效")
 	}
 	fingerprint := strings.TrimSpace(alert.Fingerprint)
 	if len(fingerprint) > 256 {

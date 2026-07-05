@@ -39,25 +39,27 @@ type LogRuntimeImageTemplateService interface {
 }
 
 type LogRuntimeDependencies struct {
-	Endpoints      database.LogEndpointStore
-	Repository     LogRuntimeRepository
-	K8sDeployments LogRuntimeDeploymentService
-	ImageTemplates LogRuntimeImageTemplateService
-	Clock          func() time.Time
+	Endpoints             database.LogEndpointStore
+	Repository            LogRuntimeRepository
+	K8sDeployments        LogRuntimeDeploymentService
+	ImageTemplates        LogRuntimeImageTemplateService
+	DefaultAlertIngestURL string
+	Clock                 func() time.Time
 }
 
 type LogRuntimeService struct {
-	endpoints      database.LogEndpointStore
-	repository     LogRuntimeRepository
-	k8sDeployments LogRuntimeDeploymentService
-	imageTemplates LogRuntimeImageTemplateService
-	clock          func() time.Time
+	endpoints             database.LogEndpointStore
+	repository            LogRuntimeRepository
+	k8sDeployments        LogRuntimeDeploymentService
+	imageTemplates        LogRuntimeImageTemplateService
+	defaultAlertIngestURL string
+	clock                 func() time.Time
 }
 
 type LogRuntimePublishRequest struct {
 	ClusterID         string `json:"cluster_id"`
 	Namespace         string `json:"namespace"`
-	AlertmanagerURL   string `json:"alertmanager_url"`
+	AlertIngestURL    string `json:"alert_ingest_url"`
 	PreviewID         string `json:"preview_id,omitempty"`
 	ConfirmationToken string `json:"confirmation_token,omitempty"`
 }
@@ -68,7 +70,7 @@ type LogRuntimePublishResult struct {
 	ClusterID            string   `json:"cluster_id"`
 	Namespace            string   `json:"namespace"`
 	DatasourceURL        string   `json:"datasource_url"`
-	AlertmanagerURL      string   `json:"alertmanager_url"`
+	AlertIngestURL       string   `json:"alert_ingest_url"`
 	ArtifactHash         string   `json:"artifact_hash"`
 	ManifestHash         string   `json:"manifest_hash"`
 	ManifestYAML         string   `json:"manifest_yaml"`
@@ -89,7 +91,14 @@ func NewLogRuntimeService(deps LogRuntimeDependencies) LogRuntimeService {
 	if clock == nil {
 		clock = time.Now
 	}
-	return LogRuntimeService{endpoints: deps.Endpoints, repository: deps.Repository, k8sDeployments: deps.K8sDeployments, imageTemplates: deps.ImageTemplates, clock: clock}
+	return LogRuntimeService{
+		endpoints:             deps.Endpoints,
+		repository:            deps.Repository,
+		k8sDeployments:        deps.K8sDeployments,
+		imageTemplates:        deps.ImageTemplates,
+		defaultAlertIngestURL: strings.TrimSpace(deps.DefaultAlertIngestURL),
+		clock:                 clock,
+	}
 }
 
 func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Subject, endpointID string, req LogRuntimePublishRequest) (LogRuntimePublishResult, error) {
@@ -104,7 +113,7 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 	if err := s.endpoints.FindByID(ctx, endpointID, &endpoint); err != nil {
 		return LogRuntimePublishResult{}, mapStoreError(err)
 	}
-	runtime, err := newLogRuntimeSpec(endpoint, req)
+	runtime, err := newLogRuntimeSpec(endpoint, req, s.defaultAlertIngestURL)
 	if err != nil {
 		return LogRuntimePublishResult{}, err
 	}
@@ -157,7 +166,7 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 		ClusterID:            runtime.ClusterID,
 		Namespace:            runtime.Namespace,
 		DatasourceURL:        runtime.DatasourceURL,
-		AlertmanagerURL:      runtime.AlertmanagerURL,
+		AlertIngestURL:       runtime.AlertIngestURL,
 		ArtifactHash:         artifact.Hash,
 		ManifestHash:         manifestHash,
 		ManifestYAML:         manifest,
@@ -175,23 +184,22 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 }
 
 type logRuntimeSpec struct {
-	RuntimeID       string
-	Name            string
-	EndpointID      string
-	ClusterID       string
-	Namespace       string
-	DatasourceURL   string
-	AlertmanagerURL string
+	RuntimeID      string
+	Name           string
+	EndpointID     string
+	ClusterID      string
+	Namespace      string
+	DatasourceURL  string
+	AlertIngestURL string
 }
 
-func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest) (logRuntimeSpec, error) {
+func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, defaultAlertIngestURL string) (logRuntimeSpec, error) {
 	endpoint.ID = strings.TrimSpace(endpoint.ID)
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
 	endpoint.SinkType = strings.TrimSpace(endpoint.SinkType)
 	endpoint.ScopeType = strings.TrimSpace(endpoint.ScopeType)
 	endpoint.ClusterID = strings.TrimSpace(endpoint.ClusterID)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
-	endpoint.AlertmanagerURL = strings.TrimSpace(endpoint.AlertmanagerURL)
 	if endpoint.SinkType != logs.EndpointSinkVL {
 		return logRuntimeSpec{}, apperr.InvalidRequest("只有 VictoriaLogs 日志端点可以部署 vmalert Runtime")
 	}
@@ -209,14 +217,14 @@ func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest) 
 	if err != nil {
 		return logRuntimeSpec{}, err
 	}
-	alertmanagerURL := strings.TrimSpace(req.AlertmanagerURL)
-	if alertmanagerURL == "" {
-		alertmanagerURL = endpoint.AlertmanagerURL
+	alertIngestURL := strings.TrimSpace(req.AlertIngestURL)
+	if alertIngestURL == "" {
+		alertIngestURL = strings.TrimSpace(defaultAlertIngestURL)
 	}
-	if alertmanagerURL == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 Alertmanager notify 地址")
+	if alertIngestURL == "" {
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 NovaObs Alert Ingest 地址")
 	}
-	if err := validateHTTPURL(alertmanagerURL, "Alertmanager notify 地址"); err != nil {
+	if err := validateHTTPURL(alertIngestURL, "NovaObs Alert Ingest 地址"); err != nil {
 		return logRuntimeSpec{}, err
 	}
 	if namespace := strings.TrimSpace(req.Namespace); namespace != "" && namespace != defaultVmalertNamespace {
@@ -225,13 +233,13 @@ func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest) 
 	runtimeID := "vmalert-logs:" + endpoint.ID
 	name := dnsName("novaobs-vmalert-" + firstNonEmpty(endpoint.Name, endpoint.ID))
 	return logRuntimeSpec{
-		RuntimeID:       runtimeID,
-		Name:            name,
-		EndpointID:      endpoint.ID,
-		ClusterID:       clusterID,
-		Namespace:       defaultVmalertNamespace,
-		DatasourceURL:   datasourceURL,
-		AlertmanagerURL: alertmanagerURL,
+		RuntimeID:      runtimeID,
+		Name:           name,
+		EndpointID:     endpoint.ID,
+		ClusterID:      clusterID,
+		Namespace:      defaultVmalertNamespace,
+		DatasourceURL:  datasourceURL,
+		AlertIngestURL: alertIngestURL,
 	}, nil
 }
 
@@ -302,7 +310,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"            - " + quoteYAML("-rule.defaultRuleType=vlogs"),
 		"            - " + quoteYAML("-configCheckInterval=10s"),
 		"            - " + quoteYAML("-datasource.url="+runtime.DatasourceURL),
-		"            - " + quoteYAML("-notifier.url="+runtime.AlertmanagerURL),
+		"            - " + quoteYAML("-notifier.url="+runtime.AlertIngestURL),
 		"            - " + quoteYAML("-httpListenAddr=:8880"),
 		"            - " + quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
 		"          ports:",

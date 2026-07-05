@@ -22,6 +22,18 @@ func TestCompileTestQueryReturnsCountsWithoutThresholdFilter(t *testing.T) {
 	require.Equal(t, `"service.name":="payment-service" AND ("payment failed") | stats by (deployment.environment) count() as matches`, query)
 }
 
+func TestCompileTestQueryUsesLogTargetBaseFilterWhenPresent(t *testing.T) {
+	spec := validRuleSpec()
+	spec.Scope.LogRouteID = ""
+	spec.Scope.LogTargetID = "target-orders"
+	spec.Scope.BaseFilter = `"stream":"orders" AND "env":"prod"`
+	query, err := CompileTestQuery(spec)
+
+	require.NoError(t, err)
+	require.Equal(t, `("stream":"orders" AND "env":"prod") AND ("payment failed") | stats by (deployment.environment) count() as matches`, query)
+	require.NotContains(t, query, `"service.name":=`)
+}
+
 func TestCompileQueryEscapesUserString(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Query.Expression = `failed "card"`

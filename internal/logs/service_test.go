@@ -148,6 +148,102 @@ func TestCreateK8sEndpointRejectsUnregisteredCluster(t *testing.T) {
 	require.ErrorContains(t, err, "只能绑定已登记的 K8s 集群")
 }
 
+func TestCreateExternalVLogsTargetRegistersServiceQueryScope(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-external",
+		WriteURL:  "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.external:9428/select/logsql/query",
+		VMUIURL:   "http://vl.external:9428/select/vmui",
+		AccountID: "1001",
+		ProjectID: "2001",
+	})
+	require.NoError(t, err)
+
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api" AND "deployment.environment":="prod"`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, service.ID, created.Target.ServiceID)
+	require.Equal(t, endpoint.ID, created.Target.EndpointID)
+	require.Equal(t, LogTargetSourceExternalVLogs, created.Target.SourceKind)
+	require.Equal(t, LogTargetStatusPendingVerification, created.Target.Status)
+	require.Equal(t, `"service.name":="orders-api" AND "deployment.environment":="prod"`, created.Target.BaseFilter)
+	require.Equal(t, endpoint.ID, created.Endpoint.ID)
+	require.NotNil(t, created.Service)
+	require.Equal(t, "orders-api", created.Service.Name)
+
+	var routes []LogRoute
+	require.NoError(t, fixture.store.LogRoutes().FindAll(ctx, &routes))
+	require.Empty(t, routes)
+	groups, err := fixture.service.collectorGroups.ListGroups(ctx)
+	require.NoError(t, err)
+	require.Empty(t, groups)
+
+	workspace, err := fixture.service.Workspace(ctx)
+	require.NoError(t, err)
+	require.Len(t, workspace.Targets, 1)
+	require.Empty(t, workspace.Routes)
+}
+
+func TestCreateExternalVLogsTargetRejectsUnsafeBaseFilter(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+
+	_, err = fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `error | stats count()`,
+	})
+
+	require.ErrorContains(t, err, "日志目标过滤条件仅接受过滤表达式")
+}
+
+func TestProbeExternalVLogsTargetMarksVerifiedWithoutCreatingRoute(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api"`,
+	})
+	require.NoError(t, err)
+
+	result, err := fixture.service.ProbeTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, LogTargetStatusVerified, result.Target.Status)
+	require.Equal(t, "ready", result.Target.LastProbeStatus)
+	require.NotNil(t, result.Target.LastProbeAt)
+	var routes []LogRoute
+	require.NoError(t, fixture.store.LogRoutes().FindAll(ctx, &routes))
+	require.Empty(t, routes)
+}
+
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
@@ -1537,6 +1633,8 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		fakeClusterService{},
 		resources,
 		deploy,
+		WithLogTargets(store.LogTargets()),
+		WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()), platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject()))),
 	)
 	return logsFixture{store: store, repo: repo, targets: targets, service: service}
 }

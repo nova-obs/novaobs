@@ -89,7 +89,7 @@ func (r StoreRepository) ListRuntimeRules(ctx context.Context, runtimeID string)
 		if err != nil {
 			return nil, err
 		}
-		rules[index].Spec.Notification.AlertmanagerReceiver = policy.AlertmanagerReceiver
+		rules[index].Spec.Notification.Receiver = policy.Receiver
 	}
 	slices.SortFunc(rules, func(a, b Rule) int { return strings.Compare(a.ID, b.ID) })
 	return rules, nil

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const maxAlertmanagerWebhookBytes = 1 << 20
+const maxAlertIngestBytes = 1 << 20
 
 type webhookRateWindow struct {
 	startedAt time.Time
@@ -26,24 +27,24 @@ type webhookRateLimiter struct {
 	windows map[string]webhookRateWindow
 }
 
-func alertmanagerWebhookHandler(ingestor alerting.EventIngestor) gin.HandlerFunc {
+func alertIngestHandler(ingestor alerting.EventIngestor) gin.HandlerFunc {
 	limiter := &webhookRateLimiter{windows: map[string]webhookRateWindow{}}
 	return func(ctx *gin.Context) {
 		if !limiter.Allow(remoteHost(ctx.Request.RemoteAddr), time.Now()) {
-			response.Error(ctx, http.StatusTooManyRequests, "rate_limited", "Webhook 请求过于频繁")
+			response.Error(ctx, http.StatusTooManyRequests, "rate_limited", "告警接入请求过于频繁")
 			return
 		}
-		ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxAlertmanagerWebhookBytes)
-		var body alerting.AlertmanagerWebhook
-		if err := ctx.ShouldBindJSON(&body); err != nil {
-			response.Error(ctx, http.StatusBadRequest, "invalid_request", "Alertmanager webhook 格式不正确")
+		ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxAlertIngestBytes)
+		var alerts []alerting.AlertIngestAlert
+		if err := json.NewDecoder(ctx.Request.Body).Decode(&alerts); err != nil {
+			response.Error(ctx, http.StatusBadRequest, "invalid_request", "告警接入请求格式不正确")
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(ctx.GetHeader("Authorization"), "Bearer "))
-		count, err := ingestor.Ingest(ctx.Request.Context(), token, body)
+		count, err := ingestor.IngestAlerts(ctx.Request.Context(), token, alerts)
 		if err != nil {
 			if errors.Is(err, alerting.ErrPermissionDenied) {
-				response.Error(ctx, http.StatusUnauthorized, "unauthorized", "Webhook 凭据无效")
+				response.Error(ctx, http.StatusUnauthorized, "unauthorized", "告警接入凭据无效")
 				return
 			}
 			writeAlertingError(ctx, err)

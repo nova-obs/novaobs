@@ -210,6 +210,8 @@ func newTestRouter(t *testing.T) testEnv {
 		k8sModule.Cluster,
 		k8sModule.Resource,
 		k8sModule.Deploy,
+		logs.WithLogTargets(store.LogTargets()),
+		logs.WithAuthorizer(rbacSvc),
 	)
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:      store.LogEndpoints(),
@@ -674,10 +676,9 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 		Data logs.LogEndpoint `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
-	require.Empty(t, created.Data.AlertmanagerURL)
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alertmanager_url":"http://alertmanager:9093"}`))
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 
@@ -686,7 +687,7 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
 	require.Contains(t, publishRecorder.Body.String(), `"manifest_yaml"`)
 	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victorialogs:9428")
-	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://alertmanager:9093")
+	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaobs-api:8080")
 }
 
 func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {

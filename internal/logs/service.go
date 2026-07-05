@@ -25,6 +25,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var ErrPermissionDenied = errors.New("permission_denied")
+
 type K8sClusterService interface {
 	List(ctx context.Context, filter k8sopscluster.ListFilter) ([]k8sopscluster.Cluster, error)
 	Get(ctx context.Context, id string) (k8sopscluster.Cluster, error)
@@ -43,10 +45,15 @@ type ImageTemplateValueService interface {
 	TemplateValues(ctx context.Context) (map[string]string, error)
 }
 
+type Authorizer interface {
+	Authorize(subject platformrbac.Subject, req platformrbac.Request) platformrbac.Decision
+}
+
 type Service struct {
 	endpoints        database.LogEndpointStore
 	sources          database.LogSourceStore
 	routes           database.LogRouteStore
+	logTargets       database.LogTargetStore
 	configVersions   database.LogCollectorConfigVersionStore
 	manifestVersions database.LogDeploymentManifestVersionStore
 	plans            database.LogAgentPlanStore
@@ -58,6 +65,7 @@ type Service struct {
 	k8sResources     K8sResourceService
 	k8sDeployments   K8sDeploymentService
 	imageTemplates   ImageTemplateValueService
+	authorizer       Authorizer
 	deployment       agentDeploymentOptions
 }
 
@@ -67,9 +75,29 @@ type agentDeploymentOptions struct {
 
 type ServiceOption func(*Service)
 
+type denyAuthorizer struct{}
+
+func (denyAuthorizer) Authorize(platformrbac.Subject, platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: false, Reason: "permission_denied"}
+}
+
 func WithAgentOpAMPEndpoint(endpoint string) ServiceOption {
 	return func(s *Service) {
 		s.deployment.OpAMPEndpoint = strings.TrimSpace(endpoint)
+	}
+}
+
+func WithLogTargets(targets database.LogTargetStore) ServiceOption {
+	return func(s *Service) {
+		s.logTargets = targets
+	}
+}
+
+func WithAuthorizer(authorizer Authorizer) ServiceOption {
+	return func(s *Service) {
+		if authorizer != nil {
+			s.authorizer = authorizer
+		}
 	}
 }
 
@@ -109,6 +137,7 @@ func NewService(
 		k8sClusters:      k8sClusters,
 		k8sResources:     k8sResources,
 		k8sDeployments:   k8sDeployments,
+		authorizer:       denyAuthorizer{},
 	}
 	for _, option := range options {
 		if option != nil {
@@ -163,6 +192,10 @@ func (s Service) Workspace(ctx context.Context) (Workspace, error) {
 	if err != nil {
 		return Workspace{}, err
 	}
+	targets, err := s.listTargetViews(ctx, "")
+	if err != nil {
+		return Workspace{}, err
+	}
 	clusters := []k8sopscluster.Cluster{}
 	if s.k8sClusters != nil {
 		clusters, err = s.k8sClusters.List(ctx, k8sopscluster.ListFilter{PageSize: 0})
@@ -176,6 +209,7 @@ func (s Service) Workspace(ctx context.Context) (Workspace, error) {
 		Clusters:        clusterSummaries(clusters),
 		Endpoints:       endpoints,
 		Routes:          routes,
+		Targets:         targets,
 	}, nil
 }
 
@@ -314,6 +348,159 @@ func (s Service) ListRoutes(ctx context.Context) ([]LogRouteView, error) {
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+func (s Service) ListTargets(ctx context.Context, subject platformrbac.Subject, serviceID string) ([]LogTargetView, error) {
+	serviceID = strings.TrimSpace(serviceID)
+	views, err := s.listTargetViews(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LogTargetView, 0, len(views))
+	for _, view := range views {
+		if s.allowedTarget(subject, view.Target.ServiceID, "read") {
+			out = append(out, view)
+		}
+	}
+	return out, nil
+}
+
+func (s Service) CreateTarget(ctx context.Context, subject platformrbac.Subject, req CreateLogTargetRequest) (LogTargetView, error) {
+	if s.logTargets == nil {
+		return LogTargetView{}, apperr.InvalidRequest("日志目标存储不可用")
+	}
+	req = normalizeCreateTargetRequest(req)
+	if req.ServiceID == "" || req.EndpointID == "" || req.BaseFilter == "" {
+		return LogTargetView{}, apperr.InvalidRequest("service_id、endpoint_id 和 base_filter 不能为空")
+	}
+	if req.SourceKind != LogTargetSourceExternalVLogs {
+		return LogTargetView{}, apperr.InvalidRequest("日志目标来源只支持 external_vlogs")
+	}
+	if err := ValidateLogTargetBaseFilter(req.BaseFilter); err != nil {
+		return LogTargetView{}, err
+	}
+	service, err := s.services.Get(ctx, req.ServiceID)
+	if err != nil {
+		return LogTargetView{}, normalizeNotFound(err, "服务不存在")
+	}
+	if !s.allowedTarget(subject, service.ID, "manage") {
+		return LogTargetView{}, ErrPermissionDenied
+	}
+	endpoint, err := s.getEndpoint(ctx, req.EndpointID)
+	if err != nil {
+		return LogTargetView{}, err
+	}
+	if err := validateTargetEndpoint(endpoint); err != nil {
+		return LogTargetView{}, err
+	}
+	if err := s.ensureUniqueExternalTarget(ctx, "", service.ID, endpoint.ID, req.BaseFilter); err != nil {
+		return LogTargetView{}, err
+	}
+	now := time.Now().UTC()
+	actor := actorRefFromSubject(subject)
+	target := LogTarget{
+		ID:         primitive.NewObjectID().Hex(),
+		Name:       firstNonEmpty(req.Name, service.DisplayName, service.Name),
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		SourceKind: req.SourceKind,
+		BaseFilter: req.BaseFilter,
+		Status:     LogTargetStatusPendingVerification,
+		CreatedBy:  actor,
+		UpdatedBy:  actor,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.logTargets.Insert(ctx, target); err != nil {
+		if errors.Is(err, database.ErrConflict) {
+			return LogTargetView{}, apperr.Conflict("日志目标已存在")
+		}
+		return LogTargetView{}, err
+	}
+	return s.targetView(ctx, target)
+}
+
+func (s Service) UpdateTarget(ctx context.Context, subject platformrbac.Subject, targetID string, req UpdateLogTargetRequest) (LogTargetView, error) {
+	if s.logTargets == nil {
+		return LogTargetView{}, apperr.InvalidRequest("日志目标存储不可用")
+	}
+	current, err := s.getTarget(ctx, targetID)
+	if err != nil {
+		return LogTargetView{}, err
+	}
+	if !s.allowedTarget(subject, current.ServiceID, "manage") {
+		return LogTargetView{}, ErrPermissionDenied
+	}
+	req = normalizeUpdateTargetRequest(req)
+	updated := current
+	if req.Name != "" {
+		updated.Name = req.Name
+	}
+	if req.EndpointID != "" {
+		endpoint, err := s.getEndpoint(ctx, req.EndpointID)
+		if err != nil {
+			return LogTargetView{}, err
+		}
+		if err := validateTargetEndpoint(endpoint); err != nil {
+			return LogTargetView{}, err
+		}
+		updated.EndpointID = endpoint.ID
+	}
+	if req.BaseFilter != "" {
+		if err := ValidateLogTargetBaseFilter(req.BaseFilter); err != nil {
+			return LogTargetView{}, err
+		}
+		updated.BaseFilter = req.BaseFilter
+	}
+	if req.Status != "" {
+		if req.Status != LogTargetStatusPendingVerification && req.Status != LogTargetStatusVerified && req.Status != LogTargetStatusDisabled {
+			return LogTargetView{}, apperr.InvalidRequest("日志目标状态只支持 pending_verification、verified 或 disabled")
+		}
+		updated.Status = req.Status
+	}
+	if err := s.ensureUniqueExternalTarget(ctx, current.ID, updated.ServiceID, updated.EndpointID, updated.BaseFilter); err != nil {
+		return LogTargetView{}, err
+	}
+	updated.UpdatedBy = actorRefFromSubject(subject)
+	updated.UpdatedAt = time.Now().UTC()
+	if err := s.logTargets.Update(ctx, current.ID, updated); err != nil {
+		return LogTargetView{}, normalizeNotFound(err, "日志目标不存在")
+	}
+	return s.targetView(ctx, updated)
+}
+
+func (s Service) ProbeTarget(ctx context.Context, subject platformrbac.Subject, targetID string) (LogTargetView, error) {
+	target, err := s.getTarget(ctx, targetID)
+	if err != nil {
+		return LogTargetView{}, err
+	}
+	if !s.allowedTarget(subject, target.ServiceID, "manage") {
+		return LogTargetView{}, ErrPermissionDenied
+	}
+	if _, err := s.services.Get(ctx, target.ServiceID); err != nil {
+		return LogTargetView{}, normalizeNotFound(err, "服务不存在")
+	}
+	endpoint, err := s.getEndpoint(ctx, target.EndpointID)
+	if err != nil {
+		return LogTargetView{}, err
+	}
+	if err := validateTargetEndpoint(endpoint); err != nil {
+		return LogTargetView{}, err
+	}
+	if err := ValidateLogTargetBaseFilter(target.BaseFilter); err != nil {
+		return LogTargetView{}, err
+	}
+	now := time.Now().UTC()
+	target.Status = LogTargetStatusVerified
+	target.LastProbeStatus = "ready"
+	target.LastProbeMessage = "日志目标配置完整，VictoriaLogs 查询地址有效"
+	target.LastProbeAt = &now
+	target.UpdatedBy = actorRefFromSubject(subject)
+	target.UpdatedAt = now
+	if err := s.logTargets.Update(ctx, target.ID, target); err != nil {
+		return LogTargetView{}, normalizeNotFound(err, "日志目标不存在")
+	}
+	return s.targetView(ctx, target)
 }
 
 func (s Service) ListK8sWorkloads(ctx context.Context, clusterID string, namespace string) ([]Workload, error) {
@@ -1202,6 +1389,92 @@ func (s Service) getRoute(ctx context.Context, id string) (LogRoute, error) {
 	return route, nil
 }
 
+func (s Service) getTarget(ctx context.Context, id string) (LogTarget, error) {
+	if s.logTargets == nil {
+		return LogTarget{}, apperr.InvalidRequest("日志目标存储不可用")
+	}
+	var target LogTarget
+	if err := s.logTargets.FindByID(ctx, strings.TrimSpace(id), &target); err != nil {
+		return LogTarget{}, normalizeNotFound(err, "日志目标不存在")
+	}
+	return normalizeTarget(target), nil
+}
+
+func (s Service) listTargetViews(ctx context.Context, serviceID string) ([]LogTargetView, error) {
+	if s.logTargets == nil {
+		return []LogTargetView{}, nil
+	}
+	var targets []LogTarget
+	var err error
+	if strings.TrimSpace(serviceID) != "" {
+		err = s.logTargets.FindByService(ctx, strings.TrimSpace(serviceID), &targets)
+	} else {
+		err = s.logTargets.FindAll(ctx, &targets)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(targets, func(i, j int) bool {
+		return targets[i].UpdatedAt.After(targets[j].UpdatedAt)
+	})
+	views := make([]LogTargetView, 0, len(targets))
+	for _, target := range targets {
+		view, err := s.targetView(ctx, normalizeTarget(target))
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+func (s Service) targetView(ctx context.Context, target LogTarget) (LogTargetView, error) {
+	view := LogTargetView{Target: normalizeTarget(target)}
+	if service, err := s.services.Get(ctx, target.ServiceID); err == nil {
+		summary := serviceSummary(service)
+		view.Service = &summary
+	}
+	if endpoint, err := s.getEndpoint(ctx, target.EndpointID); err == nil {
+		view.Endpoint = &endpoint
+	}
+	return view, nil
+}
+
+func (s Service) ensureUniqueExternalTarget(ctx context.Context, currentID string, serviceID string, endpointID string, baseFilter string) error {
+	if s.logTargets == nil {
+		return nil
+	}
+	var targets []LogTarget
+	if err := s.logTargets.FindByService(ctx, serviceID, &targets); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		target = normalizeTarget(target)
+		if target.ID == currentID || target.Status == LogTargetStatusDisabled {
+			continue
+		}
+		if target.EndpointID == endpointID && target.SourceKind == LogTargetSourceExternalVLogs && target.BaseFilter == baseFilter {
+			return apperr.Conflict("相同服务、端点和过滤条件的日志目标已存在")
+		}
+	}
+	return nil
+}
+
+func (s Service) allowedTarget(subject platformrbac.Subject, serviceID string, action string) bool {
+	if subject.ID == "" || subject.Type == "" {
+		return false
+	}
+	if s.authorizer == nil {
+		return false
+	}
+	decision := s.authorizer.Authorize(subject, platformrbac.Request{
+		Resource: "logs.target",
+		Action:   action,
+		Scope:    platformrbac.Scope{ServiceID: serviceID},
+	})
+	return decision.Allowed
+}
+
 func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderInput) (renderedRouteConfig, error) {
 	if input.Source.SourceType == SourceTypeVMFile {
 		yaml, hash := renderAgentConfig(input)
@@ -1467,6 +1740,45 @@ func validSourceType(value string) bool {
 	return value == SourceTypeK8sStdout || value == SourceTypeVMFile
 }
 
+func normalizeCreateTargetRequest(req CreateLogTargetRequest) CreateLogTargetRequest {
+	req.Name = strings.TrimSpace(req.Name)
+	req.ServiceID = strings.TrimSpace(req.ServiceID)
+	req.EndpointID = strings.TrimSpace(req.EndpointID)
+	req.SourceKind = strings.TrimSpace(req.SourceKind)
+	if req.SourceKind == "" {
+		req.SourceKind = LogTargetSourceExternalVLogs
+	}
+	req.BaseFilter = strings.TrimSpace(req.BaseFilter)
+	return req
+}
+
+func normalizeUpdateTargetRequest(req UpdateLogTargetRequest) UpdateLogTargetRequest {
+	req.Name = strings.TrimSpace(req.Name)
+	req.EndpointID = strings.TrimSpace(req.EndpointID)
+	req.BaseFilter = strings.TrimSpace(req.BaseFilter)
+	req.Status = strings.TrimSpace(req.Status)
+	return req
+}
+
+func normalizeTarget(target LogTarget) LogTarget {
+	target.Name = strings.TrimSpace(target.Name)
+	target.ServiceID = strings.TrimSpace(target.ServiceID)
+	target.EndpointID = strings.TrimSpace(target.EndpointID)
+	target.SourceKind = strings.TrimSpace(target.SourceKind)
+	if target.SourceKind == "" {
+		target.SourceKind = LogTargetSourceExternalVLogs
+	}
+	target.LogRouteID = strings.TrimSpace(target.LogRouteID)
+	target.BaseFilter = strings.TrimSpace(target.BaseFilter)
+	target.Status = strings.TrimSpace(target.Status)
+	if target.Status == "" {
+		target.Status = LogTargetStatusPendingVerification
+	}
+	target.LastProbeStatus = strings.TrimSpace(target.LastProbeStatus)
+	target.LastProbeMessage = strings.TrimSpace(target.LastProbeMessage)
+	return target
+}
+
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
 	endpoint.Description = strings.TrimSpace(endpoint.Description)
@@ -1475,7 +1787,6 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.WriteURL = strings.TrimSpace(endpoint.WriteURL)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
 	endpoint.VMUIURL = strings.TrimSpace(endpoint.VMUIURL)
-	endpoint.AlertmanagerURL = strings.TrimSpace(endpoint.AlertmanagerURL)
 	endpoint.AccountID = strings.TrimSpace(endpoint.AccountID)
 	endpoint.ProjectID = strings.TrimSpace(endpoint.ProjectID)
 	endpoint.SecretRef = strings.TrimSpace(endpoint.SecretRef)
@@ -1495,9 +1806,66 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	if endpoint.SinkType != EndpointSinkVL {
 		endpoint.AccountID = ""
 		endpoint.ProjectID = ""
-		endpoint.AlertmanagerURL = ""
 	}
 	return endpoint
+}
+
+func validateTargetEndpoint(endpoint LogEndpoint) error {
+	if endpoint.Status == LogTargetStatusDisabled || endpoint.Status == "disabled" {
+		return apperr.InvalidRequest("日志目标不能绑定已停用的日志下游端点")
+	}
+	if endpoint.SinkType != EndpointSinkVL || strings.TrimSpace(endpoint.QueryURL) == "" {
+		return apperr.InvalidRequest("日志目标只能绑定可查询的 VictoriaLogs 端点")
+	}
+	return nil
+}
+
+func ValidateLogTargetBaseFilter(filter string) error {
+	filter = strings.TrimSpace(filter)
+	if filter == "" || len(filter) > 8*1024 {
+		return apperr.InvalidRequest("日志目标过滤条件不能为空且不能超过 8 KiB")
+	}
+	lower := strings.ToLower(filter)
+	if strings.Contains(filter, "|") || strings.Contains(lower, "_time") {
+		return apperr.InvalidRequest("日志目标过滤条件仅接受过滤表达式，时间窗口和统计由 Explore 或告警统一生成")
+	}
+	if !balancedLogsQLFilter(filter) {
+		return apperr.InvalidRequest("日志目标过滤条件括号或引号不完整")
+	}
+	return nil
+}
+
+func balancedLogsQLFilter(expression string) bool {
+	depth := 0
+	quoted := false
+	escaped := false
+	for _, char := range expression {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' && quoted {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			quoted = !quoted
+			continue
+		}
+		if quoted {
+			continue
+		}
+		switch char {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return !quoted && !escaped && depth == 0
 }
 
 func validateEndpoint(endpoint LogEndpoint) error {
@@ -1517,11 +1885,6 @@ func validateEndpoint(endpoint LogEndpoint) error {
 		}
 		for _, rawURL := range []string{endpoint.WriteURL, endpoint.QueryURL, endpoint.VMUIURL} {
 			if err := validateHTTPURL(rawURL, "VL 下游端点地址"); err != nil {
-				return err
-			}
-		}
-		if endpoint.AlertmanagerURL != "" {
-			if err := validateHTTPURL(endpoint.AlertmanagerURL, "Alertmanager 通知地址"); err != nil {
 				return err
 			}
 		}
@@ -1629,6 +1992,10 @@ func serviceSummaries(items []servicecatalog.Service) []ServiceSummary {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+func actorRefFromSubject(subject platformrbac.Subject) ActorRef {
+	return ActorRef{ID: subject.ID, Type: subject.Type, Name: subject.DisplayName}
 }
 
 func agentGroupSummaries(items []collectormanagement.CollectorGroup) []AgentGroupSummary {

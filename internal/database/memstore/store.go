@@ -30,6 +30,7 @@ type Store struct {
 	lges  map[string]interface{}
 	lgss  map[string]interface{}
 	lgrs  map[string]interface{}
+	lgts  map[string]interface{}
 	lgcvs map[string]interface{}
 	lgdvs map[string]interface{}
 	lgps  map[string]interface{}
@@ -73,6 +74,7 @@ func NewStore() *Store {
 		lges:  map[string]interface{}{},
 		lgss:  map[string]interface{}{},
 		lgrs:  map[string]interface{}{},
+		lgts:  map[string]interface{}{},
 		lgcvs: map[string]interface{}{},
 		lgdvs: map[string]interface{}{},
 		lgps:  map[string]interface{}{},
@@ -130,6 +132,7 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s} }
+func (s *Store) LogTargets() database.LogTargetStore                  { return &logTargetStore{s} }
 func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
 	return &logCollectorConfigVersionStore{s}
 }
@@ -731,6 +734,60 @@ func (st *logRouteStore) Update(ctx context.Context, id string, v interface{}) e
 		return errNotFound
 	}
 	st.s.lgrs[id] = v
+	return nil
+}
+
+type logTargetStore struct{ s *Store }
+
+func (st *logTargetStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	if _, exists := st.s.lgts[id]; exists {
+		return database.ErrConflict
+	}
+	st.s.lgts[id] = v
+	return nil
+}
+
+func (st *logTargetStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lgts, results)
+}
+
+func (st *logTargetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.lgts {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *logTargetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.lgts[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *logTargetStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lgts[id]; !ok {
+		return errNotFound
+	}
+	st.s.lgts[id] = v
 	return nil
 }
 

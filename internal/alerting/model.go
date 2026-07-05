@@ -86,9 +86,11 @@ type RuleScope struct {
 	ServiceID   string `json:"service_id" bson:"service_id"`
 	ServiceName string `json:"service_name" bson:"service_name"`
 	LogRouteID  string `json:"log_route_id" bson:"log_route_id"`
+	LogTargetID string `json:"log_target_id" bson:"log_target_id"`
 	EndpointID  string `json:"endpoint_id" bson:"endpoint_id"`
 	AccountID   string `json:"account_id" bson:"account_id"`
 	ProjectID   string `json:"project_id" bson:"project_id"`
+	BaseFilter  string `json:"base_filter,omitempty" bson:"base_filter,omitempty"`
 }
 
 type QuerySpec struct {
@@ -114,11 +116,11 @@ type GroupingSpec struct {
 }
 
 type NotificationSpec struct {
-	PolicyID             string `json:"policy_id" bson:"policy_id"`
-	Severity             string `json:"severity" bson:"severity"`
-	OwnerTeam            string `json:"owner_team" bson:"owner_team"`
-	RunbookURL           string `json:"runbook_url,omitempty" bson:"runbook_url,omitempty"`
-	AlertmanagerReceiver string `json:"-" bson:"-"`
+	PolicyID   string `json:"policy_id" bson:"policy_id"`
+	Severity   string `json:"severity" bson:"severity"`
+	OwnerTeam  string `json:"owner_team" bson:"owner_team"`
+	RunbookURL string `json:"runbook_url,omitempty" bson:"runbook_url,omitempty"`
+	Receiver   string `json:"-" bson:"-"`
 }
 
 type DerivedMetricSpec struct {
@@ -205,9 +207,11 @@ func (s RuleSpec) Normalize() RuleSpec {
 	s.Scope.ServiceID = strings.TrimSpace(s.Scope.ServiceID)
 	s.Scope.ServiceName = strings.TrimSpace(s.Scope.ServiceName)
 	s.Scope.LogRouteID = strings.TrimSpace(s.Scope.LogRouteID)
+	s.Scope.LogTargetID = strings.TrimSpace(s.Scope.LogTargetID)
 	s.Scope.EndpointID = strings.TrimSpace(s.Scope.EndpointID)
 	s.Scope.AccountID = strings.TrimSpace(s.Scope.AccountID)
 	s.Scope.ProjectID = strings.TrimSpace(s.Scope.ProjectID)
+	s.Scope.BaseFilter = strings.TrimSpace(s.Scope.BaseFilter)
 	s.Query.Mode = strings.ToLower(strings.TrimSpace(s.Query.Mode))
 	s.Query.Expression = strings.TrimSpace(s.Query.Expression)
 	if s.Trigger.Mode == "" {
@@ -253,8 +257,11 @@ func (s RuleSpec) Validate() error {
 	if len(s.Name) > 120 {
 		return invalidSpec("name", "规则名称不能超过 120 个字符")
 	}
-	if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.LogRouteID == "" || s.Scope.EndpointID == "" {
-		return invalidSpec("scope", "服务、日志路由和日志端点不能为空")
+	if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.EndpointID == "" || (s.Scope.LogRouteID == "" && s.Scope.LogTargetID == "") {
+		return invalidSpec("scope", "服务、日志目标或日志路由、日志端点不能为空")
+	}
+	if s.Scope.LogRouteID != "" && s.Scope.LogTargetID != "" {
+		return invalidSpec("scope", "日志目标和日志路由不能同时绑定")
 	}
 	if s.Scope.AccountID == "" || s.Scope.ProjectID == "" {
 		return invalidSpec("scope", "VictoriaLogs AccountID 和 ProjectID 不能为空")

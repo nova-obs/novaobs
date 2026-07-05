@@ -32,6 +32,7 @@ type Store struct {
 	lgeCol  *mongo.Collection
 	lgsCol  *mongo.Collection
 	lgrCol  *mongo.Collection
+	lgtCol  *mongo.Collection
 	lgcvCol *mongo.Collection
 	lgdvCol *mongo.Collection
 	lgpCol  *mongo.Collection
@@ -86,6 +87,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgeCol:  db.Collection("log_endpoints"),
 		lgsCol:  db.Collection("log_sources"),
 		lgrCol:  db.Collection("log_routes"),
+		lgtCol:  db.Collection("log_targets"),
 		lgcvCol: db.Collection("log_collector_config_versions"),
 		lgdvCol: db.Collection("log_deployment_manifest_versions"),
 		lgpCol:  db.Collection("log_agent_plans"),
@@ -177,6 +179,7 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s.lgeCol} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s.lgsCol} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s.lgrCol} }
+func (s *Store) LogTargets() database.LogTargetStore                  { return &logTargetStore{s.lgtCol} }
 func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
 	return &logCollectorConfigVersionStore{s.lgcvCol}
 }

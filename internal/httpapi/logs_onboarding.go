@@ -97,6 +97,80 @@ func updateLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func listLogsTargetsHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		targets, err := service.ListTargets(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Query("service_id")))
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, targets, gin.H{"total": len(targets)})
+	}
+}
+
+func createLogsTargetHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body logs.CreateLogTargetRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("日志目标登记请求无效"))
+			return
+		}
+		target, err := service.CreateTarget(ctx.Request.Context(), subject, body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.Created(ctx, target)
+	}
+}
+
+func updateLogsTargetHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body logs.UpdateLogTargetRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("日志目标更新请求无效"))
+			return
+		}
+		target, err := service.UpdateTarget(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, target, gin.H{})
+	}
+}
+
+func probeLogsTargetHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		target, err := service.ProbeTarget(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")))
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, target, gin.H{})
+	}
+}
+
 func publishLogsEndpointVmalertRuntimeHandler(service alerting.LogRuntimeService) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body alerting.LogRuntimePublishRequest
@@ -227,6 +301,8 @@ func publishLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 
 func writeLogsError(ctx *gin.Context, err error) {
 	switch {
+	case errors.Is(err, logs.ErrPermissionDenied):
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权管理该服务的日志目标")
 	case errors.Is(err, k8sopscluster.ErrClusterReadOnly):
 		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，只能生成配置预览，不能发布 Agent")
 	case errors.Is(err, k8sopsdeployment.ErrPermissionDenied):

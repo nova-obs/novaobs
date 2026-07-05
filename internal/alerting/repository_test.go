@@ -20,7 +20,7 @@ func TestStoreRepositoryEnrichesRuntimeRulesWithManagedReceiver(t *testing.T) {
 	require.NoError(t, repository.SavePolicy(context.Background(), time.Time{}, policy, audit.Event{ID: "audit-policy"}))
 	spec := validRuleSpec()
 	spec.Notification.PolicyID = policy.ID
-	spec.Notification.AlertmanagerReceiver = ""
+	spec.Notification.Receiver = ""
 	rule := Rule{ID: "rule-a", Spec: spec, State: RuleStateEnabled, CurrentUpdateID: "update-a", CreatedAt: now, UpdatedAt: now}
 	require.NoError(t, repository.SaveChange(context.Background(), ChangeSet{
 		Rule: rule, Update: UpdateRecord{ID: "update-a", RuleID: rule.ID}, Audit: audit.Event{ID: "audit-rule"},
@@ -29,7 +29,7 @@ func TestStoreRepositoryEnrichesRuntimeRulesWithManagedReceiver(t *testing.T) {
 	rules, err := repository.ListRuntimeRules(context.Background(), "vmalert-logs:"+spec.Scope.EndpointID)
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
-	require.Equal(t, policy.AlertmanagerReceiver, rules[0].Spec.Notification.AlertmanagerReceiver)
+	require.Equal(t, policy.Receiver, rules[0].Spec.Notification.Receiver)
 }
 
 func TestStoreRepositoryMarksRuntimeRulesApplied(t *testing.T) {
