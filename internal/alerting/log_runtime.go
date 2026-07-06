@@ -184,13 +184,14 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 }
 
 type logRuntimeSpec struct {
-	RuntimeID      string
-	Name           string
-	EndpointID     string
-	ClusterID      string
-	Namespace      string
-	DatasourceURL  string
-	AlertIngestURL string
+	RuntimeID       string
+	Name            string
+	EndpointID      string
+	ClusterID       string
+	Namespace       string
+	DatasourceURL   string
+	AlertIngestURL  string
+	RuleDefaultType string
 }
 
 func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, defaultAlertIngestURL string) (logRuntimeSpec, error) {
@@ -233,19 +234,20 @@ func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, 
 	runtimeID := "vmalert-logs:" + endpoint.ID
 	name := dnsName("novaobs-vmalert-" + firstNonEmpty(endpoint.Name, endpoint.ID))
 	return logRuntimeSpec{
-		RuntimeID:      runtimeID,
-		Name:           name,
-		EndpointID:     endpoint.ID,
-		ClusterID:      clusterID,
-		Namespace:      defaultVmalertNamespace,
-		DatasourceURL:  datasourceURL,
-		AlertIngestURL: alertIngestURL,
+		RuntimeID:       runtimeID,
+		Name:            name,
+		EndpointID:      endpoint.ID,
+		ClusterID:       clusterID,
+		Namespace:       defaultVmalertNamespace,
+		DatasourceURL:   datasourceURL,
+		AlertIngestURL:  alertIngestURL,
+		RuleDefaultType: "vlogs",
 	}, nil
 }
 
 func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string {
 	rulesBlock := indentBlock(strings.TrimRight(artifact.Content, "\n"), 4)
-	return strings.Join([]string{
+	lines := []string{
 		"apiVersion: v1",
 		"kind: Namespace",
 		"metadata:",
@@ -307,12 +309,16 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"          image: " + quoteYAML(platformimages.VmalertImagePlaceholder),
 		"          args:",
 		"            - " + quoteYAML("-rule=/etc/vmalert/rules/*.yaml"),
-		"            - " + quoteYAML("-rule.defaultRuleType=vlogs"),
-		"            - " + quoteYAML("-configCheckInterval=10s"),
-		"            - " + quoteYAML("-datasource.url="+runtime.DatasourceURL),
-		"            - " + quoteYAML("-notifier.url="+runtime.AlertIngestURL),
-		"            - " + quoteYAML("-httpListenAddr=:8880"),
-		"            - " + quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
+	}
+	if runtime.RuleDefaultType != "" {
+		lines = append(lines, "            - "+quoteYAML("-rule.defaultRuleType="+runtime.RuleDefaultType))
+	}
+	lines = append(lines,
+		"            - "+quoteYAML("-configCheckInterval=10s"),
+		"            - "+quoteYAML("-datasource.url="+runtime.DatasourceURL),
+		"            - "+quoteYAML("-notifier.url="+runtime.AlertIngestURL),
+		"            - "+quoteYAML("-httpListenAddr=:8880"),
+		"            - "+quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
 		"          ports:",
 		"            - name: http",
 		"              containerPort: 8880",
@@ -323,9 +329,10 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"      volumes:",
 		"        - name: rules",
 		"          configMap:",
-		"            name: " + quoteYAML(runtime.Name+"-rules"),
+		"            name: "+quoteYAML(runtime.Name+"-rules"),
 		"",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func victoriaLogsDatasourceURL(queryURL string) (string, error) {

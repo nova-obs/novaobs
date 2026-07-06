@@ -346,7 +346,7 @@ func (s Service) resolveSpec(ctx context.Context, spec RuleSpec) (RuleSpec, erro
 	if s.scopeResolver == nil {
 		return spec, nil
 	}
-	scope, err := s.scopeResolver.ResolveScope(ctx, spec.Scope)
+	scope, err := s.scopeResolver.ResolveScope(ctx, spec)
 	if err != nil {
 		return RuleSpec{}, err
 	}
@@ -460,11 +460,13 @@ func newAuditEvent(id string, actor Actor, ruleID string, spec RuleSpec, action 
 		Action:   action,
 		Scope:    spec.Scope.ServiceID,
 		RequestSummary: map[string]any{
-			"service_id":    spec.Scope.ServiceID,
-			"log_route_id":  spec.Scope.LogRouteID,
-			"log_target_id": spec.Scope.LogTargetID,
-			"endpoint_id":   spec.Scope.EndpointID,
-			"rule_name":     spec.Name,
+			"signal_type":        spec.SignalType,
+			"service_id":         spec.Scope.ServiceID,
+			"log_route_id":       spec.Scope.LogRouteID,
+			"log_target_id":      spec.Scope.LogTargetID,
+			"metrics_binding_id": spec.Scope.MetricsBindingID,
+			"endpoint_id":        spec.Scope.EndpointID,
+			"rule_name":          spec.Name,
 		},
 		Result:    "accepted",
 		CreatedAt: now,

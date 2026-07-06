@@ -15,6 +15,9 @@ const (
 	EndpointSinkKafka = "kafka"
 	EndpointSinkOTel  = "otel"
 
+	EndpointSignalLogs    = "logs"
+	EndpointSignalMetrics = "metrics"
+
 	LogTargetSourceExternalVLogs = "external_vlogs"
 
 	LogTargetStatusPendingVerification = "pending_verification"
@@ -29,6 +32,8 @@ type LogEndpoint struct {
 	ID          string    `json:"id" bson:"_id"`
 	Name        string    `json:"name" bson:"name"`
 	Description string    `json:"description" bson:"description"`
+	Kind        string    `json:"kind,omitempty" bson:"kind,omitempty"`
+	SignalTypes []string  `json:"signal_types,omitempty" bson:"signal_types,omitempty"`
 	SinkType    string    `json:"sink_type" bson:"sink_type"`
 	StreamName  string    `json:"stream_name" bson:"stream_name"`
 	WriteURL    string    `json:"write_url" bson:"write_url"`

@@ -37,6 +37,7 @@ type Store struct {
 	lgdvCol *mongo.Collection
 	lgpCol  *mongo.Collection
 	lgccCol *mongo.Collection
+	msbCol  *mongo.Collection
 	arCol   *mongo.Collection
 	aruCol  *mongo.Collection
 	ariCol  *mongo.Collection
@@ -92,6 +93,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgdvCol: db.Collection("log_deployment_manifest_versions"),
 		lgpCol:  db.Collection("log_agent_plans"),
 		lgccCol: db.Collection("log_collector_cluster_configs"),
+		msbCol:  db.Collection("metrics_service_bindings"),
 		arCol:   db.Collection("alert_rules"),
 		aruCol:  db.Collection("alert_rule_updates"),
 		ariCol:  db.Collection("alert_instances"),
@@ -115,6 +117,10 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 	if err := store.ensureAlertingIndexes(ctx); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("初始化告警索引失败: %w", err)
+	}
+	if err := store.ensureMetricsIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("初始化指标索引失败: %w", err)
 	}
 	return store, nil
 }
@@ -142,6 +148,23 @@ func (s *Store) ensureAlertingIndexes(ctx context.Context) error {
 	}
 	_, err = s.arpCol.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "service_id", Value: 1}, {Key: "name", Value: 1}}, Options: options.Index().SetName("uniq_service_policy_name").SetUnique(true),
+	})
+	return err
+}
+
+func (s *Store) ensureMetricsIndexes(ctx context.Context) error {
+	_, err := s.msbCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys: bson.D{{Key: "service_id", Value: 1}},
+			Options: options.Index().
+				SetName("uniq_active_metrics_binding").
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{"status": "active"}),
+		},
+		{
+			Keys:    bson.D{{Key: "endpoint_id", Value: 1}, {Key: "status", Value: 1}},
+			Options: options.Index().SetName("metrics_binding_endpoint_status"),
+		},
 	})
 	return err
 }
@@ -189,6 +212,9 @@ func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVe
 func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s.lgpCol} }
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s.lgccCol}
+}
+func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
+	return &metricsServiceBindingStore{s.msbCol}
 }
 func (s *Store) Alerting() database.AlertingStore {
 	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}

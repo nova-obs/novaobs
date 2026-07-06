@@ -23,9 +23,14 @@ var (
 )
 
 const (
-	QueryModeContains = "contains"
-	QueryModeExact    = "exact"
-	QueryModeLogsQL   = "logsql"
+	SignalTypeLogs    = "logs"
+	SignalTypeMetrics = "metrics"
+
+	QueryModeContains  = "contains"
+	QueryModeExact     = "exact"
+	QueryModeLogsQL    = "logsql"
+	QueryModePromQL    = "promql"
+	QueryModeMetricsQL = "metricsql"
 
 	TriggerModeWindow      = "window"
 	TriggerModeConsecutive = "consecutive"
@@ -72,6 +77,7 @@ type Rule struct {
 }
 
 type RuleSpec struct {
+	SignalType    string             `json:"signal_type" bson:"signal_type"`
 	Name          string             `json:"name" bson:"name"`
 	Description   string             `json:"description,omitempty" bson:"description,omitempty"`
 	Scope         RuleScope          `json:"scope" bson:"scope"`
@@ -83,14 +89,16 @@ type RuleSpec struct {
 }
 
 type RuleScope struct {
-	ServiceID   string `json:"service_id" bson:"service_id"`
-	ServiceName string `json:"service_name" bson:"service_name"`
-	LogRouteID  string `json:"log_route_id" bson:"log_route_id"`
-	LogTargetID string `json:"log_target_id" bson:"log_target_id"`
-	EndpointID  string `json:"endpoint_id" bson:"endpoint_id"`
-	AccountID   string `json:"account_id" bson:"account_id"`
-	ProjectID   string `json:"project_id" bson:"project_id"`
-	BaseFilter  string `json:"base_filter,omitempty" bson:"base_filter,omitempty"`
+	ServiceID        string `json:"service_id" bson:"service_id"`
+	ServiceName      string `json:"service_name" bson:"service_name"`
+	LogRouteID       string `json:"log_route_id" bson:"log_route_id"`
+	LogTargetID      string `json:"log_target_id" bson:"log_target_id"`
+	MetricsBindingID string `json:"metrics_binding_id,omitempty" bson:"metrics_binding_id,omitempty"`
+	EndpointID       string `json:"endpoint_id" bson:"endpoint_id"`
+	AccountID        string `json:"account_id" bson:"account_id"`
+	ProjectID        string `json:"project_id" bson:"project_id"`
+	BaseFilter       string `json:"base_filter,omitempty" bson:"base_filter,omitempty"`
+	BasePromQL       string `json:"base_promql,omitempty" bson:"base_promql,omitempty"`
 }
 
 type QuerySpec struct {
@@ -166,8 +174,9 @@ type Artifact struct {
 }
 
 type RuleFilter struct {
-	ServiceID string
-	State     string
+	ServiceID  string
+	State      string
+	SignalType string
 }
 
 type TestRequest struct {
@@ -202,16 +211,22 @@ func (s RuleSpec) Normalize() RuleSpec {
 		metric.Labels = cloneStringMap(s.DerivedMetric.Labels)
 		s.DerivedMetric = &metric
 	}
+	s.SignalType = strings.ToLower(strings.TrimSpace(s.SignalType))
+	if s.SignalType == "" {
+		s.SignalType = SignalTypeLogs
+	}
 	s.Name = strings.TrimSpace(s.Name)
 	s.Description = strings.TrimSpace(s.Description)
 	s.Scope.ServiceID = strings.TrimSpace(s.Scope.ServiceID)
 	s.Scope.ServiceName = strings.TrimSpace(s.Scope.ServiceName)
 	s.Scope.LogRouteID = strings.TrimSpace(s.Scope.LogRouteID)
 	s.Scope.LogTargetID = strings.TrimSpace(s.Scope.LogTargetID)
+	s.Scope.MetricsBindingID = strings.TrimSpace(s.Scope.MetricsBindingID)
 	s.Scope.EndpointID = strings.TrimSpace(s.Scope.EndpointID)
 	s.Scope.AccountID = strings.TrimSpace(s.Scope.AccountID)
 	s.Scope.ProjectID = strings.TrimSpace(s.Scope.ProjectID)
 	s.Scope.BaseFilter = strings.TrimSpace(s.Scope.BaseFilter)
+	s.Scope.BasePromQL = strings.TrimSpace(s.Scope.BasePromQL)
 	s.Query.Mode = strings.ToLower(strings.TrimSpace(s.Query.Mode))
 	s.Query.Expression = strings.TrimSpace(s.Query.Expression)
 	if s.Trigger.Mode == "" {
@@ -257,26 +272,14 @@ func (s RuleSpec) Validate() error {
 	if len(s.Name) > 120 {
 		return invalidSpec("name", "规则名称不能超过 120 个字符")
 	}
-	if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.EndpointID == "" || (s.Scope.LogRouteID == "" && s.Scope.LogTargetID == "") {
-		return invalidSpec("scope", "服务、日志目标或日志路由、日志端点不能为空")
+	if !slices.Contains([]string{SignalTypeLogs, SignalTypeMetrics}, s.SignalType) {
+		return invalidSpec("signal_type", "告警信号类型无效")
 	}
-	if s.Scope.LogRouteID != "" && s.Scope.LogTargetID != "" {
-		return invalidSpec("scope", "日志目标和日志路由不能同时绑定")
+	if err := validateScopeForSignal(s); err != nil {
+		return err
 	}
-	if s.Scope.AccountID == "" || s.Scope.ProjectID == "" {
-		return invalidSpec("scope", "VictoriaLogs AccountID 和 ProjectID 不能为空")
-	}
-	if !slices.Contains([]string{QueryModeContains, QueryModeExact, QueryModeLogsQL}, s.Query.Mode) {
-		return invalidSpec("query.mode", "查询模式无效")
-	}
-	if s.Query.Expression == "" || len(s.Query.Expression) > 16*1024 {
-		return invalidSpec("query.expression", "查询内容不能为空且不能超过 16 KiB")
-	}
-	if s.Query.Mode == QueryModeLogsQL && (strings.Contains(s.Query.Expression, "|") || strings.Contains(strings.ToLower(s.Query.Expression), "_time")) {
-		return invalidSpec("query.expression", "LogsQL 高级模式仅接受过滤表达式，时间窗口和统计由平台统一生成")
-	}
-	if s.Query.Mode == QueryModeLogsQL && !balancedLogsQLFilter(s.Query.Expression) {
-		return invalidSpec("query.expression", "LogsQL 过滤表达式括号或引号不完整")
+	if err := validateQueryForSignal(s); err != nil {
+		return err
 	}
 	if s.Trigger.Mode != TriggerModeWindow {
 		return invalidSpec("trigger.mode", "一期不支持严格连续事件匹配，仅支持时间窗口内累计匹配")
@@ -336,6 +339,9 @@ func (s RuleSpec) Validate() error {
 		}
 	}
 	if metric := s.DerivedMetric; metric != nil && metric.Enabled {
+		if s.SignalType == SignalTypeMetrics {
+			return invalidSpec("derived_metric", "指标告警不支持日志派生指标")
+		}
 		if !slices.Contains([]string{"match_count", "match_rate"}, metric.Signal) {
 			return invalidSpec("derived_metric.signal", "趋势指标类型无效")
 		}
@@ -351,6 +357,62 @@ func (s RuleSpec) Validate() error {
 				return invalidSpec("derived_metric.labels", "趋势指标只允许受控的低基数静态标签")
 			}
 		}
+	}
+	return nil
+}
+
+func validateScopeForSignal(s RuleSpec) error {
+	switch s.SignalType {
+	case SignalTypeLogs:
+		if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.EndpointID == "" || (s.Scope.LogRouteID == "" && s.Scope.LogTargetID == "") {
+			return invalidSpec("scope", "服务、日志目标或日志路由、日志端点不能为空")
+		}
+		if s.Scope.LogRouteID != "" && s.Scope.LogTargetID != "" {
+			return invalidSpec("scope", "日志目标和日志路由不能同时绑定")
+		}
+		if s.Scope.AccountID == "" || s.Scope.ProjectID == "" {
+			return invalidSpec("scope", "VictoriaLogs AccountID 和 ProjectID 不能为空")
+		}
+	case SignalTypeMetrics:
+		if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.EndpointID == "" || s.Scope.MetricsBindingID == "" || s.Scope.BasePromQL == "" {
+			return invalidSpec("scope", "服务、指标绑定、指标端点和 base_promql 不能为空")
+		}
+		if s.Scope.LogRouteID != "" || s.Scope.LogTargetID != "" || s.Scope.BaseFilter != "" {
+			return invalidSpec("scope", "指标告警不能绑定日志路由或日志目标")
+		}
+	default:
+		return invalidSpec("signal_type", "告警信号类型无效")
+	}
+	return nil
+}
+
+func validateQueryForSignal(s RuleSpec) error {
+	if s.Query.Expression == "" || len(s.Query.Expression) > 16*1024 {
+		return invalidSpec("query.expression", "查询内容不能为空且不能超过 16 KiB")
+	}
+	switch s.SignalType {
+	case SignalTypeLogs:
+		if !slices.Contains([]string{QueryModeContains, QueryModeExact, QueryModeLogsQL}, s.Query.Mode) {
+			return invalidSpec("query.mode", "查询模式无效")
+		}
+		if s.Query.Mode == QueryModeLogsQL && (strings.Contains(s.Query.Expression, "|") || strings.Contains(strings.ToLower(s.Query.Expression), "_time")) {
+			return invalidSpec("query.expression", "LogsQL 高级模式仅接受过滤表达式，时间窗口和统计由平台统一生成")
+		}
+		if s.Query.Mode == QueryModeLogsQL && !balancedLogsQLFilter(s.Query.Expression) {
+			return invalidSpec("query.expression", "LogsQL 过滤表达式括号或引号不完整")
+		}
+	case SignalTypeMetrics:
+		if !slices.Contains([]string{QueryModePromQL, QueryModeMetricsQL}, s.Query.Mode) {
+			return invalidSpec("query.mode", "查询模式无效")
+		}
+		if strings.Contains(s.Query.Expression, "$") {
+			return invalidSpec("query.expression", "PromQL/MetricsQL 表达式不能包含 Dashboard 变量")
+		}
+		if !balancedMetricQuery(s.Query.Expression) {
+			return invalidSpec("query.expression", "PromQL/MetricsQL 表达式括号或引号不完整")
+		}
+	default:
+		return invalidSpec("signal_type", "告警信号类型无效")
 	}
 	return nil
 }
@@ -386,6 +448,43 @@ func balancedLogsQLFilter(expression string) bool {
 		}
 	}
 	return !quoted && !escaped && depth == 0
+}
+
+func balancedMetricQuery(expression string) bool {
+	stack := []rune{}
+	quoted := false
+	escaped := false
+	for _, char := range expression {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' && quoted {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			quoted = !quoted
+			continue
+		}
+		if quoted {
+			continue
+		}
+		switch char {
+		case '(':
+			stack = append(stack, ')')
+		case '[':
+			stack = append(stack, ']')
+		case '{':
+			stack = append(stack, '}')
+		case ')', ']', '}':
+			if len(stack) == 0 || stack[len(stack)-1] != char {
+				return false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return !quoted && !escaped && len(stack) == 0
 }
 
 func (s RuleSpec) InputHash() (string, error) {

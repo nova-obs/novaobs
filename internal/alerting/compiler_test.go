@@ -34,6 +34,22 @@ func TestCompileTestQueryUsesLogTargetBaseFilterWhenPresent(t *testing.T) {
 	require.NotContains(t, query, `"service.name":=`)
 }
 
+func TestCompileMetricsQueryInheritsBasePromQLAndThreshold(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	query, err := CompileAlertQuery(spec)
+
+	require.NoError(t, err)
+	require.Equal(t, `((sum(rate(http_requests_total{status=~"5.."}[5m]))) and (service:requests:rate5m{service="orders-api"})) >= 10`, query)
+}
+
+func TestCompileMetricsTestQueryDoesNotApplyThreshold(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	query, err := CompileTestQuery(spec)
+
+	require.NoError(t, err)
+	require.Equal(t, `(sum(rate(http_requests_total{status=~"5.."}[5m]))) and (service:requests:rate5m{service="orders-api"})`, query)
+}
+
 func TestCompileQueryEscapesUserString(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Query.Expression = `failed "card"`

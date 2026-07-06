@@ -86,6 +86,40 @@ func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T)
 	require.NotContains(t, preview.CollectorYAML, "kind: DaemonSet")
 }
 
+func TestMetricsOnlyEndpointDoesNotLeakIntoLogsEndpointsOrRouteSelection(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	group := fixture.createGroup(t)
+	require.NoError(t, fixture.store.LogEndpoints().Insert(ctx, LogEndpoint{
+		ID:          "vm-prod",
+		Name:        "vm-prod",
+		Kind:        "victoriametrics",
+		SignalTypes: []string{EndpointSignalMetrics},
+		QueryURL:    "http://victoriametrics:8428/api/v1/query",
+		VMUIURL:     "http://victoriametrics:8428/vmui",
+		Status:      "active",
+	}))
+
+	endpoints, err := fixture.service.ListEndpoints(ctx)
+	require.NoError(t, err)
+	require.Empty(t, endpoints)
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:    service.ID,
+		SourceType:   SourceTypeK8sStdout,
+		AgentGroupID: group.ID,
+		EndpointID:   "vm-prod",
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+	require.ErrorContains(t, err, "支持 logs")
+}
+
 func TestPreviewRouteRejectsRouteFragmentWithPlatformProcessor(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))

@@ -321,6 +321,13 @@ func (s Service) ListEndpoints(ctx context.Context) ([]LogEndpoint, error) {
 	for index := range endpoints {
 		endpoints[index] = normalizeEndpoint(endpoints[index])
 	}
+	filtered := endpoints[:0]
+	for _, endpoint := range endpoints {
+		if endpointSupportsLogsSignal(endpoint.SignalTypes) {
+			filtered = append(filtered, endpoint)
+		}
+	}
+	endpoints = filtered
 	sort.SliceStable(endpoints, func(i, j int) bool {
 		return endpoints[i].Name < endpoints[j].Name
 	})
@@ -1316,6 +1323,9 @@ func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error
 		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
 	endpoint = normalizeEndpoint(endpoint)
+	if !endpointSupportsLogsSignal(endpoint.SignalTypes) {
+		return LogEndpoint{}, apperr.InvalidRequest("日志路由只能选择支持 logs 的观测端点")
+	}
 	if endpoint.SinkType == EndpointSinkVL {
 		if err := validateVLWriteURL(endpoint.WriteURL); err != nil {
 			return LogEndpoint{}, err
@@ -1782,6 +1792,8 @@ func normalizeTarget(target LogTarget) LogTarget {
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
 	endpoint.Description = strings.TrimSpace(endpoint.Description)
+	endpoint.Kind = strings.ToLower(strings.TrimSpace(endpoint.Kind))
+	endpoint.SignalTypes = normalizeEndpointSignalTypes(endpoint.SignalTypes)
 	endpoint.SinkType = strings.ToLower(strings.TrimSpace(endpoint.SinkType))
 	endpoint.StreamName = strings.TrimSpace(endpoint.StreamName)
 	endpoint.WriteURL = strings.TrimSpace(endpoint.WriteURL)
@@ -1800,7 +1812,7 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 			endpoint.ScopeType = EndpointScopeGlobal
 		}
 	}
-	if endpoint.SinkType == "" {
+	if endpoint.SinkType == "" && endpointSupportsLogsSignal(endpoint.SignalTypes) {
 		endpoint.SinkType = EndpointSinkVL
 	}
 	if endpoint.SinkType != EndpointSinkVL {
@@ -1810,7 +1822,37 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	return endpoint
 }
 
+func normalizeEndpointSignalTypes(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func endpointSupportsLogsSignal(values []string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == EndpointSignalLogs {
+			return true
+		}
+	}
+	return false
+}
+
 func validateTargetEndpoint(endpoint LogEndpoint) error {
+	if !endpointSupportsLogsSignal(endpoint.SignalTypes) {
+		return apperr.InvalidRequest("日志目标只能选择支持 logs 的观测端点")
+	}
 	if endpoint.Status == LogTargetStatusDisabled || endpoint.Status == "disabled" {
 		return apperr.InvalidRequest("日志目标不能绑定已停用的日志下游端点")
 	}

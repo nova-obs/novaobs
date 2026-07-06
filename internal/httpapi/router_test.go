@@ -218,6 +218,11 @@ func newTestRouter(t *testing.T) testEnv {
 		Repository:     alertRepository,
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
+	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
+		Endpoints:      store.LogEndpoints(),
+		Repository:     alertRepository,
+		K8sDeployments: testRuntimeDeploymentService{},
+	})
 	router := NewRouter(Dependencies{
 		Store:                  store,
 		ServiceRepo:            svcRepo,
@@ -227,6 +232,7 @@ func newTestRouter(t *testing.T) testEnv {
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogsService:            logsSvc,
 		AlertRuntimeService:    alertRuntimeSvc,
+		MetricsRuntimeService:  metricsRuntimeSvc,
 		AlertService: alerting.NewService(alerting.Dependencies{
 			Repository: alertRepository,
 			Authorizer: rbacSvc,
@@ -688,6 +694,31 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"manifest_yaml"`)
 	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victorialogs:9428")
 	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaobs-api:8080")
+}
+
+func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
+	env := newTestRouter(t)
+	require.NoError(t, env.store.LogEndpoints().Insert(context.Background(), logs.LogEndpoint{
+		ID:          "vm-prod",
+		Name:        "vm-prod",
+		Kind:        "victoriametrics",
+		SignalTypes: []string{logs.EndpointSignalMetrics},
+		QueryURL:    "http://victoriametrics:8428/api/v1/query",
+		ScopeType:   logs.EndpointScopeK8sCluster,
+		ClusterID:   "prod-1",
+		Status:      "active",
+	}))
+
+	publishRecorder := httptest.NewRecorder()
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/endpoints/vm-prod/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
+	publishRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(publishRecorder, publishRequest)
+
+	require.Equal(t, http.StatusOK, publishRecorder.Code)
+	require.Contains(t, publishRecorder.Body.String(), `"runtime_id":"vmalert-metrics:vm-prod"`)
+	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
+	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victoriametrics:8428")
+	require.NotContains(t, publishRecorder.Body.String(), "-rule.defaultRuleType=vlogs")
 }
 
 func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {

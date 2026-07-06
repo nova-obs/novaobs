@@ -75,6 +75,63 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	require.Equal(t, "update-a", rule.AppliedUpdateID)
 }
 
+func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	endpoint := logs.LogEndpoint{
+		ID:          "vm-prod",
+		Name:        "prod-metrics",
+		Kind:        "victoriametrics",
+		SignalTypes: []string{logs.EndpointSignalMetrics},
+		QueryURL:    "http://victoriametrics:8428/select/0/prometheus/api/v1/query",
+		ScopeType:   logs.EndpointScopeK8sCluster,
+		ClusterID:   "prod-1",
+	}
+	require.NoError(t, store.LogEndpoints().Insert(ctx, endpoint))
+	repository := NewStoreRepository(store.Alerting())
+	now := time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC)
+	require.NoError(t, repository.SavePolicy(ctx, time.Time{}, NotificationPolicy{
+		ID: "orders-oncall", Name: "orders", Receiver: "orders-oncall", Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}, audit.Event{ID: "audit-policy", CreatedAt: now}))
+	spec := validMetricsRuleSpec()
+	spec.Scope.EndpointID = endpoint.ID
+	spec.Notification.PolicyID = "orders-oncall"
+	require.NoError(t, repository.SaveChange(ctx, ChangeSet{
+		Rule:   Rule{ID: "rule-metrics", Spec: spec, State: RuleStateEnabled, ApplyStatus: ApplyStatusPending, CurrentUpdateID: "update-metrics", CreatedAt: now, UpdatedAt: now},
+		Update: UpdateRecord{ID: "update-metrics", RuleID: "rule-metrics", Action: UpdateActionCreate, ResultingState: RuleStateEnabled, Spec: spec, CreatedAt: now},
+		Audit:  audit.Event{ID: "audit-metrics", CreatedAt: now},
+	}))
+	deployments := &recordingRuntimeDeploymentService{}
+	service := NewMetricsRuntimeService(MetricsRuntimeDependencies{
+		Endpoints: store.LogEndpoints(), Repository: repository, K8sDeployments: deployments,
+		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
+		Clock:                 func() time.Time { return now },
+	})
+
+	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{})
+	require.NoError(t, err)
+	require.True(t, preview.RequiresConfirmation)
+	require.Equal(t, "vmalert-metrics:vm-prod", preview.RuntimeID)
+	require.Equal(t, "http://victoriametrics:8428/select/0/prometheus", preview.DatasourceURL)
+	require.Contains(t, deployments.lastPreview.YAMLContent, "novaobs_runtime_id: vmalert-metrics:vm-prod")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "NovaObsMetricAlert_rule_metrics")
+	require.NotContains(t, deployments.lastPreview.YAMLContent, "-rule.defaultRuleType=vlogs")
+	require.NotContains(t, deployments.lastPreview.YAMLContent, "AccountID:")
+	require.NotContains(t, deployments.lastPreview.YAMLContent, "ProjectID:")
+
+	applied, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{
+		ClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
+	})
+	require.NoError(t, err)
+	require.False(t, applied.RequiresConfirmation)
+	require.Equal(t, 1, applied.AppliedRules)
+
+	var rule Rule
+	require.NoError(t, store.Alerting().FindRuleByID(ctx, "rule-metrics", &rule))
+	require.Equal(t, ApplyStatusApplied, rule.ApplyStatus)
+	require.Equal(t, "update-metrics", rule.AppliedUpdateID)
+}
+
 func TestLogRuntimeRejectsClusterOverrideOutsideEndpointBinding(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()

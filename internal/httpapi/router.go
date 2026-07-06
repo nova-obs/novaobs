@@ -12,6 +12,7 @@ import (
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database"
 	"novaobs/internal/logs"
+	"novaobs/internal/metrics"
 	"novaobs/internal/modules/k8sops"
 	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
@@ -25,6 +26,7 @@ import (
 	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
 	k8sopstemplate "novaobs/internal/modules/k8sops/template"
 	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
+	obsendpoint "novaobs/internal/observability/endpoint"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	platformauth "novaobs/internal/platform/auth"
@@ -51,7 +53,10 @@ type Dependencies struct {
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
 	LogsService            logs.Service
+	ObservabilityEndpoints obsendpoint.Service
+	MetricsService         metrics.Service
 	AlertRuntimeService    alerting.LogRuntimeService
+	MetricsRuntimeService  alerting.MetricsRuntimeService
 	AlertService           alerting.Service
 	AlertEventIngestor     alerting.EventIngestor
 	AlertPolicyService     alerting.PolicyService
@@ -165,6 +170,18 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
+	api.GET("/observability/endpoints", listObservabilityEndpointsHandler(deps.ObservabilityEndpoints))
+	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
+	api.GET("/metrics/endpoints", listMetricsEndpointsHandler(deps.MetricsService))
+	api.POST("/metrics/endpoints/:id/vmalert-runtime/publish", publishMetricsEndpointVmalertRuntimeHandler(deps.MetricsRuntimeService))
+	api.GET("/metrics/workspace", getMetricsWorkspaceHandler(deps.MetricsService))
+	api.GET("/metrics/service-bindings", listMetricsServiceBindingsHandler(deps.MetricsService))
+	api.POST("/metrics/service-bindings", createMetricsServiceBindingHandler(deps.MetricsService))
+	api.PATCH("/metrics/service-bindings/:id", updateMetricsServiceBindingHandler(deps.MetricsService))
+	api.POST("/metrics/service-bindings/:id/probe", probeMetricsServiceBindingHandler(deps.MetricsService))
+	api.GET("/metrics/alert-rules", listMetricsAlertRulesHandler(deps.AlertService))
+	api.POST("/metrics/alert-rules/test", testMetricsAlertRuleHandler(deps.AlertService))
+	api.POST("/metrics/alert-rules", createMetricsAlertRuleHandler(deps.AlertService))
 	api.GET("/alerts/rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alerts/rules/test", testAlertRuleHandler(deps.AlertService))
 	api.POST("/alerts/rules", createAlertRuleHandler(deps.AlertService))
@@ -799,9 +816,14 @@ func listAlertRulesHandler(service alerting.Service) gin.HandlerFunc {
 		if !ok {
 			return
 		}
+		signalType, ok := alertRuleSignalFilter(ctx)
+		if !ok {
+			return
+		}
 		rules, err := service.List(ctx.Request.Context(), subject, alerting.RuleFilter{
-			ServiceID: strings.TrimSpace(ctx.Query("service_id")),
-			State:     strings.TrimSpace(ctx.Query("state")),
+			ServiceID:  strings.TrimSpace(ctx.Query("service_id")),
+			State:      strings.TrimSpace(ctx.Query("state")),
+			SignalType: signalType,
 		})
 		if err != nil {
 			writeAlertingError(ctx, err)
