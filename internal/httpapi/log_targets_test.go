@@ -87,7 +87,6 @@ func TestLogsTargetAPIRejectsSubjectWithoutManagePermission(t *testing.T) {
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		serviceRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
@@ -96,6 +95,7 @@ func TestLogsTargetAPIRejectsSubjectWithoutManagePermission(t *testing.T) {
 		nil,
 		nil,
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()))),
 	)
 	router := gin.New()

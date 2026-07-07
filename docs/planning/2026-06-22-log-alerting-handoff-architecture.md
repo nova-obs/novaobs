@@ -5,7 +5,7 @@
 > 范围：NovaObs 告警中心、查询式日志规则、日志派生指标、vmalert Runtime、Alertmanager 通知闭环  
 > 明确延期：流式日志告警、严格连续事件匹配、Kafka 状态计算进入二期
 
-> 2026-06-26 更新：本文中的 `cmd/alert-controller`、MongoDB Deployment lease 和共享规则目录写入器方案已废弃。当前实现改为端点级 vmalert Runtime 发布：K8s 集群级 VictoriaLogs 端点保存 Alertmanager URL，NovaObs API 在端点页预览/应用包含 `ConfigMap + Deployment + Service` 的 vmalert 清单，规则 artifact 作为 ConfigMap 挂载给该端点唯一 Runtime。历史正文仅保留早期决策背景，不能再作为实施基线。
+> 2026-07-06 更新：本文中的 `cmd/alert-controller`、MongoDB Deployment lease、共享规则目录写入器、端点保存 Alertmanager URL 方案已废弃。当前实现改为观测运行时发布：VictoriaLogs/VictoriaMetrics 端点只作为 datasource，`logs_vmalert` / `metrics_vmalert` runtime 可部署到授权 K8s 集群，vmalert notifier 指向 NovaObs Alert Ingest，外部 NOC/通知系统由平台通知出口统一适配。历史正文仅保留早期决策背景，不能再作为实施基线。
 
 ## 0. 架构决策摘要
 
@@ -371,7 +371,7 @@ RuleEvaluationHealth
 
 `fingerprint` 只由 `rule_id + 稳定 group labels` 生成。日志正文、`$value`、trace ID、request ID 和动态异常消息不得进入实例标签。
 
-Alertmanager Webhook 写入必须幂等，`event_id` 或状态转换唯一键重复时不得产生重复历史。
+Alert Ingest 写入必须幂等，`event_id` 或状态转换唯一键重复时不得产生重复历史。
 
 ### 5.7 NotificationPolicy 与 Receiver
 
@@ -380,13 +380,13 @@ NotificationPolicy
   id
   name
   service_id（可空，空表示全局）
-  alertmanager_receiver
+  receiver
   enabled
 ```
 
-一期只管理业务规则到 Alertmanager receiver 稳定标识的关联，不在 NovaObs 保存第三方 Webhook URL 或凭据，也不暴露尚未由平台下发的分组时间伪配置。企业 IM、电话、短信继续由 Alertmanager 或现有通知平台承接。
+一期只管理业务规则到平台通知 receiver 稳定标识的关联，不在 NovaObs 保存第三方 Webhook URL 或凭据，也不暴露尚未由平台下发的分组时间伪配置。企业 IM、电话、短信、自建 NOC 由平台通知出口统一承接。
 
-Alertmanager 配置必须为策略登记的 `alertmanager_receiver` 建立同名 receiver；controller 在规则产物中解析并写入 `notification_receiver` 标签，Alertmanager 按该标签路由。receiver 标识创建后不可修改，需要换路由时新建策略并更新规则。NovaObs AlertEvent Webhook 作为平台固定 receiver，启用 `send_resolved: true`；业务接收器使用路由 `continue` 语义，确保所有 Firing/Resolved 变化都进入告警中心。Alertmanager 配置托管进入后续迭代，不能在一期模型中假装已经由 NovaObs 下发。
+平台通知出口必须为策略登记的 `receiver` 建立稳定投递目标；规则产物只写入策略标识和必要标签，具体分组、去重、抑制、NOC 字段映射和重试由告警事件与通知出口域处理。receiver 标识创建后不可修改，需要换路由时新建策略并更新规则。vmalert notifier 指向 NovaObs Alert Ingest，所有 Firing/Resolved 变化都先进入告警中心，再由通知出口分发。
 
 ## 6. 规则执行路径
 

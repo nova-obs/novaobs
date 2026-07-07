@@ -20,6 +20,7 @@ import (
 	"novaobs/internal/modules/k8sops"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	obsruntime "novaobs/internal/observability/runtime"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -202,7 +203,6 @@ func newTestRouter(t *testing.T) testEnv {
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
@@ -211,15 +211,18 @@ func newTestRouter(t *testing.T) testEnv {
 		k8sModule.Resource,
 		k8sModule.Deploy,
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(rbacSvc),
 	)
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:      store.LogEndpoints(),
+		Runtimes:       store.ObservabilityRuntimes(),
 		Repository:     alertRepository,
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
 	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
 		Endpoints:      store.LogEndpoints(),
+		Runtimes:       store.ObservabilityRuntimes(),
 		Repository:     alertRepository,
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
@@ -618,7 +621,8 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 	require.Equal(t, http.StatusOK, publishRecorder.Code)
 	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
-	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+	require.NotContains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+	require.NotContains(t, publishRecorder.Body.String(), `"plan"`)
 }
 
 func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
@@ -831,6 +835,18 @@ func createVMLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 
 func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 	t.Helper()
+	now := time.Now().UTC()
+	runtime := obsruntime.Runtime{
+		ID:         "logs-collector:" + env.service.Cluster + ":novaobs-system",
+		Kind:       obsruntime.KindLogsCollector,
+		SignalType: obsruntime.SignalLogs,
+		ClusterID:  env.service.Cluster,
+		Namespace:  "novaobs-system",
+		Status:     obsruntime.StatusReady,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	require.NoError(t, env.store.ObservabilityRuntimes().Upsert(context.Background(), runtime.ID, runtime))
 	endpointRecorder := httptest.NewRecorder()
 	endpointBody := `{"name":"vl-prod-k8s","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
 	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))

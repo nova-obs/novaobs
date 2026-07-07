@@ -33,8 +33,8 @@ type Store struct {
 	lgts  map[string]interface{}
 	lgcvs map[string]interface{}
 	lgdvs map[string]interface{}
-	lgps  map[string]interface{}
 	lgccs map[string]interface{}
+	orts  map[string]interface{}
 	msbs  map[string]interface{}
 	ars   map[string]interface{}
 	arus  map[string]interface{}
@@ -78,8 +78,8 @@ func NewStore() *Store {
 		lgts:  map[string]interface{}{},
 		lgcvs: map[string]interface{}{},
 		lgdvs: map[string]interface{}{},
-		lgps:  map[string]interface{}{},
 		lgccs: map[string]interface{}{},
+		orts:  map[string]interface{}{},
 		msbs:  map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		arus:  map[string]interface{}{},
@@ -141,9 +141,11 @@ func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionS
 func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
 	return &logDeploymentManifestVersionStore{s}
 }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s} }
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s}
+}
+func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
+	return &observabilityRuntimeStore{s}
 }
 func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
 	return &metricsServiceBindingStore{s}
@@ -742,6 +744,16 @@ func (st *logRouteStore) Update(ctx context.Context, id string, v interface{}) e
 	return nil
 }
 
+func (st *logRouteStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lgrs[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.lgrs, id)
+	return nil
+}
+
 type logTargetStore struct{ s *Store }
 
 func (st *logTargetStore) Insert(ctx context.Context, v interface{}) error {
@@ -846,37 +858,6 @@ func findLogArtifactByHash(ctx context.Context, store *Store, items map[string]i
 	return copyValue(value, result)
 }
 
-type logAgentPlanStore struct{ s *Store }
-
-func (st *logAgentPlanStore) Insert(ctx context.Context, v interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	id := extractID(v)
-	if id == "" {
-		id = newID()
-	}
-	st.s.lgps[id] = v
-	return nil
-}
-
-func (st *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	return copyAll(st.s.lgps, results)
-}
-
-func (st *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for id, value := range st.s.lgps {
-		if extractStringField(value, "RouteID") == routeID {
-			filtered[id] = value
-		}
-	}
-	return copyAll(filtered, results)
-}
-
 type logCollectorClusterConfigStore struct{ s *Store }
 
 func (st *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID string, agentNamespace string, v interface{}) error {
@@ -894,6 +875,43 @@ func (st *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clu
 		return errNotFound
 	}
 	return copyValue(value, result)
+}
+
+type observabilityRuntimeStore struct{ s *Store }
+
+func (st *observabilityRuntimeStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.orts[id] = v
+	return nil
+}
+
+func (st *observabilityRuntimeStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.orts, results)
+}
+
+func (st *observabilityRuntimeStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.orts[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	values := map[string]interface{}{}
+	for _, value := range st.s.orts {
+		if extractStringField(value, "ClusterID") == clusterID {
+			values[extractID(value)] = value
+		}
+	}
+	return copyAll(values, results)
 }
 
 type metricsServiceBindingStore struct{ s *Store }

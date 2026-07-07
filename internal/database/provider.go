@@ -31,8 +31,8 @@ type Store interface {
 	LogTargets() LogTargetStore
 	LogCollectorConfigVersions() LogCollectorConfigVersionStore
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
-	LogAgentPlans() LogAgentPlanStore
 	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
+	ObservabilityRuntimes() ObservabilityRuntimeStore
 	MetricsServiceBindings() MetricsServiceBindingStore
 	Alerting() AlertingStore
 	RBACRoles() RBACRoleStore
@@ -160,6 +160,7 @@ type LogRouteStore interface {
 	FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, route interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type LogTargetStore interface {
@@ -180,15 +181,16 @@ type LogDeploymentManifestVersionStore interface {
 	FindByHash(ctx context.Context, hash string, result interface{}) error
 }
 
-type LogAgentPlanStore interface {
-	Insert(ctx context.Context, plan interface{}) error
-	FindAll(ctx context.Context, results interface{}) error
-	FindByRoute(ctx context.Context, routeID string, results interface{}) error
-}
-
 type LogCollectorClusterConfigStore interface {
 	Upsert(ctx context.Context, clusterID string, agentNamespace string, config interface{}) error
 	FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error
+}
+
+type ObservabilityRuntimeStore interface {
+	Upsert(ctx context.Context, id string, runtime interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	FindByCluster(ctx context.Context, clusterID string, results interface{}) error
 }
 
 type MetricsServiceBindingStore interface {

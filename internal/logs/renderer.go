@@ -107,6 +107,27 @@ func renderK8sDaemonSetBundleWithTemplateValues(inputs []renderInput, processorP
 	}, nil
 }
 
+func renderK8sCollectorRuntimeBundleWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, inputs []renderInput, processorPatch string, deployment agentDeploymentOptions, templateValues map[string]string) (renderedRouteConfig, error) {
+	collectorYAML, collectorHash, err := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
+	if err != nil {
+		return renderedRouteConfig{}, err
+	}
+	if strings.TrimSpace(collectorYAML) == "" {
+		collectorYAML = renderIdleK8sCollectorConfig(deployment)
+		collectorHash = hashYAML(collectorYAML)
+	}
+	deploymentManifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, "<collector-yaml-managed-by-config-version>", "<collector-config-hash>", deployment, templateValues)
+	manifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, collectorYAML, collectorHash, deployment, templateValues)
+	return renderedRouteConfig{
+		ManifestYAML:           manifest,
+		CollectorYAML:          collectorYAML,
+		CollectorConfigHash:    collectorHash,
+		DeploymentManifestYAML: deploymentManifest,
+		DeploymentManifestHash: hashYAML(deploymentManifest),
+		RouteIDs:               renderRouteIDs(inputs),
+	}, nil
+}
+
 func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
 	return renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, platformimages.DefaultTemplateValues)
 }
@@ -174,6 +195,98 @@ func renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs []renderInput, collec
 		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
 	}
 	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
+}
+
+func renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, collectorConfig string, configHash string, deployment agentDeploymentOptions, templateValues map[string]string) string {
+	data := k8sDaemonSetBundleTemplateData{
+		AgentNamespace:       firstNonEmpty(agentNamespace, "novaobs-system"),
+		AgentName:            "novaobs-logs-agent",
+		ClusterID:            firstNonEmpty(clusterID, "<cluster-id>"),
+		CollectorGroupID:     firstNonEmpty(collectorGroupID, "<collector-group-id>"),
+		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
+		ConfigHash:           yamlQuote(configHash),
+		RuntimeLogMounts:     k8sRuntimeLogMounts(),
+		OpAMPEnabled:         opAMPEnabled(deployment),
+		OpAMPEndpoint:        strings.TrimSpace(deployment.OpAMPEndpoint),
+	}
+	var buffer bytes.Buffer
+	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
+		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
+	}
+	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
+}
+
+func renderIdleK8sCollectorConfig(deployment agentDeploymentOptions) string {
+	opAMPBlock := ""
+	if opAMPEnabled(deployment) {
+		opAMPBlock = `  opamp:
+    server:
+      ws:
+        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
+`
+	}
+	return fmt.Sprintf(`extensions:
+  file_storage/filelog_offsets:
+    directory: /var/lib/otelcol/filelog_offsets
+    create_directory: true
+  health_check:
+    endpoint: 0.0.0.0:13133
+%s
+receivers:
+  file_log/novaobs_idle:
+    include:
+      - "/var/log/pods/__novaobs_idle__/*/*.log"
+    exclude:
+      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+      - "/var/log/pods/*/*/*.gz"
+      - "/var/log/pods/*/*/*.tmp"
+      - "/var/log/pods/*/*/*.log.*"
+    poll_interval: 10s
+    max_concurrent_files: 64
+    max_batches: 2
+    start_at: end
+    storage: file_storage/filelog_offsets
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  k8s_attributes:
+    auth_type: serviceAccount
+    passthrough: false
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.container.name
+  batch:
+exporters:
+  debug:
+    verbosity: basic
+service:
+  extensions: [%s]
+  telemetry:
+    resource:
+      service.name: novaobs-logs-agent
+      k8s.pod.uid: ${env:KUBE_POD_UID}
+      k8s.pod.name: ${env:KUBE_POD_NAME}
+      k8s.node.name: ${env:KUBE_NODE_NAME}
+      k8s.pod.ip: ${env:KUBE_POD_IP}
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    logs/idle:
+      receivers: [file_log/novaobs_idle]
+      processors: [memory_limiter, k8s_attributes, batch]
+      exporters: [debug]`, opAMPBlock, renderServiceExtensions(deployment))
 }
 
 func k8sRuntimeLogMounts() []k8sRuntimeLogMount {

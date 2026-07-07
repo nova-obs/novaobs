@@ -737,7 +737,7 @@ paths:
         schema: { type: string }
     post:
       summary: 部署端点级 vmalert Runtime
-      description: 每个 K8s 集群级 VictoriaLogs 端点对应一个 vmalert Runtime；接口会生成包含规则 ConfigMap、vmalert Deployment 和 Service 的 K8s 清单，并写入 datasource 与 notifier 参数。首次请求返回待确认 YAML 与 confirmation token，携带 token 后执行部署。
+      description: 每个日志端点对应一个 vmalert Runtime；端点只作为 datasource，运行时可通过 deploy_cluster_id 部署到任一已授权 K8s 集群。首次请求返回待确认 YAML 与 confirmation token，携带 token 后执行部署。
       requestBody:
         required: false
         content:
@@ -747,6 +747,39 @@ paths:
       responses:
         "200":
           description: 返回 K8s 发布预览或应用结果、manifest YAML 和 artifact hash
+  /observability/runtimes:
+    get:
+      summary: 查询观测运行时
+      description: 返回 logs_collector、logs_vmalert、metrics_vmalert 等平台级运行时状态。
+      responses:
+        "200":
+          description: 返回观测运行时列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ObservabilityRuntime"
+  /observability/runtimes/logs-collector/publish:
+    post:
+      summary: 发布 K8s 日志采集运行时
+      description: 以 cluster_id + namespace 为采集域，生成或更新唯一一套 logs_collector DaemonSet 与合并后的采集 ConfigMap；服务日志路由不再直接部署采集器。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/K8sCollectorRuntimePublishRequest"
+      responses:
+        "200":
+          description: 返回 K8s 发布预览或应用结果、manifest YAML 和运行时状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/K8sCollectorRuntimePublishResult"
   /alerts/rules:
     get:
       summary: 查询日志告警规则
@@ -867,16 +900,6 @@ paths:
       responses:
         "200":
           description: 通知策略和审计记录已原子更新
-  /alerts/webhook/alertmanager:
-    post:
-      summary: 接收 Alertmanager Firing/Resolved Webhook
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: 事件已幂等写入并更新实例投影
-        "401":
-          description: Webhook 凭据无效
 components:
   securitySchemes:
     bearerAuth:
@@ -902,9 +925,6 @@ components:
           type: string
         vmui_url:
           type: string
-        alertmanager_url:
-          type: string
-          description: K8s 集群级 VictoriaLogs 端点部署 vmalert Runtime 时使用的 Alertmanager notify 地址
         account_id:
           type: string
         project_id:
@@ -923,20 +943,107 @@ components:
     LogRuntimePublishRequest:
       type: object
       properties:
-        cluster_id:
+        deploy_cluster_id:
           type: string
-          description: 已登记 K8s 集群 ID，必须与日志端点绑定集群一致
+          description: vmalert Runtime 的部署集群 ID；端点为 k8s_cluster 且为空时默认使用端点绑定集群，global/vm 端点必须显式填写
         namespace:
           type: string
           default: novaobs-system
           description: 固定平台 namespace；非 novaobs-system 会被拒绝
-        alertmanager_url:
+        alert_ingest_url:
           type: string
-          description: 可覆盖端点保存的 Alertmanager URL；为空时使用端点配置
+          description: NovaObs Alert Ingest 地址；为空时使用平台默认配置
         preview_id:
           type: string
         confirmation_token:
           type: string
+    K8sCollectorRuntimePublishRequest:
+      type: object
+      required: [cluster_id]
+      properties:
+        cluster_id:
+          type: string
+          description: 日志采集运行时部署的 K8s 集群 ID
+        namespace:
+          type: string
+          default: novaobs-system
+          description: 平台采集器 namespace
+        preview_id:
+          type: string
+        confirmation_token:
+          type: string
+    K8sCollectorRuntimePublishResult:
+      type: object
+      properties:
+        runtime:
+          $ref: "#/components/schemas/ObservabilityRuntime"
+        manifest_yaml:
+          type: string
+        collector_yaml:
+          type: string
+        collector_config_hash:
+          type: string
+        manifest_hash:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+        requires_confirmation:
+          type: boolean
+        preview_id:
+          type: string
+        confirmation_token:
+          type: string
+        audit_id:
+          type: string
+        resources:
+          type: array
+          items:
+            type: object
+        diffs:
+          type: array
+          items:
+            type: object
+        warnings:
+          type: array
+          items:
+            type: string
+    ObservabilityRuntime:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [logs_collector, logs_vmalert, metrics_vmalert]
+        signal_type:
+          type: string
+          enum: [logs, metrics]
+        cluster_id:
+          type: string
+          description: 运行时实际部署集群 ID
+        namespace:
+          type: string
+        endpoint_id:
+          type: string
+          description: vmalert datasource endpoint；采集器运行时为空
+        collector_config_hash:
+          type: string
+        artifact_hash:
+          type: string
+        manifest_hash:
+          type: string
+        status:
+          type: string
+          enum: [pending_publish, previewed, ready, failed]
+        last_preview_id:
+          type: string
+        last_audit_id:
+          type: string
+        last_published_at:
+          type: string
+          format: date-time
     AlertRuleChangeRequest:
       type: object
       required: [spec, test_token]
@@ -979,7 +1086,7 @@ components:
           required: [policy_id, severity, owner_team]
     NotificationPolicyInput:
       type: object
-      required: [name, alertmanager_receiver, enabled]
+      required: [name, receiver, enabled]
       properties:
         name:
           type: string
@@ -989,10 +1096,10 @@ components:
         service_id:
           type: string
           description: 为空表示全局策略
-        alertmanager_receiver:
+        receiver:
           type: string
           pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
-          description: Alertmanager 已配置 receiver 的稳定标识；不得传 URL 或凭据
+          description: 平台通知出口的稳定 receiver 标识；不得传 URL 或凭据
         enabled:
           type: boolean
     Envelope:

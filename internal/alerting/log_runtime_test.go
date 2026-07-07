@@ -43,7 +43,7 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	}))
 	deployments := &recordingRuntimeDeploymentService{}
 	service := NewLogRuntimeService(LogRuntimeDependencies{
-		Endpoints: store.LogEndpoints(), Repository: repository, K8sDeployments: deployments,
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: repository, K8sDeployments: deployments,
 		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
 		Clock:                 func() time.Time { return now },
 	})
@@ -60,9 +60,21 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	require.Contains(t, deployments.lastPreview.YAMLContent, "novaobs_runtime_id: vmalert-logs:vl-prod")
 	require.Contains(t, deployments.lastPreview.YAMLContent, "AccountID: 1001")
 	require.Contains(t, deployments.lastPreview.YAMLContent, "ProjectID: 2001")
+	var runtimeRecord struct {
+		ID         string `json:"id"`
+		Kind       string `json:"kind"`
+		ClusterID  string `json:"cluster_id"`
+		EndpointID string `json:"endpoint_id"`
+		Status     string `json:"status"`
+	}
+	require.NoError(t, store.ObservabilityRuntimes().FindByID(ctx, "vmalert-logs:vl-prod", &runtimeRecord))
+	require.Equal(t, "logs_vmalert", runtimeRecord.Kind)
+	require.Equal(t, "prod-1", runtimeRecord.ClusterID)
+	require.Equal(t, "vl-prod", runtimeRecord.EndpointID)
+	require.Equal(t, "previewed", runtimeRecord.Status)
 
 	applied, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{
-		ClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
+		DeployClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
 	})
 	require.NoError(t, err)
 	require.False(t, applied.RequiresConfirmation)
@@ -103,7 +115,7 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	}))
 	deployments := &recordingRuntimeDeploymentService{}
 	service := NewMetricsRuntimeService(MetricsRuntimeDependencies{
-		Endpoints: store.LogEndpoints(), Repository: repository, K8sDeployments: deployments,
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: repository, K8sDeployments: deployments,
 		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
 		Clock:                 func() time.Time { return now },
 	})
@@ -118,9 +130,16 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "-rule.defaultRuleType=vlogs")
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "AccountID:")
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "ProjectID:")
+	var runtimeRecord struct {
+		Kind   string `json:"kind"`
+		Status string `json:"status"`
+	}
+	require.NoError(t, store.ObservabilityRuntimes().FindByID(ctx, "vmalert-metrics:vm-prod", &runtimeRecord))
+	require.Equal(t, "metrics_vmalert", runtimeRecord.Kind)
+	require.Equal(t, "previewed", runtimeRecord.Status)
 
 	applied, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{
-		ClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
+		DeployClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
 	})
 	require.NoError(t, err)
 	require.False(t, applied.RequiresConfirmation)
@@ -132,19 +151,20 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	require.Equal(t, "update-metrics", rule.AppliedUpdateID)
 }
 
-func TestLogRuntimeRejectsClusterOverrideOutsideEndpointBinding(t *testing.T) {
+func TestLogRuntimeAllowsDeployClusterOutsideEndpointBinding(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
 		ID: "vl-prod", Name: "prod", SinkType: logs.EndpointSinkVL, QueryURL: "http://vl/select/logsql/query", ScopeType: logs.EndpointScopeK8sCluster, ClusterID: "prod-1",
 	}))
 	service := NewLogRuntimeService(LogRuntimeDependencies{
-		Endpoints: store.LogEndpoints(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
 		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
 	})
 
-	_, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-prod", LogRuntimePublishRequest{ClusterID: "prod-2"})
-	require.ErrorContains(t, err, "日志端点绑定的 K8s 集群")
+	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-prod", LogRuntimePublishRequest{DeployClusterID: "prod-2"})
+	require.NoError(t, err)
+	require.Equal(t, "prod-2", preview.DeployClusterID)
 }
 
 func TestLogRuntimeRejectsNamespaceOutsideFixedPlatformNamespace(t *testing.T) {
@@ -154,7 +174,7 @@ func TestLogRuntimeRejectsNamespaceOutsideFixedPlatformNamespace(t *testing.T) {
 		ID: "vl-prod", Name: "prod", SinkType: logs.EndpointSinkVL, QueryURL: "http://vl/select/logsql/query", ScopeType: logs.EndpointScopeK8sCluster, ClusterID: "prod-1",
 	}))
 	service := NewLogRuntimeService(LogRuntimeDependencies{
-		Endpoints: store.LogEndpoints(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
 		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
 	})
 
@@ -169,11 +189,29 @@ func TestLogRuntimeRejectsNonClusterVictoriaLogsEndpoint(t *testing.T) {
 		ID: "vl-global", Name: "global", SinkType: logs.EndpointSinkVL, QueryURL: "http://vl/select/logsql/query", ScopeType: logs.EndpointScopeGlobal,
 	}))
 	service := NewLogRuntimeService(LogRuntimeDependencies{
-		Endpoints: store.LogEndpoints(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
 	})
 
 	_, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-global", LogRuntimePublishRequest{AlertIngestURL: "http://novaobs-api:8080"})
-	require.ErrorContains(t, err, "K8s 集群级 VictoriaLogs 端点")
+	require.ErrorContains(t, err, "deploy_cluster_id")
+}
+
+func TestLogRuntimeDeploysGlobalDatasourceToSelectedCluster(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
+		ID: "vl-global", Name: "global", SinkType: logs.EndpointSinkVL, QueryURL: "http://vl/select/logsql/query", ScopeType: logs.EndpointScopeGlobal,
+	}))
+	deployments := &recordingRuntimeDeploymentService{}
+	service := NewLogRuntimeService(LogRuntimeDependencies{
+		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: deployments,
+		DefaultAlertIngestURL: "http://novaobs-api:8080",
+	})
+
+	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-global", LogRuntimePublishRequest{DeployClusterID: "ops-cluster"})
+	require.NoError(t, err)
+	require.Equal(t, "ops-cluster", preview.DeployClusterID)
+	require.Equal(t, "ops-cluster", deployments.lastPreview.ClusterID)
 }
 
 type recordingRuntimeDeploymentService struct {

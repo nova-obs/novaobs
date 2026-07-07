@@ -149,7 +149,6 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		targetRepo,
@@ -160,6 +159,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAOBS_LOGS_AGENT_OPAMP_ENDPOINT")),
 		logs.WithImageTemplateValues(imageSvc),
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(rbacSvc),
 	)
 	endpointSvc := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacSvc))
@@ -171,6 +171,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	})
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:             store.LogEndpoints(),
+		Runtimes:              store.ObservabilityRuntimes(),
 		Repository:            alertRepository,
 		K8sDeployments:        k8sOpsModule.Deploy,
 		ImageTemplates:        imageSvc,
@@ -178,6 +179,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	})
 	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
 		Endpoints:             store.LogEndpoints(),
+		Runtimes:              store.ObservabilityRuntimes(),
 		Repository:            alertRepository,
 		K8sDeployments:        k8sOpsModule.Deploy,
 		ImageTemplates:        imageSvc,

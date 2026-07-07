@@ -518,6 +518,18 @@ func (s *logRouteStore) Update(ctx context.Context, id string, route interface{}
 	return nil
 }
 
+func (s *logRouteStore) Delete(ctx context.Context, id string) error {
+	oid, _ := objectID(id)
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": oid})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 type logTargetStore struct{ col *mongo.Collection }
 
 func (s *logTargetStore) Insert(ctx context.Context, target interface{}) error {
@@ -597,29 +609,6 @@ func upsertLogArtifactByHash(ctx context.Context, col *mongo.Collection, hash st
 	return err
 }
 
-type logAgentPlanStore struct{ col *mongo.Collection }
-
-func (s *logAgentPlanStore) Insert(ctx context.Context, plan interface{}) error {
-	_, err := s.col.InsertOne(ctx, plan)
-	return err
-}
-
-func (s *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"created_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
-func (s *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{"route_id": routeID}, options.Find().SetSort(bson.M{"created_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
 // ---------- LogCollectorClusterConfigStore ----------
 type logCollectorClusterConfigStore struct{ col *mongo.Collection }
 
@@ -632,6 +621,34 @@ func (s *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID s
 func (s *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error {
 	id := clusterID + "\x00" + agentNamespace
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+// ---------- ObservabilityRuntimeStore ----------
+type observabilityRuntimeStore struct{ col *mongo.Collection }
+
+func (s *observabilityRuntimeStore) Upsert(ctx context.Context, id string, runtime interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, runtime, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *observabilityRuntimeStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *observabilityRuntimeStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"cluster_id": clusterID}, options.Find().SetSort(bson.M{"kind": 1, "updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
 }
 
 // ---------- Metrics 服务绑定 ----------

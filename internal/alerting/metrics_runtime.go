@@ -9,6 +9,7 @@ import (
 	"novaobs/internal/database"
 	"novaobs/internal/logs"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	obsruntime "novaobs/internal/observability/runtime"
 	platformimages "novaobs/internal/platform/images"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/apperr"
@@ -18,6 +19,7 @@ type MetricsRuntimeDependencies = LogRuntimeDependencies
 
 type MetricsRuntimeService struct {
 	endpoints             database.LogEndpointStore
+	runtimes              database.ObservabilityRuntimeStore
 	repository            LogRuntimeRepository
 	k8sDeployments        LogRuntimeDeploymentService
 	imageTemplates        LogRuntimeImageTemplateService
@@ -32,6 +34,7 @@ func NewMetricsRuntimeService(deps MetricsRuntimeDependencies) MetricsRuntimeSer
 	}
 	return MetricsRuntimeService{
 		endpoints:             deps.Endpoints,
+		runtimes:              deps.Runtimes,
 		repository:            deps.Repository,
 		k8sDeployments:        deps.K8sDeployments,
 		imageTemplates:        deps.ImageTemplates,
@@ -41,7 +44,7 @@ func NewMetricsRuntimeService(deps MetricsRuntimeDependencies) MetricsRuntimeSer
 }
 
 func (s MetricsRuntimeService) Publish(ctx context.Context, subject platformrbac.Subject, endpointID string, req LogRuntimePublishRequest) (LogRuntimePublishResult, error) {
-	if s.endpoints == nil || s.repository == nil || s.k8sDeployments == nil {
+	if s.endpoints == nil || s.runtimes == nil || s.repository == nil || s.k8sDeployments == nil {
 		return LogRuntimePublishResult{}, ErrUnavailable
 	}
 	endpointID = strings.TrimSpace(endpointID)
@@ -99,10 +102,13 @@ func (s MetricsRuntimeService) Publish(ctx context.Context, subject platformrbac
 			return LogRuntimePublishResult{}, err
 		}
 	}
+	if err := s.upsertRuntime(ctx, runtime, artifact, manifestHash, deployed, requiresConfirmation); err != nil {
+		return LogRuntimePublishResult{}, err
+	}
 	return LogRuntimePublishResult{
 		RuntimeID:            runtime.RuntimeID,
 		EndpointID:           endpoint.ID,
-		ClusterID:            runtime.ClusterID,
+		DeployClusterID:      runtime.ClusterID,
 		Namespace:            runtime.Namespace,
 		DatasourceURL:        runtime.DatasourceURL,
 		AlertIngestURL:       runtime.AlertIngestURL,
@@ -122,6 +128,39 @@ func (s MetricsRuntimeService) Publish(ctx context.Context, subject platformrbac
 	}, nil
 }
 
+func (s MetricsRuntimeService) upsertRuntime(ctx context.Context, runtime logRuntimeSpec, artifact Artifact, manifestHash string, deployed k8sopsdeployment.OperationResult, requiresConfirmation bool) error {
+	now := s.clock().UTC()
+	record := obsruntime.Runtime{ID: runtime.RuntimeID, CreatedAt: now}
+	var existing obsruntime.Runtime
+	if err := s.runtimes.FindByID(ctx, runtime.RuntimeID, &existing); err == nil {
+		record = existing
+	}
+	record.ID = runtime.RuntimeID
+	record.Kind = obsruntime.KindMetricsVmalert
+	record.SignalType = obsruntime.SignalMetrics
+	record.ClusterID = runtime.ClusterID
+	record.Namespace = runtime.Namespace
+	record.EndpointID = runtime.EndpointID
+	record.ArtifactHash = artifact.Hash
+	record.ManifestHash = manifestHash
+	record.Status = obsruntime.StatusReady
+	if requiresConfirmation {
+		record.Status = obsruntime.StatusPreviewed
+	} else {
+		publishedAt := now
+		record.LastPublishedAt = &publishedAt
+	}
+	record.LastPreviewID = deployed.PreviewID
+	record.LastAuditID = deployed.AuditID
+	record.LastError = ""
+	record.Resources = runtimeResourceRefs(deployed.Resources)
+	record.UpdatedAt = now
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	}
+	return s.runtimes.Upsert(ctx, record.ID, record)
+}
+
 func newMetricsRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, defaultAlertIngestURL string) (logRuntimeSpec, error) {
 	endpoint.ID = strings.TrimSpace(endpoint.ID)
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
@@ -135,15 +174,12 @@ func newMetricsRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishReque
 	if endpoint.Kind != "victoriametrics" || !logEndpointSignalTypesContain(endpoint.SignalTypes, logs.EndpointSignalMetrics) {
 		return logRuntimeSpec{}, apperr.InvalidRequest("只有 VictoriaMetrics 指标端点可以部署 metrics vmalert Runtime")
 	}
-	if endpoint.ScopeType != logs.EndpointScopeK8sCluster || endpoint.ClusterID == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("metrics vmalert Runtime 必须绑定 K8s 集群级 VictoriaMetrics 端点")
-	}
-	clusterID := strings.TrimSpace(req.ClusterID)
-	if clusterID == "" {
+	clusterID := strings.TrimSpace(req.DeployClusterID)
+	if clusterID == "" && endpoint.ScopeType == logs.EndpointScopeK8sCluster {
 		clusterID = endpoint.ClusterID
 	}
-	if clusterID != endpoint.ClusterID {
-		return logRuntimeSpec{}, apperr.InvalidRequest("metrics vmalert Runtime 必须部署到指标端点绑定的 K8s 集群")
+	if clusterID == "" {
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 metrics vmalert Runtime 必须填写 deploy_cluster_id")
 	}
 	datasourceURL, err := victoriaMetricsDatasourceURL(endpoint.QueryURL)
 	if err != nil {

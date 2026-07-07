@@ -278,6 +278,16 @@ func probeLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func deleteLogsRouteHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		if err := service.DeleteRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id"))); err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		ctx.Status(http.StatusNoContent)
+	}
+}
+
 func publishLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var body logs.PublishRouteRequest

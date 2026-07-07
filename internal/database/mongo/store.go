@@ -35,8 +35,8 @@ type Store struct {
 	lgtCol  *mongo.Collection
 	lgcvCol *mongo.Collection
 	lgdvCol *mongo.Collection
-	lgpCol  *mongo.Collection
 	lgccCol *mongo.Collection
+	ortCol  *mongo.Collection
 	msbCol  *mongo.Collection
 	arCol   *mongo.Collection
 	aruCol  *mongo.Collection
@@ -91,8 +91,8 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgtCol:  db.Collection("log_targets"),
 		lgcvCol: db.Collection("log_collector_config_versions"),
 		lgdvCol: db.Collection("log_deployment_manifest_versions"),
-		lgpCol:  db.Collection("log_agent_plans"),
 		lgccCol: db.Collection("log_collector_cluster_configs"),
+		ortCol:  db.Collection("observability_runtimes"),
 		msbCol:  db.Collection("metrics_service_bindings"),
 		arCol:   db.Collection("alert_rules"),
 		aruCol:  db.Collection("alert_rule_updates"),
@@ -209,9 +209,11 @@ func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionS
 func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
 	return &logDeploymentManifestVersionStore{s.lgdvCol}
 }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s.lgpCol} }
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s.lgccCol}
+}
+func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
+	return &observabilityRuntimeStore{s.ortCol}
 }
 func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
 	return &metricsServiceBindingStore{s.msbCol}

@@ -1,6 +1,10 @@
 package logs
 
-import "time"
+import (
+	"time"
+
+	obsruntime "novaobs/internal/observability/runtime"
+)
 
 const (
 	SourceTypeK8sStdout = "k8s_stdout"
@@ -159,24 +163,6 @@ type ActorRef struct {
 	Name string `json:"name" bson:"name"`
 }
 
-type LogAgentPlan struct {
-	ID                     string    `json:"id" bson:"_id"`
-	RouteID                string    `json:"route_id" bson:"route_id"`
-	AgentGroupID           string    `json:"agent_group_id" bson:"agent_group_id"`
-	SourceType             string    `json:"source_type" bson:"source_type"`
-	ClusterID              string    `json:"cluster_id" bson:"cluster_id"`
-	Namespace              string    `json:"namespace" bson:"namespace"`
-	CollectorConfigHash    string    `json:"collector_config_hash" bson:"collector_config_hash"`
-	DeploymentManifestHash string    `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
-	RenderedYAML           string    `json:"rendered_yaml" bson:"rendered_yaml"`
-	Status                 string    `json:"status" bson:"status"`
-	PreviewID              string    `json:"preview_id" bson:"preview_id"`
-	ConfirmationToken      string    `json:"confirmation_token" bson:"confirmation_token"`
-	AuditID                string    `json:"audit_id" bson:"audit_id"`
-	Message                string    `json:"message" bson:"message"`
-	CreatedAt              time.Time `json:"created_at" bson:"created_at"`
-}
-
 type K8sSourceInput struct {
 	ClusterID             string         `json:"cluster_id"`
 	Namespace             string         `json:"namespace"`
@@ -249,6 +235,30 @@ type UpsertRouteRequest struct {
 type PublishRouteRequest struct {
 	PreviewID         string `json:"preview_id"`
 	ConfirmationToken string `json:"confirmation_token"`
+}
+
+type K8sCollectorRuntimePublishRequest struct {
+	ClusterID         string `json:"cluster_id"`
+	Namespace         string `json:"namespace"`
+	PreviewID         string `json:"preview_id,omitempty"`
+	ConfirmationToken string `json:"confirmation_token,omitempty"`
+}
+
+type K8sCollectorRuntimePublishResult struct {
+	Runtime              obsruntime.Runtime `json:"runtime"`
+	ManifestYAML         string             `json:"manifest_yaml"`
+	CollectorYAML        string             `json:"collector_yaml"`
+	CollectorConfigHash  string             `json:"collector_config_hash"`
+	ManifestHash         string             `json:"manifest_hash"`
+	Status               string             `json:"status"`
+	Message              string             `json:"message"`
+	RequiresConfirmation bool               `json:"requires_confirmation"`
+	PreviewID            string             `json:"preview_id,omitempty"`
+	ConfirmationToken    string             `json:"confirmation_token,omitempty"`
+	AuditID              string             `json:"audit_id,omitempty"`
+	Resources            any                `json:"resources,omitempty"`
+	Diffs                any                `json:"diffs,omitempty"`
+	Warnings             []string           `json:"warnings"`
 }
 
 type CreateLogTargetRequest struct {
@@ -361,17 +371,14 @@ type LogRouteCollectorConfig struct {
 }
 
 type PublishRouteResult struct {
-	Route                LogRoute     `json:"route"`
-	Plan                 LogAgentPlan `json:"plan"`
-	Status               string       `json:"status"`
-	Message              string       `json:"message"`
-	RequiresConfirmation bool         `json:"requires_confirmation"`
-	PreviewID            string       `json:"preview_id,omitempty"`
-	ConfirmationToken    string       `json:"confirmation_token,omitempty"`
-	AuditID              string       `json:"audit_id,omitempty"`
-	Resources            any          `json:"resources,omitempty"`
-	Diffs                any          `json:"diffs,omitempty"`
-	Warnings             []string     `json:"warnings"`
+	Route                LogRoute `json:"route"`
+	Status               string   `json:"status"`
+	Message              string   `json:"message"`
+	RequiresConfirmation bool     `json:"requires_confirmation"`
+	PreviewID            string   `json:"preview_id,omitempty"`
+	ConfirmationToken    string   `json:"confirmation_token,omitempty"`
+	AuditID              string   `json:"audit_id,omitempty"`
+	Warnings             []string `json:"warnings"`
 }
 
 type ProbeResult struct {
