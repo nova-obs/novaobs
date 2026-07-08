@@ -6,12 +6,14 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database/memstore"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
 	k8sopsresource "novaobs/internal/modules/k8sops/resource"
+	obsruntime "novaobs/internal/observability/runtime"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/internal/servicecatalog"
 
@@ -55,6 +57,7 @@ func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
 func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	service := fixture.createService(t, "utrace-api")
 	group := fixture.createGroup(t)
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
@@ -86,9 +89,72 @@ func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T)
 	require.NotContains(t, preview.CollectorYAML, "kind: DaemonSet")
 }
 
+func TestPreviewK8sRouteRequiresObservabilityRuntimeReady(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+
+	require.ErrorContains(t, err, "尚未启用 logs_collector 观测接入")
+}
+
+func TestMetricsOnlyEndpointDoesNotLeakIntoLogsEndpointsOrRouteSelection(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	group := fixture.createGroup(t)
+	require.NoError(t, fixture.store.LogEndpoints().Insert(ctx, LogEndpoint{
+		ID:          "vm-prod",
+		Name:        "vm-prod",
+		Kind:        "victoriametrics",
+		SignalTypes: []string{EndpointSignalMetrics},
+		QueryURL:    "http://victoriametrics:8428/api/v1/query",
+		VMUIURL:     "http://victoriametrics:8428/vmui",
+		Status:      "active",
+	}))
+
+	endpoints, err := fixture.service.ListEndpoints(ctx)
+	require.NoError(t, err)
+	require.Empty(t, endpoints)
+
+	_, err = fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:    service.ID,
+		SourceType:   SourceTypeK8sStdout,
+		AgentGroupID: group.ID,
+		EndpointID:   "vm-prod",
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+	require.ErrorContains(t, err, "支持 logs")
+}
+
 func TestPreviewRouteRejectsRouteFragmentWithPlatformProcessor(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	service := fixture.createService(t, "utrace-api")
 	_, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -148,9 +214,106 @@ func TestCreateK8sEndpointRejectsUnregisteredCluster(t *testing.T) {
 	require.ErrorContains(t, err, "只能绑定已登记的 K8s 集群")
 }
 
+func TestCreateExternalVLogsTargetRegistersServiceQueryScope(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-external",
+		WriteURL:  "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.external:9428/select/logsql/query",
+		VMUIURL:   "http://vl.external:9428/select/vmui",
+		AccountID: "1001",
+		ProjectID: "2001",
+	})
+	require.NoError(t, err)
+
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api" AND "deployment.environment":="prod"`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, service.ID, created.Target.ServiceID)
+	require.Equal(t, endpoint.ID, created.Target.EndpointID)
+	require.Equal(t, LogTargetSourceExternalVLogs, created.Target.SourceKind)
+	require.Equal(t, LogTargetStatusPendingVerification, created.Target.Status)
+	require.Equal(t, `"service.name":="orders-api" AND "deployment.environment":="prod"`, created.Target.BaseFilter)
+	require.Equal(t, endpoint.ID, created.Endpoint.ID)
+	require.NotNil(t, created.Service)
+	require.Equal(t, "orders-api", created.Service.Name)
+
+	var routes []LogRoute
+	require.NoError(t, fixture.store.LogRoutes().FindAll(ctx, &routes))
+	require.Empty(t, routes)
+	groups, err := fixture.service.collectorGroups.ListGroups(ctx)
+	require.NoError(t, err)
+	require.Empty(t, groups)
+
+	workspace, err := fixture.service.Workspace(ctx)
+	require.NoError(t, err)
+	require.Len(t, workspace.Targets, 1)
+	require.Empty(t, workspace.Routes)
+}
+
+func TestCreateExternalVLogsTargetRejectsUnsafeBaseFilter(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+
+	_, err = fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `error | stats count()`,
+	})
+
+	require.ErrorContains(t, err, "日志目标过滤条件仅接受过滤表达式")
+}
+
+func TestProbeExternalVLogsTargetMarksVerifiedWithoutCreatingRoute(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 自建 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api"`,
+	})
+	require.NoError(t, err)
+
+	result, err := fixture.service.ProbeTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, LogTargetStatusVerified, result.Target.Status)
+	require.Equal(t, "ready", result.Target.LastProbeStatus)
+	require.NotNil(t, result.Target.LastProbeAt)
+	var routes []LogRoute
+	require.NoError(t, fixture.store.LogRoutes().FindAll(ctx, &routes))
+	require.Empty(t, routes)
+}
+
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	service := fixture.createService(t, "utrace-api")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -615,6 +778,7 @@ service:
 func TestK8sRouteUsesCollectorDomainBundleWhenMultipleRoutes(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -681,6 +845,7 @@ func TestK8sRouteUsesCollectorDomainBundleWhenMultipleRoutes(t *testing.T) {
 func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	service := fixture.createService(t, "utrace-api")
 	group := fixture.createGroup(t)
 	globalEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
@@ -740,10 +905,11 @@ func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
 	require.ErrorContains(t, err, "请显式选择端点")
 }
 
-func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T) {
+func TestPublishK8sCollectorRuntimeCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T) {
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	group := fixture.createGroup(t)
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -769,7 +935,7 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 		},
 	})
 	require.NoError(t, err)
-	secondRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:    secondService.ID,
 		SourceType:   SourceTypeK8sStdout,
 		AgentGroupID: group.ID,
@@ -789,10 +955,16 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 	})
 	require.NoError(t, err)
 
-	result, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), secondRoute.Route.ID, PublishRouteRequest{})
+	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		Namespace: "novaobs-system",
+	})
 
 	require.NoError(t, err)
 	require.True(t, result.RequiresConfirmation)
+	require.Equal(t, "logs_collector", result.Runtime.Kind)
+	require.Equal(t, "logs-collector:test03:novaobs-system", result.Runtime.ID)
+	require.Equal(t, "previewed", result.Runtime.Status)
 	require.Len(t, result.Resources, 2)
 	require.Len(t, result.Diffs, 2)
 	require.True(t, deploy.lastPreviewReq.ForceConflicts)
@@ -805,10 +977,11 @@ func TestPublishK8sRouteCombinesRoutesAndParseRulesIntoOneDaemonSet(t *testing.T
 	require.Contains(t, deploy.lastPreviewYAML, "payment-text")
 }
 
-func TestPublishK8sRouteCombinesSameClusterRoutesWithDifferentEndpoints(t *testing.T) {
+func TestPublishK8sCollectorRuntimeCombinesSameClusterRoutesWithDifferentEndpoints(t *testing.T) {
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	firstEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-logplatform",
 		WriteURL:  "http://vl-logplatform:9428/insert/opentelemetry/v1/logs",
@@ -840,7 +1013,7 @@ func TestPublishK8sRouteCombinesSameClusterRoutesWithDifferentEndpoints(t *testi
 		},
 	})
 	require.NoError(t, err)
-	secondRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  secondService.ID,
 		SourceType: SourceTypeK8sStdout,
 		EndpointID: secondEndpoint.ID,
@@ -858,7 +1031,10 @@ func TestPublishK8sRouteCombinesSameClusterRoutesWithDifferentEndpoints(t *testi
 	})
 	require.NoError(t, err)
 
-	result, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), secondRoute.Route.ID, PublishRouteRequest{})
+	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		Namespace: "novaobs-system",
+	})
 
 	require.NoError(t, err)
 	require.True(t, result.RequiresConfirmation)
@@ -877,10 +1053,11 @@ func TestPublishK8sRouteCombinesSameClusterRoutesWithDifferentEndpoints(t *testi
 	require.Contains(t, deploy.lastPreviewYAML, "ParseJSON(body)")
 }
 
-func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
+func TestPublishK8sCollectorRuntimeUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -892,7 +1069,7 @@ func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 	firstService := fixture.createService(t, "prometheus")
 	secondService := fixture.createService(t, "mtu-api")
 
-	firstRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  firstService.ID,
 		SourceType: SourceTypeK8sStdout,
 		EndpointID: endpoint.ID,
@@ -904,15 +1081,20 @@ func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	preview, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), firstRoute.Route.ID, PublishRouteRequest{})
+	preview, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		Namespace: "novaobs-system",
+	})
 	require.NoError(t, err)
-	_, err = fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), firstRoute.Route.ID, PublishRouteRequest{
+	_, err = fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID:         "test03",
+		Namespace:         "novaobs-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
 	require.NoError(t, err)
 
-	secondRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  secondService.ID,
 		SourceType: SourceTypeK8sStdout,
 		EndpointID: endpoint.ID,
@@ -924,9 +1106,14 @@ func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	preview, err = fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), secondRoute.Route.ID, PublishRouteRequest{})
+	preview, err = fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		Namespace: "novaobs-system",
+	})
 	require.NoError(t, err)
-	applied, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), secondRoute.Route.ID, PublishRouteRequest{
+	applied, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID:         "test03",
+		Namespace:         "novaobs-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
@@ -935,7 +1122,7 @@ func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 	firstAfter, err := fixture.service.ServiceRouteSummary(ctx, firstService.ID)
 	require.NoError(t, err)
 	require.Len(t, firstAfter, 1)
-	require.Equal(t, applied.Route.CollectorConfigHash, firstAfter[0].Route.CollectorConfigHash)
+	require.Equal(t, applied.CollectorConfigHash, firstAfter[0].Route.CollectorConfigHash)
 	require.Equal(t, "applied", firstAfter[0].Route.LastPublishStatus)
 	require.Contains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-prometheus")
 	require.Contains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-mtu-api")
@@ -944,6 +1131,7 @@ func TestPublishK8sRouteUpdatesAllRoutesInSameCollectorDomain(t *testing.T) {
 func TestK8sDeploymentManifestHashDoesNotChangeWhenCollectorConfigChanges(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -985,10 +1173,10 @@ func TestK8sDeploymentManifestHashDoesNotChangeWhenCollectorConfigChanges(t *tes
 	require.Equal(t, firstDeploymentHash, secondRoute.Source.DeploymentManifestHash)
 }
 
-func TestApplyK8sPublishUsesPersistedPreviewBundle(t *testing.T) {
+func TestPublishK8sRouteRejectsCollectorInfrastructurePublish(t *testing.T) {
 	ctx := context.Background()
-	deploy := &fakeDeploymentService{}
-	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1010,29 +1198,16 @@ func TestApplyK8sPublishUsesPersistedPreviewBundle(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	preview, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{})
-	require.NoError(t, err)
-	previewYAML := deploy.lastPreviewReq.YAMLContent
 
-	mutated := route.Route
-	mutated.K8s.WorkloadName = "payment-api"
-	require.NoError(t, fixture.store.LogRoutes().Update(ctx, mutated.ID, mutated))
-	applied, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{
-		PreviewID:         preview.PreviewID,
-		ConfirmationToken: preview.ConfirmationToken,
-	})
-
-	require.NoError(t, err)
-	require.Equal(t, preview.Plan.CollectorConfigHash, applied.Plan.CollectorConfigHash)
-	require.Equal(t, previewYAML, deploy.lastApplyReq.YAMLContent)
-	require.Contains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-utrace-api")
-	require.NotContains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-payment-api")
+	_, err = fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{})
+	require.ErrorContains(t, err, "集群可观测性")
 }
 
-func TestPublishK8sRouteApplyForcesManagedFieldConflicts(t *testing.T) {
+func TestPublishK8sCollectorRuntimeApplyForcesManagedFieldConflicts(t *testing.T) {
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1042,7 +1217,7 @@ func TestPublishK8sRouteApplyForcesManagedFieldConflicts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	service := fixture.createService(t, "utrace-api")
-	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
+	_, err = fixture.service.CreateRoute(ctx, UpsertRouteRequest{
 		ServiceID:  service.ID,
 		SourceType: SourceTypeK8sStdout,
 		EndpointID: endpoint.ID,
@@ -1055,9 +1230,14 @@ func TestPublishK8sRouteApplyForcesManagedFieldConflicts(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	preview, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{})
+	preview, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		Namespace: "novaobs-system",
+	})
 	require.NoError(t, err)
-	result, err := fixture.service.PublishRoute(ctx, platformrbac.DevAdminSubject(), route.Route.ID, PublishRouteRequest{
+	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID:         "test03",
+		Namespace:         "novaobs-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
@@ -1286,6 +1466,7 @@ func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
 func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1330,6 +1511,7 @@ func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 func TestRouteCollectorConfigReadsPersistedCollectorYAMLByHash(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1529,7 +1711,6 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		repo,
 		targets,
@@ -1537,6 +1718,9 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		fakeClusterService{},
 		resources,
 		deploy,
+		WithLogTargets(store.LogTargets()),
+		WithObservabilityRuntimes(store.ObservabilityRuntimes()),
+		WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()), platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject()))),
 	)
 	return logsFixture{store: store, repo: repo, targets: targets, service: service}
 }
@@ -1556,6 +1740,22 @@ func (f logsFixture) createService(t *testing.T, name string) servicecatalog.Ser
 	})
 	require.NoError(t, err)
 	return service
+}
+
+func (f logsFixture) enableLogsCollectorRuntime(t *testing.T, clusterID string, namespace string) {
+	t.Helper()
+	now := time.Now().UTC()
+	runtime := obsruntime.Runtime{
+		ID:         logsCollectorRuntimeID(clusterID, namespace),
+		Kind:       obsruntime.KindLogsCollector,
+		SignalType: obsruntime.SignalLogs,
+		ClusterID:  clusterID,
+		Namespace:  firstNonEmpty(namespace, "novaobs-system"),
+		Status:     obsruntime.StatusReady,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	require.NoError(t, f.store.ObservabilityRuntimes().Upsert(context.Background(), runtime.ID, runtime))
 }
 
 func (f logsFixture) createVMService(t *testing.T, name string) servicecatalog.Service {

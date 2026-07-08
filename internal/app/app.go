@@ -13,12 +13,14 @@ import (
 	"novaobs/internal/database/mongo"
 	"novaobs/internal/httpapi"
 	"novaobs/internal/logs"
+	"novaobs/internal/metrics"
 	"novaobs/internal/modules/k8sops"
 	"novaobs/internal/modules/k8sops/cluster"
 	"novaobs/internal/modules/k8sops/deployment"
 	"novaobs/internal/modules/k8sops/kubeclient"
 	"novaobs/internal/modules/k8sops/platformaccess"
 	"novaobs/internal/modules/k8sops/terminal"
+	obsendpoint "novaobs/internal/observability/endpoint"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -69,7 +71,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		superSubjects = append(superSubjects, bootstrapAdmin)
 	}
 	rbacSvc := rbac.NewService(rbacRepo, rbac.WithSubjectResolver(iam.NewSubjectResolver(iamRepo)), rbac.WithSuperSubjects(superSubjects...))
-	alertScopeResolver := alerting.NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogEndpoints())
+	alertScopeResolver := alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings())
 	alertRepository := alerting.NewStoreRepository(store.Alerting())
 	alertPolicyResolver := alerting.NewStorePolicyResolver(alertRepository)
 	alertPolicySvc := alerting.NewPolicyService(alerting.PolicyDependencies{Repository: alertRepository, Authorizer: rbacSvc})
@@ -77,15 +79,15 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		Repository:      alertRepository,
 		Authorizer:      rbacSvc,
 		ScopeResolver:   alertScopeResolver,
-		Tester:          alerting.NewVictoriaLogsTester(alertScopeResolver, nil),
+		Tester:          alerting.NewSignalAwareTester(alerting.NewVictoriaLogsTester(alertScopeResolver, nil), alerting.MetricsCompileOnlyTester{}),
 		ReceiptSigner:   alerting.NewHMACTestReceiptSigner([]byte(cfg.Secret.Key)),
 		EventRepository: alertRepository,
 		PolicyResolver:  alertPolicyResolver,
 	})
-	alertWebhookToken := strings.TrimSpace(os.Getenv("NOVAOBS_ALERTMANAGER_WEBHOOK_TOKEN"))
+	alertWebhookToken := strings.TrimSpace(os.Getenv("NOVAOBS_ALERT_INGEST_TOKEN"))
 	if alertWebhookToken == "" {
 		if cfg.Server.Mode == gin.ReleaseMode {
-			return nil, fmt.Errorf("NOVAOBS_ALERTMANAGER_WEBHOOK_TOKEN 不能为空")
+			return nil, fmt.Errorf("NOVAOBS_ALERT_INGEST_TOKEN 不能为空")
 		}
 		alertWebhookToken = cfg.Secret.Key
 	}
@@ -147,7 +149,6 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		targetRepo,
@@ -157,12 +158,32 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		k8sOpsModule.Deploy,
 		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAOBS_LOGS_AGENT_OPAMP_ENDPOINT")),
 		logs.WithImageTemplateValues(imageSvc),
+		logs.WithLogTargets(store.LogTargets()),
+		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
+		logs.WithAuthorizer(rbacSvc),
 	)
+	endpointSvc := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacSvc))
+	metricsSvc := metrics.NewService(metrics.Dependencies{
+		Bindings:   store.MetricsServiceBindings(),
+		Endpoints:  endpointSvc,
+		Services:   svcRepo,
+		Authorizer: rbacSvc,
+	})
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
-		Endpoints:      store.LogEndpoints(),
-		Repository:     alertRepository,
-		K8sDeployments: k8sOpsModule.Deploy,
-		ImageTemplates: imageSvc,
+		Endpoints:             store.LogEndpoints(),
+		Runtimes:              store.ObservabilityRuntimes(),
+		Repository:            alertRepository,
+		K8sDeployments:        k8sOpsModule.Deploy,
+		ImageTemplates:        imageSvc,
+		DefaultAlertIngestURL: strings.TrimSpace(os.Getenv("NOVAOBS_ALERT_INGEST_URL")),
+	})
+	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
+		Endpoints:             store.LogEndpoints(),
+		Runtimes:              store.ObservabilityRuntimes(),
+		Repository:            alertRepository,
+		K8sDeployments:        k8sOpsModule.Deploy,
+		ImageTemplates:        imageSvc,
+		DefaultAlertIngestURL: strings.TrimSpace(os.Getenv("NOVAOBS_ALERT_INGEST_URL")),
 	})
 
 	deps := httpapi.Dependencies{
@@ -173,7 +194,10 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		CollectorService:       collectorSvc,
 		OnboardingService:      onboardingSvc,
 		LogsService:            logsSvc,
+		ObservabilityEndpoints: endpointSvc,
+		MetricsService:         metricsSvc,
 		AlertRuntimeService:    alertRuntimeSvc,
+		MetricsRuntimeService:  metricsRuntimeSvc,
 		AlertService:           alertSvc,
 		AlertEventIngestor:     alertEventIngestor,
 		AlertPolicyService:     alertPolicySvc,

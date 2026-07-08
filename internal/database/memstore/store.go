@@ -30,10 +30,12 @@ type Store struct {
 	lges  map[string]interface{}
 	lgss  map[string]interface{}
 	lgrs  map[string]interface{}
+	lgts  map[string]interface{}
 	lgcvs map[string]interface{}
 	lgdvs map[string]interface{}
-	lgps  map[string]interface{}
 	lgccs map[string]interface{}
+	orts  map[string]interface{}
+	msbs  map[string]interface{}
 	ars   map[string]interface{}
 	arus  map[string]interface{}
 	aris  map[string]interface{}
@@ -73,10 +75,12 @@ func NewStore() *Store {
 		lges:  map[string]interface{}{},
 		lgss:  map[string]interface{}{},
 		lgrs:  map[string]interface{}{},
+		lgts:  map[string]interface{}{},
 		lgcvs: map[string]interface{}{},
 		lgdvs: map[string]interface{}{},
-		lgps:  map[string]interface{}{},
 		lgccs: map[string]interface{}{},
+		orts:  map[string]interface{}{},
+		msbs:  map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		arus:  map[string]interface{}{},
 		aris:  map[string]interface{}{},
@@ -130,15 +134,21 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s} }
+func (s *Store) LogTargets() database.LogTargetStore                  { return &logTargetStore{s} }
 func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
 	return &logCollectorConfigVersionStore{s}
 }
 func (s *Store) LogDeploymentManifestVersions() database.LogDeploymentManifestVersionStore {
 	return &logDeploymentManifestVersionStore{s}
 }
-func (s *Store) LogAgentPlans() database.LogAgentPlanStore { return &logAgentPlanStore{s} }
 func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigStore {
 	return &logCollectorClusterConfigStore{s}
+}
+func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
+	return &observabilityRuntimeStore{s}
+}
+func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
+	return &metricsServiceBindingStore{s}
 }
 func (s *Store) Alerting() database.AlertingStore                { return &alertingStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
@@ -734,6 +744,70 @@ func (st *logRouteStore) Update(ctx context.Context, id string, v interface{}) e
 	return nil
 }
 
+func (st *logRouteStore) Delete(ctx context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lgrs[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.lgrs, id)
+	return nil
+}
+
+type logTargetStore struct{ s *Store }
+
+func (st *logTargetStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	if _, exists := st.s.lgts[id]; exists {
+		return database.ErrConflict
+	}
+	st.s.lgts[id] = v
+	return nil
+}
+
+func (st *logTargetStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.lgts, results)
+}
+
+func (st *logTargetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.lgts {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *logTargetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	v, ok := st.s.lgts[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(v, result)
+}
+
+func (st *logTargetStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.lgts[id]; !ok {
+		return errNotFound
+	}
+	st.s.lgts[id] = v
+	return nil
+}
+
 type logCollectorConfigVersionStore struct{ s *Store }
 
 func (st *logCollectorConfigVersionStore) Upsert(ctx context.Context, hash string, v interface{}) error {
@@ -784,37 +858,6 @@ func findLogArtifactByHash(ctx context.Context, store *Store, items map[string]i
 	return copyValue(value, result)
 }
 
-type logAgentPlanStore struct{ s *Store }
-
-func (st *logAgentPlanStore) Insert(ctx context.Context, v interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	id := extractID(v)
-	if id == "" {
-		id = newID()
-	}
-	st.s.lgps[id] = v
-	return nil
-}
-
-func (st *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	return copyAll(st.s.lgps, results)
-}
-
-func (st *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for id, value := range st.s.lgps {
-		if extractStringField(value, "RouteID") == routeID {
-			filtered[id] = value
-		}
-	}
-	return copyAll(filtered, results)
-}
-
 type logCollectorClusterConfigStore struct{ s *Store }
 
 func (st *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID string, agentNamespace string, v interface{}) error {
@@ -832,6 +875,139 @@ func (st *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clu
 		return errNotFound
 	}
 	return copyValue(value, result)
+}
+
+type observabilityRuntimeStore struct{ s *Store }
+
+func (st *observabilityRuntimeStore) Upsert(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	st.s.orts[id] = v
+	return nil
+}
+
+func (st *observabilityRuntimeStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.orts, results)
+}
+
+func (st *observabilityRuntimeStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.orts[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	values := map[string]interface{}{}
+	for _, value := range st.s.orts {
+		if extractStringField(value, "ClusterID") == clusterID {
+			values[extractID(value)] = value
+		}
+	}
+	return copyAll(values, results)
+}
+
+type metricsServiceBindingStore struct{ s *Store }
+
+func (st *metricsServiceBindingStore) Insert(ctx context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	if err := st.ensureActiveBindingUnique(id, v); err != nil {
+		return err
+	}
+	st.s.msbs[id] = v
+	return nil
+}
+
+func (st *metricsServiceBindingStore) FindAll(ctx context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.msbs, results)
+}
+
+func (st *metricsServiceBindingStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.msbs {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *metricsServiceBindingStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.msbs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *metricsServiceBindingStore) Update(ctx context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.msbs[id]; !ok {
+		return errNotFound
+	}
+	if err := st.ensureActiveBindingUnique(id, v); err != nil {
+		return err
+	}
+	st.s.msbs[id] = v
+	return nil
+}
+
+func (st *metricsServiceBindingStore) ensureActiveBindingUnique(currentID string, candidate interface{}) error {
+	serviceID, status, err := metricsBindingIndex(candidate)
+	if err != nil {
+		return err
+	}
+	if serviceID == "" || !isActiveMetricsBinding(status) {
+		return nil
+	}
+	for id, existing := range st.s.msbs {
+		if id == currentID {
+			continue
+		}
+		existingServiceID, existingStatus, err := metricsBindingIndex(existing)
+		if err != nil {
+			return err
+		}
+		if existingServiceID == serviceID && isActiveMetricsBinding(existingStatus) {
+			return database.ErrConflict
+		}
+	}
+	return nil
+}
+
+func metricsBindingIndex(value interface{}) (string, string, error) {
+	var index struct {
+		ServiceID string `json:"service_id"`
+		Status    string `json:"status"`
+	}
+	if err := copyValue(value, &index); err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(index.ServiceID), strings.TrimSpace(index.Status), nil
+}
+
+func isActiveMetricsBinding(status string) bool {
+	status = strings.TrimSpace(status)
+	return status == "" || status == "active"
 }
 
 // ---------- Alerting ----------
@@ -894,15 +1070,17 @@ func (st *alertingStore) SaveChange(_ context.Context, expectedCurrentUpdateID s
 	return nil
 }
 
-func (st *alertingStore) FindRules(_ context.Context, serviceID string, state string, results interface{}) error {
+func (st *alertingStore) FindRules(_ context.Context, serviceID string, state string, signalType string, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
+	signalType = strings.ToLower(strings.TrimSpace(signalType))
 	filtered := map[string]interface{}{}
 	for id, raw := range st.s.ars {
 		var index struct {
 			State string `json:"state"`
 			Spec  struct {
-				Scope struct {
+				SignalType string `json:"signal_type"`
+				Scope      struct {
 					ServiceID string `json:"service_id"`
 				} `json:"scope"`
 			} `json:"spec"`
@@ -914,6 +1092,9 @@ func (st *alertingStore) FindRules(_ context.Context, serviceID string, state st
 			continue
 		}
 		if state != "" && index.State != state {
+			continue
+		}
+		if signalType != "" && alertRuleSignalType(index.Spec.SignalType) != signalType {
 			continue
 		}
 		filtered[id] = raw
@@ -968,14 +1149,16 @@ func (st *alertingStore) FindUpdates(_ context.Context, ruleID string, _ int, re
 	return copyAll(filtered, results)
 }
 
-func (st *alertingStore) FindRuntimeRules(_ context.Context, runtimeID string, results interface{}) error {
+func (st *alertingStore) FindRuntimeRules(_ context.Context, endpointID string, signalType string, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
+	signalType = strings.ToLower(strings.TrimSpace(signalType))
 	filtered := map[string]interface{}{}
 	for id, raw := range st.s.ars {
 		var index struct {
 			Spec struct {
-				Scope struct {
+				SignalType string `json:"signal_type"`
+				Scope      struct {
 					EndpointID string `json:"endpoint_id"`
 				} `json:"scope"`
 			} `json:"spec"`
@@ -983,22 +1166,24 @@ func (st *alertingStore) FindRuntimeRules(_ context.Context, runtimeID string, r
 		if err := copyValue(raw, &index); err != nil {
 			return err
 		}
-		if index.Spec.Scope.EndpointID == runtimeID {
+		if index.Spec.Scope.EndpointID == endpointID && alertRuleSignalType(index.Spec.SignalType) == signalType {
 			filtered[id] = raw
 		}
 	}
 	return copyAll(filtered, results)
 }
 
-func (st *alertingStore) MarkRuntimeRulesApplied(_ context.Context, endpointID string, appliedAt time.Time) (int64, error) {
+func (st *alertingStore) MarkRuntimeRulesApplied(_ context.Context, endpointID string, signalType string, appliedAt time.Time) (int64, error) {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
+	signalType = strings.ToLower(strings.TrimSpace(signalType))
 	var applied int64
 	for id, raw := range st.s.ars {
 		var index struct {
 			CurrentUpdateID string `json:"current_update_id"`
 			Spec            struct {
-				Scope struct {
+				SignalType string `json:"signal_type"`
+				Scope      struct {
 					EndpointID string `json:"endpoint_id"`
 				} `json:"scope"`
 			} `json:"spec"`
@@ -1006,7 +1191,7 @@ func (st *alertingStore) MarkRuntimeRulesApplied(_ context.Context, endpointID s
 		if err := copyValue(raw, &index); err != nil {
 			return applied, err
 		}
-		if index.Spec.Scope.EndpointID != endpointID {
+		if index.Spec.Scope.EndpointID != endpointID || alertRuleSignalType(index.Spec.SignalType) != signalType {
 			continue
 		}
 		rule, err := documentMap(raw)
@@ -1020,6 +1205,14 @@ func (st *alertingStore) MarkRuntimeRulesApplied(_ context.Context, endpointID s
 		applied++
 	}
 	return applied, nil
+}
+
+func alertRuleSignalType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "logs"
+	}
+	return value
 }
 
 func documentMap(value interface{}) (map[string]interface{}, error) {

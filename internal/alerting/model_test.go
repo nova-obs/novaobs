@@ -12,6 +12,71 @@ func TestRuleSpecValidateAccepts一期查询式日志规则(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRuleSpecNormalizeDefaultsSignalTypeToLogs(t *testing.T) {
+	spec := validRuleSpec()
+	require.Empty(t, spec.SignalType)
+
+	normalized := spec.Normalize()
+
+	require.Equal(t, SignalTypeLogs, normalized.SignalType)
+	require.NoError(t, normalized.Validate())
+}
+
+func TestRuleSpecValidateAcceptsMetricsRule(t *testing.T) {
+	spec := validMetricsRuleSpec()
+
+	require.NoError(t, spec.Validate())
+}
+
+func TestRuleSpecValidateRejectsLogsQueryModeForMetrics(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	spec.Query.Mode = QueryModeContains
+
+	err := spec.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidSpec)
+	require.Contains(t, err.Error(), "query.mode")
+}
+
+func TestRuleSpecValidateRejectsDashboardVariablesForMetrics(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	spec.Query.Expression = `sum(rate(http_requests_total[$__interval]))`
+
+	err := spec.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidSpec)
+	require.Contains(t, err.Error(), "Dashboard 变量")
+}
+
+func TestRuleSpecValidateRejectsDerivedMetricForMetrics(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	spec.DerivedMetric = &DerivedMetricSpec{Enabled: true, Signal: "match_count"}
+
+	err := spec.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidSpec)
+	require.Contains(t, err.Error(), "指标告警不支持日志派生指标")
+}
+
+func TestRuleSpecValidateRejectsMetricsRuleWithoutBasePromQL(t *testing.T) {
+	spec := validMetricsRuleSpec()
+	spec.Scope.BasePromQL = ""
+
+	err := spec.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidSpec)
+	require.Contains(t, err.Error(), "base_promql")
+}
+
+func TestRuleSpecValidateAcceptsExternalLogTargetScope(t *testing.T) {
+	spec := validRuleSpec()
+	spec.Scope.LogRouteID = ""
+	spec.Scope.LogTargetID = "target-orders"
+	spec.Scope.BaseFilter = `"stream":"orders"`
+
+	require.NoError(t, spec.Validate())
+}
+
 func TestRuleSpecValidateRejects严格连续语义(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Trigger.Mode = TriggerModeConsecutive
@@ -115,10 +180,43 @@ func validRuleSpec() RuleSpec {
 		},
 		Grouping: GroupingSpec{Fields: []string{"deployment.environment"}, MaxInstances: 100},
 		Notification: NotificationSpec{
-			PolicyID:             "pay-team-oncall",
-			Severity:             SeverityCritical,
-			OwnerTeam:            "pay-team",
-			AlertmanagerReceiver: "pay-oncall",
+			PolicyID:  "pay-team-oncall",
+			Severity:  SeverityCritical,
+			OwnerTeam: "pay-team",
+			Receiver:  "pay-oncall",
+		},
+	}
+}
+
+func validMetricsRuleSpec() RuleSpec {
+	return RuleSpec{
+		SignalType: SignalTypeMetrics,
+		Name:       "orders-request-rate",
+		Scope: RuleScope{
+			ServiceID:        "service-orders",
+			ServiceName:      "orders-api",
+			EndpointID:       "vm-prod",
+			MetricsBindingID: "binding-orders",
+			AccountID:        "1001",
+			ProjectID:        "2001",
+			BasePromQL:       `service:requests:rate5m{service="orders-api"}`,
+		},
+		Query: QuerySpec{Mode: QueryModePromQL, Expression: `sum(rate(http_requests_total{status=~"5.."}[5m]))`},
+		Trigger: TriggerSpec{
+			Mode:               TriggerModeWindow,
+			Aggregation:        AggregationCount,
+			Operator:           OperatorGTE,
+			Threshold:          10,
+			Window:             "5m",
+			EvaluationInterval: "1m",
+			EvaluationDelay:    "0s",
+		},
+		Grouping: GroupingSpec{MaxInstances: 20},
+		Notification: NotificationSpec{
+			PolicyID:  "orders-oncall",
+			Severity:  SeverityWarning,
+			OwnerTeam: "orders-team",
+			Receiver:  "orders-oncall",
 		},
 	}
 }

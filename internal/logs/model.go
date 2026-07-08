@@ -1,6 +1,10 @@
 package logs
 
-import "time"
+import (
+	"time"
+
+	obsruntime "novaobs/internal/observability/runtime"
+)
 
 const (
 	SourceTypeK8sStdout = "k8s_stdout"
@@ -15,28 +19,38 @@ const (
 	EndpointSinkKafka = "kafka"
 	EndpointSinkOTel  = "otel"
 
+	EndpointSignalLogs    = "logs"
+	EndpointSignalMetrics = "metrics"
+
+	LogTargetSourceExternalVLogs = "external_vlogs"
+
+	LogTargetStatusPendingVerification = "pending_verification"
+	LogTargetStatusVerified            = "verified"
+	LogTargetStatusDisabled            = "disabled"
+
 	ParseRuleRegex = "regex"
 	ParseRuleJSON  = "json"
 )
 
 type LogEndpoint struct {
-	ID              string    `json:"id" bson:"_id"`
-	Name            string    `json:"name" bson:"name"`
-	Description     string    `json:"description" bson:"description"`
-	SinkType        string    `json:"sink_type" bson:"sink_type"`
-	StreamName      string    `json:"stream_name" bson:"stream_name"`
-	WriteURL        string    `json:"write_url" bson:"write_url"`
-	QueryURL        string    `json:"query_url" bson:"query_url"`
-	VMUIURL         string    `json:"vmui_url" bson:"vmui_url"`
-	AlertmanagerURL string    `json:"alertmanager_url" bson:"alertmanager_url"`
-	AccountID       string    `json:"account_id" bson:"account_id"`
-	ProjectID       string    `json:"project_id" bson:"project_id"`
-	SecretRef       string    `json:"secret_ref" bson:"secret_ref"`
-	ScopeType       string    `json:"scope_type" bson:"scope_type"`
-	ClusterID       string    `json:"cluster_id" bson:"cluster_id"`
-	Status          string    `json:"status" bson:"status"`
-	CreatedAt       time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at" bson:"updated_at"`
+	ID          string    `json:"id" bson:"_id"`
+	Name        string    `json:"name" bson:"name"`
+	Description string    `json:"description" bson:"description"`
+	Kind        string    `json:"kind,omitempty" bson:"kind,omitempty"`
+	SignalTypes []string  `json:"signal_types,omitempty" bson:"signal_types,omitempty"`
+	SinkType    string    `json:"sink_type" bson:"sink_type"`
+	StreamName  string    `json:"stream_name" bson:"stream_name"`
+	WriteURL    string    `json:"write_url" bson:"write_url"`
+	QueryURL    string    `json:"query_url" bson:"query_url"`
+	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
+	AccountID   string    `json:"account_id" bson:"account_id"`
+	ProjectID   string    `json:"project_id" bson:"project_id"`
+	SecretRef   string    `json:"secret_ref" bson:"secret_ref"`
+	ScopeType   string    `json:"scope_type" bson:"scope_type"`
+	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
+	Status      string    `json:"status" bson:"status"`
+	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 type LogSource struct {
@@ -124,22 +138,29 @@ type LogRoute struct {
 	UpdatedAt           time.Time       `json:"updated_at" bson:"updated_at"`
 }
 
-type LogAgentPlan struct {
-	ID                     string    `json:"id" bson:"_id"`
-	RouteID                string    `json:"route_id" bson:"route_id"`
-	AgentGroupID           string    `json:"agent_group_id" bson:"agent_group_id"`
-	SourceType             string    `json:"source_type" bson:"source_type"`
-	ClusterID              string    `json:"cluster_id" bson:"cluster_id"`
-	Namespace              string    `json:"namespace" bson:"namespace"`
-	CollectorConfigHash    string    `json:"collector_config_hash" bson:"collector_config_hash"`
-	DeploymentManifestHash string    `json:"deployment_manifest_hash" bson:"deployment_manifest_hash"`
-	RenderedYAML           string    `json:"rendered_yaml" bson:"rendered_yaml"`
-	Status                 string    `json:"status" bson:"status"`
-	PreviewID              string    `json:"preview_id" bson:"preview_id"`
-	ConfirmationToken      string    `json:"confirmation_token" bson:"confirmation_token"`
-	AuditID                string    `json:"audit_id" bson:"audit_id"`
-	Message                string    `json:"message" bson:"message"`
-	CreatedAt              time.Time `json:"created_at" bson:"created_at"`
+type LogTarget struct {
+	ID               string     `json:"id" bson:"_id"`
+	Name             string     `json:"name" bson:"name"`
+	ServiceID        string     `json:"service_id" bson:"service_id"`
+	EndpointID       string     `json:"endpoint_id" bson:"endpoint_id"`
+	SourceKind       string     `json:"source_kind" bson:"source_kind"`
+	LogRouteID       string     `json:"log_route_id,omitempty" bson:"log_route_id,omitempty"`
+	BaseFilter       string     `json:"base_filter" bson:"base_filter"`
+	Status           string     `json:"status" bson:"status"`
+	LastProbeStatus  string     `json:"last_probe_status" bson:"last_probe_status"`
+	LastProbeMessage string     `json:"last_probe_message" bson:"last_probe_message"`
+	LastProbeAt      *time.Time `json:"last_probe_at,omitempty" bson:"last_probe_at,omitempty"`
+	LastSeenLogAt    *time.Time `json:"last_seen_log_at,omitempty" bson:"last_seen_log_at,omitempty"`
+	CreatedBy        ActorRef   `json:"created_by" bson:"created_by"`
+	UpdatedBy        ActorRef   `json:"updated_by" bson:"updated_by"`
+	CreatedAt        time.Time  `json:"created_at" bson:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" bson:"updated_at"`
+}
+
+type ActorRef struct {
+	ID   string `json:"id" bson:"id"`
+	Type string `json:"type" bson:"type"`
+	Name string `json:"name" bson:"name"`
 }
 
 type K8sSourceInput struct {
@@ -216,12 +237,52 @@ type PublishRouteRequest struct {
 	ConfirmationToken string `json:"confirmation_token"`
 }
 
+type K8sCollectorRuntimePublishRequest struct {
+	ClusterID         string `json:"cluster_id"`
+	Namespace         string `json:"namespace"`
+	PreviewID         string `json:"preview_id,omitempty"`
+	ConfirmationToken string `json:"confirmation_token,omitempty"`
+}
+
+type K8sCollectorRuntimePublishResult struct {
+	Runtime              obsruntime.Runtime `json:"runtime"`
+	ManifestYAML         string             `json:"manifest_yaml"`
+	CollectorYAML        string             `json:"collector_yaml"`
+	CollectorConfigHash  string             `json:"collector_config_hash"`
+	ManifestHash         string             `json:"manifest_hash"`
+	Status               string             `json:"status"`
+	Message              string             `json:"message"`
+	RequiresConfirmation bool               `json:"requires_confirmation"`
+	PreviewID            string             `json:"preview_id,omitempty"`
+	ConfirmationToken    string             `json:"confirmation_token,omitempty"`
+	AuditID              string             `json:"audit_id,omitempty"`
+	Resources            any                `json:"resources,omitempty"`
+	Diffs                any                `json:"diffs,omitempty"`
+	Warnings             []string           `json:"warnings"`
+}
+
+type CreateLogTargetRequest struct {
+	Name       string `json:"name"`
+	ServiceID  string `json:"service_id"`
+	EndpointID string `json:"endpoint_id"`
+	SourceKind string `json:"source_kind"`
+	BaseFilter string `json:"base_filter"`
+}
+
+type UpdateLogTargetRequest struct {
+	Name       string `json:"name"`
+	EndpointID string `json:"endpoint_id"`
+	BaseFilter string `json:"base_filter"`
+	Status     string `json:"status"`
+}
+
 type Workspace struct {
 	Services        []ServiceSummary    `json:"services"`
 	CollectorGroups []AgentGroupSummary `json:"collector_groups"`
 	Clusters        []ClusterSummary    `json:"clusters"`
 	Endpoints       []LogEndpoint       `json:"endpoints"`
 	Routes          []LogRouteView      `json:"routes"`
+	Targets         []LogTargetView     `json:"targets"`
 }
 
 type ServiceSummary struct {
@@ -258,6 +319,12 @@ type ClusterSummary struct {
 	Status     string `json:"status"`
 	AccessMode string `json:"access_mode"`
 	ReadOnly   bool   `json:"read_only"`
+}
+
+type LogTargetView struct {
+	Target   LogTarget       `json:"target"`
+	Service  *ServiceSummary `json:"service,omitempty"`
+	Endpoint *LogEndpoint    `json:"endpoint,omitempty"`
 }
 
 type Workload struct {
@@ -304,17 +371,14 @@ type LogRouteCollectorConfig struct {
 }
 
 type PublishRouteResult struct {
-	Route                LogRoute     `json:"route"`
-	Plan                 LogAgentPlan `json:"plan"`
-	Status               string       `json:"status"`
-	Message              string       `json:"message"`
-	RequiresConfirmation bool         `json:"requires_confirmation"`
-	PreviewID            string       `json:"preview_id,omitempty"`
-	ConfirmationToken    string       `json:"confirmation_token,omitempty"`
-	AuditID              string       `json:"audit_id,omitempty"`
-	Resources            any          `json:"resources,omitempty"`
-	Diffs                any          `json:"diffs,omitempty"`
-	Warnings             []string     `json:"warnings"`
+	Route                LogRoute `json:"route"`
+	Status               string   `json:"status"`
+	Message              string   `json:"message"`
+	RequiresConfirmation bool     `json:"requires_confirmation"`
+	PreviewID            string   `json:"preview_id,omitempty"`
+	ConfirmationToken    string   `json:"confirmation_token,omitempty"`
+	AuditID              string   `json:"audit_id,omitempty"`
+	Warnings             []string `json:"warnings"`
 }
 
 type ProbeResult struct {

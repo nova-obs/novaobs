@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"novaobs/internal/alerting"
@@ -97,10 +98,20 @@ func nestedValue(t *testing.T, root map[string]any, path ...string) any {
 	t.Helper()
 	var current any = root
 	for _, key := range path {
-		object, ok := current.(map[string]any)
-		require.True(t, ok, "路径 %v 不是对象", path)
-		current, ok = object[key]
-		require.True(t, ok, "缺少路径 %v", path)
+		switch value := current.(type) {
+		case map[string]any:
+			next, ok := value[key]
+			require.True(t, ok, "缺少路径 %v", path)
+			current = next
+		case []any:
+			index, err := strconv.Atoi(key)
+			require.NoError(t, err, "路径 %v 需要数组下标", path)
+			require.GreaterOrEqual(t, index, 0, "路径 %v 数组下标不能为负数", path)
+			require.Less(t, index, len(value), "路径 %v 数组下标越界", path)
+			current = value[index]
+		default:
+			require.Failf(t, "路径类型错误", "路径 %v 不能继续读取 %q", path, key)
+		}
 	}
 	return current
 }

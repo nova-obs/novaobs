@@ -12,6 +12,7 @@ import (
 	"novaobs/internal/collectormanagement"
 	"novaobs/internal/database"
 	"novaobs/internal/logs"
+	"novaobs/internal/metrics"
 	"novaobs/internal/modules/k8sops"
 	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
@@ -25,6 +26,7 @@ import (
 	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
 	k8sopstemplate "novaobs/internal/modules/k8sops/template"
 	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
+	obsendpoint "novaobs/internal/observability/endpoint"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	platformauth "novaobs/internal/platform/auth"
@@ -51,7 +53,10 @@ type Dependencies struct {
 	CollectorService       collectormanagement.Service
 	OnboardingService      onboarding.Service
 	LogsService            logs.Service
+	ObservabilityEndpoints obsendpoint.Service
+	MetricsService         metrics.Service
 	AlertRuntimeService    alerting.LogRuntimeService
+	MetricsRuntimeService  alerting.MetricsRuntimeService
 	AlertService           alerting.Service
 	AlertEventIngestor     alerting.EventIngestor
 	AlertPolicyService     alerting.PolicyService
@@ -103,7 +108,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/health", healthHandler)
 	api.POST("/auth/login", platformauth.LoginHandler(deps.PlatformAuthService))
 	api.POST("/auth/logout", platformauth.LogoutHandler())
-	api.POST("/alerts/webhook/alertmanager", alertmanagerWebhookHandler(deps.AlertEventIngestor))
+	api.POST("/alerts/ingest", alertIngestHandler(deps.AlertEventIngestor))
+
+	vmalertNotifierAPI := router.Group("/api/v2")
+	vmalertNotifierAPI.POST("/alerts", alertIngestHandler(deps.AlertEventIngestor))
 
 	api = router.Group("/api/v1")
 	if deps.PlatformAuthService != nil {
@@ -151,13 +159,32 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
 	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
 	api.POST("/logs/endpoints/:id/vmalert-runtime/publish", publishLogsEndpointVmalertRuntimeHandler(deps.AlertRuntimeService))
+	api.GET("/logs/targets", listLogsTargetsHandler(deps.LogsService))
+	api.POST("/logs/targets", createLogsTargetHandler(deps.LogsService))
+	api.PATCH("/logs/targets/:id", updateLogsTargetHandler(deps.LogsService))
+	api.POST("/logs/targets/:id/probe", probeLogsTargetHandler(deps.LogsService))
 	api.POST("/logs/parse-preview", previewLogsParseRulesHandler(deps.LogsService))
 	api.POST("/logs/routes/preview", previewLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
 	api.PATCH("/logs/routes/:id", updateLogsRouteHandler(deps.LogsService))
 	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
+	api.DELETE("/logs/routes/:id", deleteLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
+	api.GET("/observability/endpoints", listObservabilityEndpointsHandler(deps.ObservabilityEndpoints))
+	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
+	api.GET("/observability/runtimes", listObservabilityRuntimesHandler(deps.Store.ObservabilityRuntimes()))
+	api.POST("/observability/runtimes/logs-collector/publish", publishLogsCollectorRuntimeHandler(deps.LogsService))
+	api.GET("/metrics/endpoints", listMetricsEndpointsHandler(deps.MetricsService))
+	api.POST("/metrics/endpoints/:id/vmalert-runtime/publish", publishMetricsEndpointVmalertRuntimeHandler(deps.MetricsRuntimeService))
+	api.GET("/metrics/workspace", getMetricsWorkspaceHandler(deps.MetricsService))
+	api.GET("/metrics/service-bindings", listMetricsServiceBindingsHandler(deps.MetricsService))
+	api.POST("/metrics/service-bindings", createMetricsServiceBindingHandler(deps.MetricsService))
+	api.PATCH("/metrics/service-bindings/:id", updateMetricsServiceBindingHandler(deps.MetricsService))
+	api.POST("/metrics/service-bindings/:id/probe", probeMetricsServiceBindingHandler(deps.MetricsService))
+	api.GET("/metrics/alert-rules", listMetricsAlertRulesHandler(deps.AlertService))
+	api.POST("/metrics/alert-rules/test", testMetricsAlertRuleHandler(deps.AlertService))
+	api.POST("/metrics/alert-rules", createMetricsAlertRuleHandler(deps.AlertService))
 	api.GET("/alerts/rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alerts/rules/test", testAlertRuleHandler(deps.AlertService))
 	api.POST("/alerts/rules", createAlertRuleHandler(deps.AlertService))
@@ -792,9 +819,14 @@ func listAlertRulesHandler(service alerting.Service) gin.HandlerFunc {
 		if !ok {
 			return
 		}
+		signalType, ok := alertRuleSignalFilter(ctx)
+		if !ok {
+			return
+		}
 		rules, err := service.List(ctx.Request.Context(), subject, alerting.RuleFilter{
-			ServiceID: strings.TrimSpace(ctx.Query("service_id")),
-			State:     strings.TrimSpace(ctx.Query("state")),
+			ServiceID:  strings.TrimSpace(ctx.Query("service_id")),
+			State:      strings.TrimSpace(ctx.Query("state")),
+			SignalType: signalType,
 		})
 		if err != nil {
 			writeAlertingError(ctx, err)

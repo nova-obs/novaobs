@@ -20,11 +20,11 @@ type vmalertDocument struct {
 
 type vmalertGroup struct {
 	Name      string        `yaml:"name"`
-	Type      string        `yaml:"type"`
+	Type      string        `yaml:"type,omitempty"`
 	Interval  string        `yaml:"interval"`
 	EvalDelay string        `yaml:"eval_delay,omitempty"`
 	Limit     int           `yaml:"limit"`
-	Headers   []string      `yaml:"headers"`
+	Headers   []string      `yaml:"headers,omitempty"`
 	Rules     []vmalertRule `yaml:"rules"`
 }
 
@@ -49,8 +49,9 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 	document := vmalertDocument{Groups: []vmalertGroup{}}
 	ruleIDs := make([]string, 0, len(enabled))
 	for _, rule := range enabled {
-		if !alertmanagerReceiverPattern.MatchString(rule.Spec.Notification.AlertmanagerReceiver) {
-			return Artifact{}, fmt.Errorf("规则 %s 未解析到有效的 Alertmanager receiver", rule.ID)
+		signalType := rule.Spec.Normalize().SignalType
+		if !notificationReceiverPattern.MatchString(rule.Spec.Notification.Receiver) {
+			return Artifact{}, fmt.Errorf("规则 %s 未解析到有效的通知 receiver", rule.ID)
 		}
 		expr, err := CompileAlertQuery(rule.Spec)
 		if err != nil {
@@ -65,21 +66,31 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 		if rule.Spec.Notification.RunbookURL != "" {
 			annotations["runbook_url"] = rule.Spec.Notification.RunbookURL
 		}
+		alertPrefix := "NovaObsLogAlert_"
+		if signalType == SignalTypeMetrics {
+			alertPrefix = "NovaObsMetricAlert_"
+		}
+		labels := map[string]string{
+			"novaobs_rule_id":        rule.ID,
+			"novaobs_runtime_id":     runtimeID,
+			"signal_type":            signalType,
+			"service_id":             rule.Spec.Scope.ServiceID,
+			"endpoint_id":            rule.Spec.Scope.EndpointID,
+			"severity":               rule.Spec.Notification.Severity,
+			"owner_team":             rule.Spec.Notification.OwnerTeam,
+			"notification_policy_id": rule.Spec.Notification.PolicyID,
+			"notification_receiver":  rule.Spec.Notification.Receiver,
+		}
+		if signalType == SignalTypeMetrics {
+			labels["metrics_binding_id"] = rule.Spec.Scope.MetricsBindingID
+		}
 		runtimeRules := []vmalertRule{{
-			Alert:         "NovaObsLogAlert_" + safeAlertName(rule.ID),
+			Alert:         alertPrefix + safeAlertName(rule.ID),
 			Expr:          expr,
 			For:           pendingFor,
 			KeepFiringFor: keepFiringFor,
-			Labels: map[string]string{
-				"novaobs_rule_id":        rule.ID,
-				"novaobs_runtime_id":     runtimeID,
-				"service_id":             rule.Spec.Scope.ServiceID,
-				"severity":               rule.Spec.Notification.Severity,
-				"owner_team":             rule.Spec.Notification.OwnerTeam,
-				"notification_policy_id": rule.Spec.Notification.PolicyID,
-				"notification_receiver":  rule.Spec.Notification.AlertmanagerReceiver,
-			},
-			Annotations: annotations,
+			Labels:        labels,
+			Annotations:   annotations,
 		}}
 		if metric := rule.Spec.DerivedMetric; metric != nil && metric.Enabled {
 			recordingQuery, err := CompileRecordingQuery(rule.Spec)
@@ -96,7 +107,7 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 			}
 			runtimeRules = append(runtimeRules, vmalertRule{Record: recordName, Expr: recordingQuery, Labels: labels})
 		}
-		document.Groups = append(document.Groups, vmalertGroup{
+		group := vmalertGroup{
 			Name:      "novaobs_log_" + safeAlertName(rule.ID),
 			Type:      "vlogs",
 			Interval:  rule.Spec.Trigger.EvaluationInterval,
@@ -107,7 +118,13 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 				"ProjectID: " + rule.Spec.Scope.ProjectID,
 			},
 			Rules: runtimeRules,
-		})
+		}
+		if signalType == SignalTypeMetrics {
+			group.Name = "novaobs_metrics_" + safeAlertName(rule.ID)
+			group.Type = ""
+			group.Headers = nil
+		}
+		document.Groups = append(document.Groups, group)
 		ruleIDs = append(ruleIDs, rule.ID)
 	}
 	content, err := yaml.Marshal(document)

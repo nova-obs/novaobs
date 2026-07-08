@@ -13,15 +13,15 @@ func TestEventIngestorCreatesIdempotentInstanceTransition(t *testing.T) {
 	ingestor := NewEventIngestor(repository, &fakeEventRuleResolver{rule: Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-a"}}, State: RuleStateEnabled}}, "shared-secret", func() time.Time {
 		return time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 	})
-	payload := AlertmanagerWebhook{Status: "firing", Alerts: []AlertmanagerAlert{{
+	payload := []AlertIngestAlert{{
 		Status: "firing", Fingerprint: "abc123",
 		Labels:       map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a", "severity": "critical"},
 		Annotations:  map[string]string{"summary": "支付失败"},
 		StartsAt:     time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
 		GeneratorURL: "http://vmalert.local/vmalert/alert",
-	}}}
+	}}
 
-	count, err := ingestor.Ingest(context.Background(), "shared-secret", payload)
+	count, err := ingestor.IngestAlerts(context.Background(), "shared-secret", payload)
 
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
@@ -31,32 +31,77 @@ func TestEventIngestorCreatesIdempotentInstanceTransition(t *testing.T) {
 	require.NotEmpty(t, repository.event.ID)
 }
 
+func TestEventIngestorAcceptsDirectVmalertAlerts(t *testing.T) {
+	repository := &fakeEventRepository{}
+	ingestor := NewEventIngestor(repository, &fakeEventRuleResolver{rule: Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-a"}}, State: RuleStateEnabled}}, "shared-secret", func() time.Time {
+		return time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	})
+	alerts := []AlertIngestAlert{{
+		Fingerprint: "abc123",
+		Labels: map[string]string{
+			"novaobs_rule_id":    "rule-a",
+			"novaobs_runtime_id": "vmalert-logs:vl-prod",
+			"service_id":         "service-a",
+			"severity":           "critical",
+		},
+		Annotations:  map[string]string{"summary": "支付失败"},
+		StartsAt:     time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
+		GeneratorURL: "http://vmalert.local/vmalert/alert",
+	}}
+
+	count, err := ingestor.IngestAlerts(context.Background(), "shared-secret", alerts)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, AlertStateFiring, repository.instance.State)
+	require.Equal(t, "vmalert-logs:vl-prod", repository.instance.SourceRuntimeID)
+}
+
+func TestEventIngestorInfersResolvedDirectAlertsFromEndedAt(t *testing.T) {
+	repository := &fakeEventRepository{}
+	ingestor := NewEventIngestor(repository, &fakeEventRuleResolver{rule: Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-a"}}, State: RuleStateEnabled}}, "shared-secret", func() time.Time {
+		return time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	})
+
+	count, err := ingestor.IngestAlerts(context.Background(), "shared-secret", []AlertIngestAlert{{
+		Fingerprint: "abc123",
+		Labels:      map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a"},
+		StartsAt:    time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
+		EndsAt:      time.Date(2026, 6, 22, 9, 59, 30, 0, time.UTC),
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, AlertStateResolved, repository.instance.State)
+	require.Equal(t, repository.instance.EndsAt, repository.event.OccurredAt)
+}
+
 func TestEventIngestorRejectsInvalidTokenAndMissingRuleIdentity(t *testing.T) {
 	repository := &fakeEventRepository{}
 	ingestor := NewEventIngestor(repository, &fakeEventRuleResolver{rule: Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-a"}}, State: RuleStateEnabled}}, "shared-secret", time.Now)
-	_, err := ingestor.Ingest(context.Background(), "wrong", AlertmanagerWebhook{})
+	_, err := ingestor.IngestAlerts(context.Background(), "wrong", nil)
 	require.ErrorIs(t, err, ErrPermissionDenied)
 
-	_, err = ingestor.Ingest(context.Background(), "shared-secret", AlertmanagerWebhook{Alerts: []AlertmanagerAlert{{Fingerprint: "abc", Status: "firing"}}})
+	_, err = ingestor.IngestAlerts(context.Background(), "shared-secret", []AlertIngestAlert{{Fingerprint: "abc", Status: "firing"}})
 	require.ErrorIs(t, err, ErrInvalidSpec)
 }
 
 func TestEventIngestorRejectsUnknownDisabledOrMismatchedRule(t *testing.T) {
-	payload := AlertmanagerWebhook{Alerts: []AlertmanagerAlert{{
+	payload := []AlertIngestAlert{{
 		Status: "firing", Fingerprint: "abc123",
 		Labels:   map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a"},
 		StartsAt: time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
-	}}}
+	}}
 
-	_, err := NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{err: ErrNotFound}, "shared-secret", time.Now).Ingest(context.Background(), "shared-secret", payload)
+	_, err := NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{err: ErrNotFound}, "shared-secret", time.Now).IngestAlerts(context.Background(), "shared-secret", payload)
 	require.ErrorIs(t, err, ErrInvalidSpec)
 
 	disabled := Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-a"}}, State: RuleStateDisabled}
-	_, err = NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{rule: disabled}, "shared-secret", time.Now).Ingest(context.Background(), "shared-secret", payload)
+	_, err = NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{rule: disabled}, "shared-secret", time.Now).IngestAlerts(context.Background(), "shared-secret", payload)
 	require.ErrorIs(t, err, ErrInvalidSpec)
 
 	mismatched := Rule{ID: "rule-a", Spec: RuleSpec{Scope: RuleScope{ServiceID: "service-b"}}, State: RuleStateEnabled}
-	_, err = NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{rule: mismatched}, "shared-secret", time.Now).Ingest(context.Background(), "shared-secret", payload)
+	_, err = NewEventIngestor(&fakeEventRepository{}, &fakeEventRuleResolver{rule: mismatched}, "shared-secret", time.Now).IngestAlerts(context.Background(), "shared-secret", payload)
 	require.ErrorIs(t, err, ErrInvalidSpec)
 }
 

@@ -159,7 +159,7 @@ type LogRoute struct {
 - 一个 route 可以有多个 endpoint，用于双写和旁路对账。
 - 不再用“多个 Pipeline 片段”表达服务日志接入。
 - `collector_config_hash` 必须能回查到 `LogCollectorConfigVersion.collector_yaml`，查看配置不能重新 render。
-- K8s 确认发布必须使用发布预览时保存的 `LogAgentPlan.rendered_yaml`，不能 apply 时重新 render。
+- K8s 确认发布属于 `logs_collector` 运行时，必须使用发布预览时保存的 runtime manifest，不能 apply 时重新 render。
 
 ### LogCollectorConfigVersion
 

@@ -20,6 +20,7 @@ import (
 	"novaobs/internal/modules/k8sops"
 	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	obsruntime "novaobs/internal/observability/runtime"
 	"novaobs/internal/onboarding"
 	"novaobs/internal/opamp"
 	"novaobs/internal/platform/audit"
@@ -202,7 +203,6 @@ func newTestRouter(t *testing.T) testEnv {
 		store.LogRoutes(),
 		store.LogCollectorConfigVersions(),
 		store.LogDeploymentManifestVersions(),
-		store.LogAgentPlans(),
 		store.LogCollectorClusterConfigs(),
 		svcRepo,
 		servicecatalog.NewTargetRepository(store.ServiceTargets()),
@@ -210,9 +210,19 @@ func newTestRouter(t *testing.T) testEnv {
 		k8sModule.Cluster,
 		k8sModule.Resource,
 		k8sModule.Deploy,
+		logs.WithLogTargets(store.LogTargets()),
+		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
+		logs.WithAuthorizer(rbacSvc),
 	)
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:      store.LogEndpoints(),
+		Runtimes:       store.ObservabilityRuntimes(),
+		Repository:     alertRepository,
+		K8sDeployments: testRuntimeDeploymentService{},
+	})
+	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
+		Endpoints:      store.LogEndpoints(),
+		Runtimes:       store.ObservabilityRuntimes(),
 		Repository:     alertRepository,
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
@@ -225,6 +235,7 @@ func newTestRouter(t *testing.T) testEnv {
 		OnboardingService:      onboarding.NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc),
 		LogsService:            logsSvc,
 		AlertRuntimeService:    alertRuntimeSvc,
+		MetricsRuntimeService:  metricsRuntimeSvc,
 		AlertService: alerting.NewService(alerting.Dependencies{
 			Repository: alertRepository,
 			Authorizer: rbacSvc,
@@ -610,7 +621,8 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 	require.Equal(t, http.StatusOK, publishRecorder.Code)
 	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
-	require.Contains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+	require.NotContains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
+	require.NotContains(t, publishRecorder.Body.String(), `"plan"`)
 }
 
 func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
@@ -674,10 +686,9 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 		Data logs.LogEndpoint `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
-	require.Empty(t, created.Data.AlertmanagerURL)
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alertmanager_url":"http://alertmanager:9093"}`))
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 
@@ -686,7 +697,32 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
 	require.Contains(t, publishRecorder.Body.String(), `"manifest_yaml"`)
 	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victorialogs:9428")
-	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://alertmanager:9093")
+	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaobs-api:8080")
+}
+
+func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
+	env := newTestRouter(t)
+	require.NoError(t, env.store.LogEndpoints().Insert(context.Background(), logs.LogEndpoint{
+		ID:          "vm-prod",
+		Name:        "vm-prod",
+		Kind:        "victoriametrics",
+		SignalTypes: []string{logs.EndpointSignalMetrics},
+		QueryURL:    "http://victoriametrics:8428/api/v1/query",
+		ScopeType:   logs.EndpointScopeK8sCluster,
+		ClusterID:   "prod-1",
+		Status:      "active",
+	}))
+
+	publishRecorder := httptest.NewRecorder()
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/endpoints/vm-prod/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
+	publishRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(publishRecorder, publishRequest)
+
+	require.Equal(t, http.StatusOK, publishRecorder.Code)
+	require.Contains(t, publishRecorder.Body.String(), `"runtime_id":"vmalert-metrics:vm-prod"`)
+	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
+	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victoriametrics:8428")
+	require.NotContains(t, publishRecorder.Body.String(), "-rule.defaultRuleType=vlogs")
 }
 
 func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {
@@ -799,6 +835,18 @@ func createVMLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 
 func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 	t.Helper()
+	now := time.Now().UTC()
+	runtime := obsruntime.Runtime{
+		ID:         "logs-collector:" + env.service.Cluster + ":novaobs-system",
+		Kind:       obsruntime.KindLogsCollector,
+		SignalType: obsruntime.SignalLogs,
+		ClusterID:  env.service.Cluster,
+		Namespace:  "novaobs-system",
+		Status:     obsruntime.StatusReady,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	require.NoError(t, env.store.ObservabilityRuntimes().Upsert(context.Background(), runtime.ID, runtime))
 	endpointRecorder := httptest.NewRecorder()
 	endpointBody := `{"name":"vl-prod-k8s","write_url":"http://victorialogs:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs:9428/select/logsql/query","vmui_url":"http://victorialogs:9428/select/vmui","secret_ref":"secret://vl/prod"}`
 	endpointRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints", bytes.NewBufferString(endpointBody))

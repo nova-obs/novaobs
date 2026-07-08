@@ -28,10 +28,12 @@ type Store interface {
 	LogEndpoints() LogEndpointStore
 	LogSources() LogSourceStore
 	LogRoutes() LogRouteStore
+	LogTargets() LogTargetStore
 	LogCollectorConfigVersions() LogCollectorConfigVersionStore
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
-	LogAgentPlans() LogAgentPlanStore
 	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
+	ObservabilityRuntimes() ObservabilityRuntimeStore
+	MetricsServiceBindings() MetricsServiceBindingStore
 	Alerting() AlertingStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
@@ -158,6 +160,15 @@ type LogRouteStore interface {
 	FindByAgentGroup(ctx context.Context, agentGroupID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, route interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type LogTargetStore interface {
+	Insert(ctx context.Context, target interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, target interface{}) error
 }
 
 type LogCollectorConfigVersionStore interface {
@@ -170,25 +181,34 @@ type LogDeploymentManifestVersionStore interface {
 	FindByHash(ctx context.Context, hash string, result interface{}) error
 }
 
-type LogAgentPlanStore interface {
-	Insert(ctx context.Context, plan interface{}) error
-	FindAll(ctx context.Context, results interface{}) error
-	FindByRoute(ctx context.Context, routeID string, results interface{}) error
-}
-
 type LogCollectorClusterConfigStore interface {
 	Upsert(ctx context.Context, clusterID string, agentNamespace string, config interface{}) error
 	FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error
 }
 
+type ObservabilityRuntimeStore interface {
+	Upsert(ctx context.Context, id string, runtime interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	FindByCluster(ctx context.Context, clusterID string, results interface{}) error
+}
+
+type MetricsServiceBindingStore interface {
+	Insert(ctx context.Context, binding interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, binding interface{}) error
+}
+
 type AlertingStore interface {
 	SaveChange(ctx context.Context, expectedCurrentUpdateID string, rule interface{}, update interface{}, auditEvent interface{}) error
-	FindRules(ctx context.Context, serviceID string, state string, results interface{}) error
+	FindRules(ctx context.Context, serviceID string, state string, signalType string, results interface{}) error
 	FindRuleByID(ctx context.Context, id string, result interface{}) error
 	FindUpdate(ctx context.Context, ruleID string, updateID string, result interface{}) error
 	FindUpdates(ctx context.Context, ruleID string, limit int, results interface{}) error
-	FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error
-	MarkRuntimeRulesApplied(ctx context.Context, endpointID string, appliedAt time.Time) (int64, error)
+	FindRuntimeRules(ctx context.Context, endpointID string, signalType string, results interface{}) error
+	MarkRuntimeRulesApplied(ctx context.Context, endpointID string, signalType string, appliedAt time.Time) (int64, error)
 	ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error
 	FindAlertInstances(ctx context.Context, ruleID string, serviceID string, state string, limit int, results interface{}) error
 	FindAlertEvents(ctx context.Context, ruleID string, fingerprint string, limit int, results interface{}) error

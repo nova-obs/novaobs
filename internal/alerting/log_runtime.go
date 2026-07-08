@@ -13,6 +13,7 @@ import (
 	"novaobs/internal/database"
 	"novaobs/internal/logs"
 	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
+	obsruntime "novaobs/internal/observability/runtime"
 	platformimages "novaobs/internal/platform/images"
 	platformrbac "novaobs/internal/platform/rbac"
 	"novaobs/pkg/apperr"
@@ -39,25 +40,29 @@ type LogRuntimeImageTemplateService interface {
 }
 
 type LogRuntimeDependencies struct {
-	Endpoints      database.LogEndpointStore
-	Repository     LogRuntimeRepository
-	K8sDeployments LogRuntimeDeploymentService
-	ImageTemplates LogRuntimeImageTemplateService
-	Clock          func() time.Time
+	Endpoints             database.LogEndpointStore
+	Runtimes              database.ObservabilityRuntimeStore
+	Repository            LogRuntimeRepository
+	K8sDeployments        LogRuntimeDeploymentService
+	ImageTemplates        LogRuntimeImageTemplateService
+	DefaultAlertIngestURL string
+	Clock                 func() time.Time
 }
 
 type LogRuntimeService struct {
-	endpoints      database.LogEndpointStore
-	repository     LogRuntimeRepository
-	k8sDeployments LogRuntimeDeploymentService
-	imageTemplates LogRuntimeImageTemplateService
-	clock          func() time.Time
+	endpoints             database.LogEndpointStore
+	runtimes              database.ObservabilityRuntimeStore
+	repository            LogRuntimeRepository
+	k8sDeployments        LogRuntimeDeploymentService
+	imageTemplates        LogRuntimeImageTemplateService
+	defaultAlertIngestURL string
+	clock                 func() time.Time
 }
 
 type LogRuntimePublishRequest struct {
-	ClusterID         string `json:"cluster_id"`
+	DeployClusterID   string `json:"deploy_cluster_id"`
 	Namespace         string `json:"namespace"`
-	AlertmanagerURL   string `json:"alertmanager_url"`
+	AlertIngestURL    string `json:"alert_ingest_url"`
 	PreviewID         string `json:"preview_id,omitempty"`
 	ConfirmationToken string `json:"confirmation_token,omitempty"`
 }
@@ -65,10 +70,10 @@ type LogRuntimePublishRequest struct {
 type LogRuntimePublishResult struct {
 	RuntimeID            string   `json:"runtime_id"`
 	EndpointID           string   `json:"endpoint_id"`
-	ClusterID            string   `json:"cluster_id"`
+	DeployClusterID      string   `json:"deploy_cluster_id"`
 	Namespace            string   `json:"namespace"`
 	DatasourceURL        string   `json:"datasource_url"`
-	AlertmanagerURL      string   `json:"alertmanager_url"`
+	AlertIngestURL       string   `json:"alert_ingest_url"`
 	ArtifactHash         string   `json:"artifact_hash"`
 	ManifestHash         string   `json:"manifest_hash"`
 	ManifestYAML         string   `json:"manifest_yaml"`
@@ -89,11 +94,19 @@ func NewLogRuntimeService(deps LogRuntimeDependencies) LogRuntimeService {
 	if clock == nil {
 		clock = time.Now
 	}
-	return LogRuntimeService{endpoints: deps.Endpoints, repository: deps.Repository, k8sDeployments: deps.K8sDeployments, imageTemplates: deps.ImageTemplates, clock: clock}
+	return LogRuntimeService{
+		endpoints:             deps.Endpoints,
+		runtimes:              deps.Runtimes,
+		repository:            deps.Repository,
+		k8sDeployments:        deps.K8sDeployments,
+		imageTemplates:        deps.ImageTemplates,
+		defaultAlertIngestURL: strings.TrimSpace(deps.DefaultAlertIngestURL),
+		clock:                 clock,
+	}
 }
 
 func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Subject, endpointID string, req LogRuntimePublishRequest) (LogRuntimePublishResult, error) {
-	if s.endpoints == nil || s.repository == nil || s.k8sDeployments == nil {
+	if s.endpoints == nil || s.runtimes == nil || s.repository == nil || s.k8sDeployments == nil {
 		return LogRuntimePublishResult{}, ErrUnavailable
 	}
 	endpointID = strings.TrimSpace(endpointID)
@@ -104,7 +117,7 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 	if err := s.endpoints.FindByID(ctx, endpointID, &endpoint); err != nil {
 		return LogRuntimePublishResult{}, mapStoreError(err)
 	}
-	runtime, err := newLogRuntimeSpec(endpoint, req)
+	runtime, err := newLogRuntimeSpec(endpoint, req, s.defaultAlertIngestURL)
 	if err != nil {
 		return LogRuntimePublishResult{}, err
 	}
@@ -151,13 +164,16 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 			return LogRuntimePublishResult{}, err
 		}
 	}
+	if err := s.upsertRuntime(ctx, runtime, artifact, manifestHash, deployed, requiresConfirmation); err != nil {
+		return LogRuntimePublishResult{}, err
+	}
 	return LogRuntimePublishResult{
 		RuntimeID:            runtime.RuntimeID,
 		EndpointID:           endpoint.ID,
-		ClusterID:            runtime.ClusterID,
+		DeployClusterID:      runtime.ClusterID,
 		Namespace:            runtime.Namespace,
 		DatasourceURL:        runtime.DatasourceURL,
-		AlertmanagerURL:      runtime.AlertmanagerURL,
+		AlertIngestURL:       runtime.AlertIngestURL,
 		ArtifactHash:         artifact.Hash,
 		ManifestHash:         manifestHash,
 		ManifestYAML:         manifest,
@@ -174,6 +190,52 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 	}, nil
 }
 
+func (s LogRuntimeService) upsertRuntime(ctx context.Context, runtime logRuntimeSpec, artifact Artifact, manifestHash string, deployed k8sopsdeployment.OperationResult, requiresConfirmation bool) error {
+	now := s.clock().UTC()
+	record := obsruntime.Runtime{ID: runtime.RuntimeID, CreatedAt: now}
+	var existing obsruntime.Runtime
+	if err := s.runtimes.FindByID(ctx, runtime.RuntimeID, &existing); err == nil {
+		record = existing
+	}
+	record.ID = runtime.RuntimeID
+	record.Kind = obsruntime.KindLogsVmalert
+	record.SignalType = obsruntime.SignalLogs
+	record.ClusterID = runtime.ClusterID
+	record.Namespace = runtime.Namespace
+	record.EndpointID = runtime.EndpointID
+	record.ArtifactHash = artifact.Hash
+	record.ManifestHash = manifestHash
+	record.Status = obsruntime.StatusReady
+	if requiresConfirmation {
+		record.Status = obsruntime.StatusPreviewed
+	} else {
+		publishedAt := now
+		record.LastPublishedAt = &publishedAt
+	}
+	record.LastPreviewID = deployed.PreviewID
+	record.LastAuditID = deployed.AuditID
+	record.LastError = ""
+	record.Resources = runtimeResourceRefs(deployed.Resources)
+	record.UpdatedAt = now
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = now
+	}
+	return s.runtimes.Upsert(ctx, record.ID, record)
+}
+
+func runtimeResourceRefs(resources []k8sopsdeployment.ResourceIdentity) []obsruntime.ResourceRef {
+	out := make([]obsruntime.ResourceRef, 0, len(resources))
+	for _, resource := range resources {
+		out = append(out, obsruntime.ResourceRef{
+			APIVersion: resource.APIVersion,
+			Kind:       resource.Kind,
+			Namespace:  resource.Namespace,
+			Name:       resource.Name,
+		})
+	}
+	return out
+}
+
 type logRuntimeSpec struct {
 	RuntimeID       string
 	Name            string
@@ -181,42 +243,39 @@ type logRuntimeSpec struct {
 	ClusterID       string
 	Namespace       string
 	DatasourceURL   string
-	AlertmanagerURL string
+	AlertIngestURL  string
+	RuleDefaultType string
 }
 
-func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest) (logRuntimeSpec, error) {
+func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, defaultAlertIngestURL string) (logRuntimeSpec, error) {
 	endpoint.ID = strings.TrimSpace(endpoint.ID)
 	endpoint.Name = strings.TrimSpace(endpoint.Name)
 	endpoint.SinkType = strings.TrimSpace(endpoint.SinkType)
 	endpoint.ScopeType = strings.TrimSpace(endpoint.ScopeType)
 	endpoint.ClusterID = strings.TrimSpace(endpoint.ClusterID)
 	endpoint.QueryURL = strings.TrimSpace(endpoint.QueryURL)
-	endpoint.AlertmanagerURL = strings.TrimSpace(endpoint.AlertmanagerURL)
 	if endpoint.SinkType != logs.EndpointSinkVL {
 		return logRuntimeSpec{}, apperr.InvalidRequest("只有 VictoriaLogs 日志端点可以部署 vmalert Runtime")
 	}
-	if endpoint.ScopeType != logs.EndpointScopeK8sCluster || endpoint.ClusterID == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("vmalert Runtime 必须绑定 K8s 集群级 VictoriaLogs 端点")
-	}
-	clusterID := strings.TrimSpace(req.ClusterID)
-	if clusterID == "" {
+	clusterID := strings.TrimSpace(req.DeployClusterID)
+	if clusterID == "" && endpoint.ScopeType == logs.EndpointScopeK8sCluster {
 		clusterID = endpoint.ClusterID
 	}
-	if clusterID != endpoint.ClusterID {
-		return logRuntimeSpec{}, apperr.InvalidRequest("vmalert Runtime 必须部署到日志端点绑定的 K8s 集群")
+	if clusterID == "" {
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 deploy_cluster_id")
 	}
 	datasourceURL, err := victoriaLogsDatasourceURL(endpoint.QueryURL)
 	if err != nil {
 		return logRuntimeSpec{}, err
 	}
-	alertmanagerURL := strings.TrimSpace(req.AlertmanagerURL)
-	if alertmanagerURL == "" {
-		alertmanagerURL = endpoint.AlertmanagerURL
+	alertIngestURL := strings.TrimSpace(req.AlertIngestURL)
+	if alertIngestURL == "" {
+		alertIngestURL = strings.TrimSpace(defaultAlertIngestURL)
 	}
-	if alertmanagerURL == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 Alertmanager notify 地址")
+	if alertIngestURL == "" {
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 NovaObs Alert Ingest 地址")
 	}
-	if err := validateHTTPURL(alertmanagerURL, "Alertmanager notify 地址"); err != nil {
+	if err := validateHTTPURL(alertIngestURL, "NovaObs Alert Ingest 地址"); err != nil {
 		return logRuntimeSpec{}, err
 	}
 	if namespace := strings.TrimSpace(req.Namespace); namespace != "" && namespace != defaultVmalertNamespace {
@@ -231,13 +290,14 @@ func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest) 
 		ClusterID:       clusterID,
 		Namespace:       defaultVmalertNamespace,
 		DatasourceURL:   datasourceURL,
-		AlertmanagerURL: alertmanagerURL,
+		AlertIngestURL:  alertIngestURL,
+		RuleDefaultType: "vlogs",
 	}, nil
 }
 
 func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string {
 	rulesBlock := indentBlock(strings.TrimRight(artifact.Content, "\n"), 4)
-	return strings.Join([]string{
+	lines := []string{
 		"apiVersion: v1",
 		"kind: Namespace",
 		"metadata:",
@@ -299,12 +359,16 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"          image: " + quoteYAML(platformimages.VmalertImagePlaceholder),
 		"          args:",
 		"            - " + quoteYAML("-rule=/etc/vmalert/rules/*.yaml"),
-		"            - " + quoteYAML("-rule.defaultRuleType=vlogs"),
-		"            - " + quoteYAML("-configCheckInterval=10s"),
-		"            - " + quoteYAML("-datasource.url="+runtime.DatasourceURL),
-		"            - " + quoteYAML("-notifier.url="+runtime.AlertmanagerURL),
-		"            - " + quoteYAML("-httpListenAddr=:8880"),
-		"            - " + quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
+	}
+	if runtime.RuleDefaultType != "" {
+		lines = append(lines, "            - "+quoteYAML("-rule.defaultRuleType="+runtime.RuleDefaultType))
+	}
+	lines = append(lines,
+		"            - "+quoteYAML("-configCheckInterval=10s"),
+		"            - "+quoteYAML("-datasource.url="+runtime.DatasourceURL),
+		"            - "+quoteYAML("-notifier.url="+runtime.AlertIngestURL),
+		"            - "+quoteYAML("-httpListenAddr=:8880"),
+		"            - "+quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
 		"          ports:",
 		"            - name: http",
 		"              containerPort: 8880",
@@ -315,9 +379,10 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"      volumes:",
 		"        - name: rules",
 		"          configMap:",
-		"            name: " + quoteYAML(runtime.Name+"-rules"),
+		"            name: "+quoteYAML(runtime.Name+"-rules"),
 		"",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func victoriaLogsDatasourceURL(queryURL string) (string, error) {

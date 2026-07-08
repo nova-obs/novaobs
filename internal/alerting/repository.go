@@ -41,7 +41,7 @@ func (r StoreRepository) SaveChange(ctx context.Context, change ChangeSet) error
 
 func (r StoreRepository) ListRules(ctx context.Context, filter RuleFilter) ([]Rule, error) {
 	var items []Rule
-	if err := r.store.FindRules(ctx, filter.ServiceID, filter.State, &items); err != nil {
+	if err := r.store.FindRules(ctx, filter.ServiceID, filter.State, filter.SignalType, &items); err != nil {
 		return nil, mapStoreError(err)
 	}
 	slices.SortFunc(items, func(a, b Rule) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
@@ -74,11 +74,11 @@ func (r StoreRepository) ListUpdates(ctx context.Context, ruleID string, limit i
 
 func (r StoreRepository) ListRuntimeRules(ctx context.Context, runtimeID string) ([]Rule, error) {
 	var rules []Rule
-	endpointID := strings.TrimPrefix(runtimeID, "vmalert-logs:")
-	if endpointID == "" || endpointID == runtimeID && strings.Contains(runtimeID, ":") {
+	signalType, endpointID, err := parseVmalertRuntimeID(runtimeID)
+	if err != nil {
 		return nil, ErrInvalidSpec
 	}
-	if err := r.store.FindRuntimeRules(ctx, endpointID, &rules); err != nil {
+	if err := r.store.FindRuntimeRules(ctx, endpointID, signalType, &rules); err != nil {
 		return nil, mapStoreError(err)
 	}
 	for index := range rules {
@@ -89,19 +89,34 @@ func (r StoreRepository) ListRuntimeRules(ctx context.Context, runtimeID string)
 		if err != nil {
 			return nil, err
 		}
-		rules[index].Spec.Notification.AlertmanagerReceiver = policy.AlertmanagerReceiver
+		rules[index].Spec.Notification.Receiver = policy.Receiver
 	}
 	slices.SortFunc(rules, func(a, b Rule) int { return strings.Compare(a.ID, b.ID) })
 	return rules, nil
 }
 
 func (r StoreRepository) MarkRuntimeRulesApplied(ctx context.Context, runtimeID string, appliedAt time.Time) (int, error) {
-	endpointID := strings.TrimPrefix(runtimeID, "vmalert-logs:")
-	if endpointID == "" || endpointID == runtimeID && strings.Contains(runtimeID, ":") {
+	signalType, endpointID, err := parseVmalertRuntimeID(runtimeID)
+	if err != nil {
 		return 0, ErrInvalidSpec
 	}
-	applied, err := r.store.MarkRuntimeRulesApplied(ctx, endpointID, appliedAt.UTC())
+	applied, err := r.store.MarkRuntimeRulesApplied(ctx, endpointID, signalType, appliedAt.UTC())
 	return int(applied), mapStoreError(err)
+}
+
+func parseVmalertRuntimeID(runtimeID string) (string, string, error) {
+	for prefix, signalType := range map[string]string{
+		"vmalert-logs:":    SignalTypeLogs,
+		"vmalert-metrics:": SignalTypeMetrics,
+	} {
+		if endpointID := strings.TrimPrefix(runtimeID, prefix); endpointID != runtimeID {
+			if endpointID == "" || strings.Contains(endpointID, ":") {
+				return "", "", ErrInvalidSpec
+			}
+			return signalType, endpointID, nil
+		}
+	}
+	return "", "", ErrInvalidSpec
 }
 
 func (r StoreRepository) ApplyEvent(ctx context.Context, instance AlertInstance, event AlertEvent) error {

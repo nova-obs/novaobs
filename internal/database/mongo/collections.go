@@ -518,6 +518,58 @@ func (s *logRouteStore) Update(ctx context.Context, id string, route interface{}
 	return nil
 }
 
+func (s *logRouteStore) Delete(ctx context.Context, id string) error {
+	oid, _ := objectID(id)
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": oid})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+type logTargetStore struct{ col *mongo.Collection }
+
+func (s *logTargetStore) Insert(ctx context.Context, target interface{}) error {
+	_, err := s.col.InsertOne(ctx, target)
+	return err
+}
+
+func (s *logTargetStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logTargetStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *logTargetStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *logTargetStore) Update(ctx context.Context, id string, target interface{}) error {
+	oid, _ := objectID(id)
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, target)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 type logCollectorConfigVersionStore struct{ col *mongo.Collection }
 
 func (s *logCollectorConfigVersionStore) Upsert(ctx context.Context, hash string, version interface{}) error {
@@ -557,29 +609,6 @@ func upsertLogArtifactByHash(ctx context.Context, col *mongo.Collection, hash st
 	return err
 }
 
-type logAgentPlanStore struct{ col *mongo.Collection }
-
-func (s *logAgentPlanStore) Insert(ctx context.Context, plan interface{}) error {
-	_, err := s.col.InsertOne(ctx, plan)
-	return err
-}
-
-func (s *logAgentPlanStore) FindAll(ctx context.Context, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"created_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
-func (s *logAgentPlanStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{"route_id": routeID}, options.Find().SetSort(bson.M{"created_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
 // ---------- LogCollectorClusterConfigStore ----------
 type logCollectorClusterConfigStore struct{ col *mongo.Collection }
 
@@ -592,6 +621,86 @@ func (s *logCollectorClusterConfigStore) Upsert(ctx context.Context, clusterID s
 func (s *logCollectorClusterConfigStore) FindByCluster(ctx context.Context, clusterID string, agentNamespace string, result interface{}) error {
 	id := clusterID + "\x00" + agentNamespace
 	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+// ---------- ObservabilityRuntimeStore ----------
+type observabilityRuntimeStore struct{ col *mongo.Collection }
+
+func (s *observabilityRuntimeStore) Upsert(ctx context.Context, id string, runtime interface{}) error {
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, runtime, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *observabilityRuntimeStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *observabilityRuntimeStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"cluster_id": clusterID}, options.Find().SetSort(bson.M{"kind": 1, "updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+// ---------- Metrics 服务绑定 ----------
+type metricsServiceBindingStore struct{ col *mongo.Collection }
+
+func (s *metricsServiceBindingStore) Insert(ctx context.Context, binding interface{}) error {
+	_, err := s.col.InsertOne(ctx, binding)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
+func (s *metricsServiceBindingStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *metricsServiceBindingStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"updated_at": -1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *metricsServiceBindingStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *metricsServiceBindingStore) Update(ctx context.Context, id string, binding interface{}) error {
+	oid, _ := objectID(id)
+	setDoc, err := toBSONMap(binding)
+	if err != nil {
+		return err
+	}
+	delete(setDoc, "_id")
+	result, err := s.col.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": setDoc})
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
 }
 
 // ---------- Alerting Repository ----------
@@ -647,7 +756,7 @@ func (s *alertingStore) SaveChange(ctx context.Context, expectedCurrentUpdateID 
 	return err
 }
 
-func (s *alertingStore) FindRules(ctx context.Context, serviceID string, state string, results interface{}) error {
+func (s *alertingStore) FindRules(ctx context.Context, serviceID string, state string, signalType string, results interface{}) error {
 	query := bson.M{"spec.scope.service_id": bson.M{"$exists": true}}
 	if serviceID != "" {
 		query["spec.scope.service_id"] = serviceID
@@ -655,6 +764,7 @@ func (s *alertingStore) FindRules(ctx context.Context, serviceID string, state s
 	if state != "" {
 		query["state"] = state
 	}
+	query = withAlertSignalFilter(query, signalType)
 	cursor, err := s.rules.Find(ctx, query, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
 	if err != nil {
 		return err
@@ -690,16 +800,18 @@ func (s *alertingStore) FindUpdates(ctx context.Context, ruleID string, limit in
 	return cursor.All(ctx, results)
 }
 
-func (s *alertingStore) FindRuntimeRules(ctx context.Context, runtimeID string, results interface{}) error {
-	cursor, err := s.rules.Find(ctx, bson.M{"spec.scope.endpoint_id": runtimeID}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+func (s *alertingStore) FindRuntimeRules(ctx context.Context, endpointID string, signalType string, results interface{}) error {
+	query := withAlertSignalFilter(bson.M{"spec.scope.endpoint_id": endpointID}, signalType)
+	cursor, err := s.rules.Find(ctx, query, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 	if err != nil {
 		return err
 	}
 	return cursor.All(ctx, results)
 }
 
-func (s *alertingStore) MarkRuntimeRulesApplied(ctx context.Context, endpointID string, appliedAt time.Time) (int64, error) {
-	result, err := s.rules.UpdateMany(ctx, bson.M{"spec.scope.endpoint_id": endpointID}, mongo.Pipeline{
+func (s *alertingStore) MarkRuntimeRulesApplied(ctx context.Context, endpointID string, signalType string, appliedAt time.Time) (int64, error) {
+	query := withAlertSignalFilter(bson.M{"spec.scope.endpoint_id": endpointID}, signalType)
+	result, err := s.rules.UpdateMany(ctx, query, mongo.Pipeline{
 		bson.D{{Key: "$set", Value: bson.D{
 			{Key: "apply_status", Value: "applied"},
 			{Key: "applied_update_id", Value: "$current_update_id"},
@@ -710,6 +822,23 @@ func (s *alertingStore) MarkRuntimeRulesApplied(ctx context.Context, endpointID 
 		return 0, err
 	}
 	return result.MatchedCount, nil
+}
+
+func withAlertSignalFilter(query bson.M, signalType string) bson.M {
+	signalType = strings.ToLower(strings.TrimSpace(signalType))
+	if signalType == "" {
+		return query
+	}
+	if signalType == "logs" {
+		query["$or"] = []bson.M{
+			{"spec.signal_type": "logs"},
+			{"spec.signal_type": ""},
+			{"spec.signal_type": bson.M{"$exists": false}},
+		}
+		return query
+	}
+	query["spec.signal_type"] = signalType
+	return query
 }
 
 func (s *alertingStore) ApplyAlertEvent(ctx context.Context, instance interface{}, event interface{}) error {
