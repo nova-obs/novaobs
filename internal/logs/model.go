@@ -33,23 +33,32 @@ const (
 )
 
 type LogEndpoint struct {
-	ID          string    `json:"id" bson:"_id"`
-	Name        string    `json:"name" bson:"name"`
-	Description string    `json:"description" bson:"description"`
-	Kind        string    `json:"kind,omitempty" bson:"kind,omitempty"`
-	SignalTypes []string  `json:"signal_types,omitempty" bson:"signal_types,omitempty"`
-	SinkType    string    `json:"sink_type" bson:"sink_type"`
-	StreamName  string    `json:"stream_name" bson:"stream_name"`
-	WriteURL    string    `json:"write_url" bson:"write_url"`
-	QueryURL    string    `json:"query_url" bson:"query_url"`
-	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
-	AccountID   string    `json:"account_id,omitempty" bson:"-"`
-	ProjectID   string    `json:"project_id,omitempty" bson:"-"`
-	ScopeType   string    `json:"scope_type" bson:"scope_type"`
-	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
-	Status      string    `json:"status" bson:"status"`
-	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
+	ID          string            `json:"id" bson:"_id"`
+	Name        string            `json:"name" bson:"name"`
+	Description string            `json:"description" bson:"description"`
+	Kind        string            `json:"kind,omitempty" bson:"kind,omitempty"`
+	SignalTypes []string          `json:"signal_types,omitempty" bson:"signal_types,omitempty"`
+	SinkType    string            `json:"sink_type" bson:"sink_type"`
+	StreamName  string            `json:"stream_name" bson:"stream_name"`
+	WriteURL    string            `json:"write_url" bson:"write_url"`
+	QueryURL    string            `json:"query_url" bson:"query_url"`
+	VMUIURL     string            `json:"vmui_url" bson:"vmui_url"`
+	AccountID   string            `json:"account_id,omitempty" bson:"-"`
+	ProjectID   string            `json:"project_id,omitempty" bson:"-"`
+	ScopeType   string            `json:"scope_type" bson:"scope_type"`
+	ClusterID   string            `json:"cluster_id" bson:"cluster_id"`
+	SecretRef   string            `json:"secret_ref,omitempty" bson:"secret_ref,omitempty"`
+	Status      string            `json:"status" bson:"status"`
+	Health      LogEndpointHealth `json:"health,omitempty" bson:"health,omitempty"`
+	CreatedAt   time.Time         `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at" bson:"updated_at"`
+}
+
+type LogEndpointHealth struct {
+	Status         string    `json:"status" bson:"status"`
+	CheckedAt      time.Time `json:"checked_at,omitempty" bson:"checked_at,omitempty"`
+	ResponseTimeMS int       `json:"response_time_ms,omitempty" bson:"response_time_ms,omitempty"`
+	Message        string    `json:"message,omitempty" bson:"message,omitempty"`
 }
 
 type LogSource struct {

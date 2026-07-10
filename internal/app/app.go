@@ -168,7 +168,11 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		logs.WithAuthorizer(rbacSvc),
 		logs.WithEndpointAuditor(auditSvc),
 	)
-	endpointSvc := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacSvc))
+	endpointSvc := obsendpoint.NewLogEndpointFacade(
+		store.LogEndpoints(),
+		obsendpoint.WithAuthorizer(rbacSvc),
+		obsendpoint.WithAuditor(auditSvc),
+	)
 	metricsSvc := metrics.NewService(metrics.Dependencies{
 		Bindings:       store.MetricsServiceBindings(),
 		Routes:         store.MetricsRoutes(),

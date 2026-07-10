@@ -786,6 +786,58 @@ paths:
       responses:
         "200":
           description: 返回 K8s 发布预览或应用结果、manifest YAML 和 artifact hash
+  /observability/endpoints:
+    get:
+      summary: 查询统一观测端点
+      parameters:
+        - name: signal_type
+          in: query
+          schema: { type: string, enum: [logs, metrics, dashboards] }
+        - name: kind
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 返回当前主体可读的统一观测端点
+    post:
+      summary: 登记统一观测端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObservabilityEndpointInput"
+      responses:
+        "201":
+          description: 端点已创建并记录审计事件
+  /observability/endpoints/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: 更新统一观测端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObservabilityEndpointInput"
+      responses:
+        "200":
+          description: 端点已更新并记录审计事件
+  /observability/endpoints/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 执行统一观测端点真实连通性测试
+      responses:
+        "200":
+          description: 返回探测状态、延迟和检查时间，并持久化端点健康状态
   /observability/runtimes:
     get:
       summary: 查询观测运行时
@@ -945,6 +997,47 @@ components:
       type: http
       scheme: bearer
   schemas:
+    ObservabilityEndpointInput:
+      type: object
+      required: [name, kind, signal_types, scope, urls, status]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2048
+        kind:
+          type: string
+          enum: [victoriametrics]
+        signal_types:
+          type: array
+          items: { type: string, enum: [metrics] }
+        scope:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [global, k8s_cluster] }
+            cluster_id: { type: string }
+        urls:
+          type: object
+          required: [remote_write_url, query_url, ui_url]
+          properties:
+            remote_write_url:
+              type: string
+              description: 必须包含 /insert/0/prometheus 租户占位路径
+            query_url:
+              type: string
+              description: 必须包含 /select/0/prometheus 租户占位路径
+            ui_url:
+              type: string
+              description: 必须包含 /select/0/vmui 租户占位路径
+        secret_ref:
+          type: string
+          description: 可选凭据引用；禁止在 URL 中内嵌用户名或密码
+        status:
+          type: string
+          enum: [active, disabled]
     LogEndpointInput:
       type: object
       required: [name, sink_type, write_url, scope_type]

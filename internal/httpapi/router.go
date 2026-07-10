@@ -176,6 +176,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.DELETE("/logs/routes/:id", deleteLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/observability/endpoints", listObservabilityEndpointsHandler(deps.ObservabilityEndpoints))
+	api.POST("/observability/endpoints", createObservabilityEndpointHandler(deps.ObservabilityEndpoints))
+	api.PATCH("/observability/endpoints/:id", updateObservabilityEndpointHandler(deps.ObservabilityEndpoints))
 	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
 	api.GET("/observability/runtimes/logs-collector/status", getLogsCollectorRuntimeStatusHandler(deps.LogsService))
 	api.POST("/observability/runtimes/logs-collector/publish", publishLogsCollectorRuntimeHandler(deps.LogsService))

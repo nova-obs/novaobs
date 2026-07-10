@@ -51,7 +51,8 @@ func TestMetricsAPIServesEndpointsBindingsAndWorkspace(t *testing.T) {
 	require.Len(t, nestedValue(t, metricsEndpoints, "data").([]any), 1)
 
 	testResult := performJSON(t, env.router, http.MethodPost, "/api/v1/observability/endpoints/vm-prod/test", `{}`)
-	require.Equal(t, "pending", nestedString(t, testResult, "data", "status"))
+	require.Equal(t, "failed", nestedString(t, testResult, "data", "status"))
+	require.Contains(t, nestedString(t, testResult, "data", "message"), "连接失败")
 
 	body := `{"service_id":"` + env.service.ID + `","endpoint_id":"vm-prod","label_match":{"service.name":"orders-api"}}`
 	bindingsPath := "/api/v1/products/" + env.service.ProductID + "/services/" + env.service.ID + "/metrics/bindings"
@@ -69,6 +70,44 @@ func TestMetricsAPIServesEndpointsBindingsAndWorkspace(t *testing.T) {
 	require.Equal(t, env.service.ID, nestedString(t, workspace, "data", "active_service_id"))
 	require.Equal(t, "vm-prod", nestedString(t, workspace, "data", "binding", "binding", "endpoint_id"))
 	require.Len(t, nestedValue(t, workspace, "data", "endpoints").([]any), 1)
+}
+
+func TestObservabilityEndpointAPICreatesAndUpdatesVictoriaMetricsEndpoint(t *testing.T) {
+	env := newMetricsHTTPTestEnv(t)
+	body := `{"name":"vm-stage","description":"stage VMS","kind":"victoriametrics","signal_types":["metrics"],"scope":{"type":"global"},"urls":{"remote_write_url":"http://vminsert-stage:8480/insert/0/prometheus/api/v1/write","query_url":"http://vmselect-stage:8481/select/0/prometheus","ui_url":"http://vmselect-stage:8481/select/0/vmui/"},"status":"active"}`
+
+	created := performJSON(t, env.router, http.MethodPost, "/api/v1/observability/endpoints", body)
+	endpointID := nestedString(t, created, "data", "id")
+	require.NotEmpty(t, endpointID)
+	require.Equal(t, "victoriametrics", nestedString(t, created, "data", "kind"))
+	require.Equal(t, "http://vminsert-stage:8480/insert/0/prometheus/api/v1/write", nestedString(t, created, "data", "urls", "remote_write_url"))
+
+	updated := performJSON(t, env.router, http.MethodPatch, "/api/v1/observability/endpoints/"+endpointID, `{"name":"vm-stage-updated","description":"stage VMS updated","kind":"victoriametrics","signal_types":["metrics"],"scope":{"type":"global"},"urls":{"remote_write_url":"http://vminsert-stage:8480/insert/0/prometheus/api/v1/write","query_url":"http://vmselect-stage:8481/select/0/prometheus","ui_url":"http://vmselect-stage:8481/select/0/vmui/"},"status":"active"}`)
+	require.Equal(t, "vm-stage-updated", nestedString(t, updated, "data", "name"))
+
+	listed := performJSON(t, env.router, http.MethodGet, "/api/v1/observability/endpoints?signal_type=metrics&kind=victoriametrics", "")
+	require.Len(t, nestedValue(t, listed, "data").([]any), 2)
+}
+
+func TestObservabilityEndpointAPIMutationRequiresUnifiedManagePermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := memstore.NewStore()
+	rbacService := platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()))
+	endpointService := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacService))
+	router := NewRouter(Dependencies{
+		Store:                  store,
+		K8sOpsModule:           k8sops.NewModule(),
+		ObservabilityEndpoints: endpointService,
+		DefaultSubject:         platformrbac.Subject{ID: "readonly-user", Type: "user"},
+	})
+	body := `{"name":"vm-denied","kind":"victoriametrics","signal_types":["metrics"],"scope":{"type":"global"},"urls":{"remote_write_url":"http://vminsert:8480/insert/0/prometheus/api/v1/write","query_url":"http://vmselect:8481/select/0/prometheus","ui_url":"http://vmselect:8481/select/0/vmui/"},"status":"active"}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/observability/endpoints", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"code":"permission_denied"`)
 }
 
 func TestMetricsAPIRejectsDuplicateActiveBinding(t *testing.T) {
@@ -180,9 +219,9 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 		Name:        "vm-prod",
 		Kind:        obsendpoint.KindVictoriaMetrics,
 		SignalTypes: []string{obsendpoint.SignalTypeMetrics},
-		WriteURL:    "http://vminsert:8480/insert/0/prometheus/api/v1/write",
-		QueryURL:    "http://vmselect:8481/select/0/prometheus",
-		VMUIURL:     "http://vmselect:8481/select/0/vmui/",
+		WriteURL:    "http://127.0.0.1:1/insert/0/prometheus/api/v1/write",
+		QueryURL:    "http://127.0.0.1:1/select/0/prometheus",
+		VMUIURL:     "http://127.0.0.1:1/select/0/vmui/",
 		Status:      "active",
 	}))
 	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
