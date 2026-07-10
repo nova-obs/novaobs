@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/platform/audit"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/platform/audit"
 
 	"github.com/stretchr/testify/require"
 )

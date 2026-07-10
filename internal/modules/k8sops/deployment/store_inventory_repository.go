@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )

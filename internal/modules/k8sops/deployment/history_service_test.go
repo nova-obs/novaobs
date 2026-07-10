@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 )
@@ -128,10 +128,10 @@ metadata:
 func TestServicePreviewAcceptsClusterScopedResourcesWithoutNamespace(t *testing.T) {
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{
 		Objects: []kubeclient.OperationObject{
-			{APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system"},
-			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaobs-logs-agent"},
-			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaobs-logs-agent"},
-			{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaobs-system", Name: "novaobs-logs-agent"},
+			{APIVersion: "v1", Kind: "Namespace", Name: "novaapm-system"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaapm-logs-agent"},
+			{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaapm-logs-agent"},
+			{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaapm-system", Name: "novaapm-logs-agent"},
 		},
 	}}
 	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner)
@@ -141,23 +141,23 @@ func TestServicePreviewAcceptsClusterScopedResourcesWithoutNamespace(t *testing.
 		YAMLContent: `apiVersion: v1
 kind: Namespace
 metadata:
-  name: novaobs-system
+  name: novaapm-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: novaobs-logs-agent
+  name: novaapm-logs-agent
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: novaobs-logs-agent
+  name: novaapm-logs-agent
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: novaobs-logs-agent
-  namespace: novaobs-system`,
+  name: novaapm-logs-agent
+  namespace: novaapm-system`,
 	})
 
 	require.NoError(t, err)
@@ -169,16 +169,16 @@ metadata:
 	require.Equal(t, "", namespacesByKind["Namespace"])
 	require.Equal(t, "", namespacesByKind["ClusterRole"])
 	require.Equal(t, "", namespacesByKind["ClusterRoleBinding"])
-	require.Equal(t, "novaobs-system", namespacesByKind["DaemonSet"])
+	require.Equal(t, "novaapm-system", namespacesByKind["DaemonSet"])
 	require.Equal(t, 1, dryRunner.calls)
 }
 
 func TestServiceApplyPersistsClusterScopedResourcesInInventory(t *testing.T) {
 	objects := []kubeclient.OperationObject{
-		{APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system", AfterHash: "namespace-hash"},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaobs-logs-agent", AfterHash: "clusterrole-hash"},
-		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaobs-logs-agent", AfterHash: "clusterrolebinding-hash"},
-		{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaobs-system", Name: "novaobs-logs-agent", AfterHash: "daemonset-hash"},
+		{APIVersion: "v1", Kind: "Namespace", Name: "novaapm-system", AfterHash: "namespace-hash"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaapm-logs-agent", AfterHash: "clusterrole-hash"},
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaapm-logs-agent", AfterHash: "clusterrolebinding-hash"},
+		{APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: "novaapm-system", Name: "novaapm-logs-agent", AfterHash: "daemonset-hash"},
 	}
 	dryRunner := &recordingDeploymentDryRunner{result: kubeclient.DryRunApplyResult{Objects: objects}}
 	applier := &recordingDeploymentApplier{result: kubeclient.ResourceOperationResult{Objects: objects}}
@@ -189,23 +189,23 @@ func TestServiceApplyPersistsClusterScopedResourcesInInventory(t *testing.T) {
 		YAMLContent: `apiVersion: v1
 kind: Namespace
 metadata:
-  name: novaobs-system
+  name: novaapm-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: novaobs-logs-agent
+  name: novaapm-logs-agent
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: novaobs-logs-agent
+  name: novaapm-logs-agent
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: novaobs-logs-agent
-  namespace: novaobs-system`,
+  name: novaapm-logs-agent
+  namespace: novaapm-system`,
 	}
 	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)
 	require.NoError(t, err)
@@ -223,19 +223,19 @@ metadata:
 		ClusterID:  "prod",
 		APIVersion: "rbac.authorization.k8s.io/v1",
 		Kind:       "ClusterRole",
-		Name:       "novaobs-logs-agent",
+		Name:       "novaapm-logs-agent",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "", clusterRole.Namespace)
 	daemonSet, err := inventory.Find(context.Background(), ResourceIdentity{
 		ClusterID:  "prod",
-		Namespace:  "novaobs-system",
+		Namespace:  "novaapm-system",
 		APIVersion: "apps/v1",
 		Kind:       "DaemonSet",
-		Name:       "novaobs-logs-agent",
+		Name:       "novaapm-logs-agent",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "novaobs-system", daemonSet.Namespace)
+	require.Equal(t, "novaapm-system", daemonSet.Namespace)
 }
 
 func TestServiceBlocksPreviewForReadOnlyCluster(t *testing.T) {
@@ -430,8 +430,8 @@ func TestServiceApplyPropagatesInternalForceConflicts(t *testing.T) {
 		Objects: []kubeclient.OperationObject{{
 			APIVersion: "v1",
 			Kind:       "ConfigMap",
-			Namespace:  "novaobs-system",
-			Name:       "novaobs-logs-agent-config",
+			Namespace:  "novaapm-system",
+			Name:       "novaapm-logs-agent-config",
 			AfterHash:  "after-hash",
 		}},
 	}}
@@ -439,8 +439,8 @@ func TestServiceApplyPropagatesInternalForceConflicts(t *testing.T) {
 		Objects: []kubeclient.OperationObject{{
 			APIVersion: "v1",
 			Kind:       "ConfigMap",
-			Namespace:  "novaobs-system",
-			Name:       "novaobs-logs-agent-config",
+			Namespace:  "novaapm-system",
+			Name:       "novaapm-logs-agent-config",
 		}},
 	}}
 	svc := NewService(NewMemoryReader(nil), allowDeploymentAuthorizer{}, audit.NewService(audit.NewMemoryStore()), dryRunner, applier, nil)
@@ -450,8 +450,8 @@ func TestServiceApplyPropagatesInternalForceConflicts(t *testing.T) {
 		YAMLContent: `apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: novaobs-logs-agent-config
-  namespace: novaobs-system`,
+  name: novaapm-logs-agent-config
+  namespace: novaapm-system`,
 	}
 
 	preview, err := svc.Preview(context.Background(), platformrbac.Subject{ID: "user-1", Type: "user"}, req)

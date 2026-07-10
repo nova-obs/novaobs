@@ -2,9 +2,10 @@ package servicecatalog
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
 
 	"github.com/stretchr/testify/require"
 )
@@ -33,6 +34,57 @@ func TestRepositoryCreatesAndListsServices(t *testing.T) {
 	require.Equal(t, "payment-gateway", services[0].Name)
 }
 
+func TestProductRepositoryGeneratesUniqueProjectIDs(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewProductRepository(store.Products())
+	ctx := context.Background()
+
+	first, err := repo.Create(ctx, Product{ID: "client-product-id", Name: "commerce", ProjectID: "1", Status: "disabled"})
+	require.NoError(t, err)
+	second, err := repo.Create(ctx, Product{Name: "payments"})
+	require.NoError(t, err)
+
+	requireValidTenantID(t, first.ProjectID)
+	require.NotEqual(t, "client-product-id", first.ID)
+	require.Equal(t, "active", first.Status)
+	require.NotEqual(t, "1", first.ProjectID)
+	require.NotEqual(t, first.ProjectID, second.ProjectID)
+}
+
+func TestServicesInSameProductShareProjectTenant(t *testing.T) {
+	store := memstore.NewStore()
+	products := NewProductRepository(store.Products())
+	repo := NewRepository(store.Services(), store.Products())
+	ctx := context.Background()
+
+	product, err := products.Create(ctx, Product{Name: "commerce"})
+	require.NoError(t, err)
+	first, err := repo.Create(ctx, Service{Name: "orders-api", Environment: "prod", ProductID: product.ID})
+	require.NoError(t, err)
+	second, err := repo.Create(ctx, Service{Name: "payments-api", Environment: "prod", ProductID: product.ID})
+	require.NoError(t, err)
+
+	require.Equal(t, "0", first.AccountID)
+	require.Equal(t, product.ProjectID, first.ProjectID)
+	require.Equal(t, first.ProjectID, second.ProjectID)
+}
+
+func TestProductAwareRepositoryRejectsOrphanService(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services(), store.Products())
+
+	_, err := repo.Create(context.Background(), Service{Name: "orders-api", Environment: "prod"})
+
+	require.ErrorContains(t, err, "所属产品")
+}
+
+func requireValidTenantID(t *testing.T, value string) {
+	t.Helper()
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	require.NoError(t, err)
+	require.NotZero(t, parsed)
+}
+
 func TestRepositoryRejectsDuplicateServiceIdentity(t *testing.T) {
 	store := memstore.NewStore()
 	repo := NewRepository(store.Services())
@@ -53,7 +105,7 @@ func TestRepositoryRejectsDuplicateServiceIdentity(t *testing.T) {
 		Namespace:   "payments",
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "服务已存在")
+	require.Contains(t, err.Error(), "服务名称已存在")
 }
 
 func TestRepositoryRejectsUnsupportedServiceIdentityType(t *testing.T) {
@@ -107,6 +159,18 @@ func TestRepositoryUpdatesManualService(t *testing.T) {
 	require.True(t, updated.UpdatedAt.After(svc.UpdatedAt) || updated.UpdatedAt.Equal(svc.UpdatedAt))
 }
 
+func TestRepositoryRejectsServiceNameChange(t *testing.T) {
+	store := memstore.NewStore()
+	repo := NewRepository(store.Services())
+	service, err := repo.Create(context.Background(), Service{Name: "orders-api", Environment: "prod"})
+	require.NoError(t, err)
+	changedName := "payments-api"
+
+	_, err = repo.Update(context.Background(), service.ID, UpdateRequest{Name: &changedName})
+
+	require.ErrorContains(t, err, "service.name 创建后不可修改")
+}
+
 func TestRepositorySoftDeletesServiceWhenNoBlockingDependencies(t *testing.T) {
 	store := memstore.NewStore()
 	repo := NewRepository(store.Services())
@@ -128,9 +192,24 @@ func TestRepositorySoftDeletesServiceWhenNoBlockingDependencies(t *testing.T) {
 	require.Len(t, services, 1)
 	require.Equal(t, svc.ID, services[0].ID)
 
-	recreated, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	_, err = repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	require.ErrorContains(t, err, "服务名称已存在")
+}
+
+func TestProductServiceNameIsNotReusedAfterDeletion(t *testing.T) {
+	store := memstore.NewStore()
+	products := NewProductRepository(store.Products())
+	product, err := products.Create(context.Background(), Product{Name: "commerce"})
 	require.NoError(t, err)
-	require.NotEqual(t, svc.ID, recreated.ID)
+	repo := NewRepository(store.Services(), store.Products())
+	service, err := repo.Create(context.Background(), Service{ProductID: product.ID, Name: "orders-api", Environment: "prod"})
+	require.NoError(t, err)
+	_, err = repo.Delete(context.Background(), service.ID, DeleteDependencies{})
+	require.NoError(t, err)
+
+	_, err = repo.Create(context.Background(), Service{ProductID: product.ID, Name: "orders-api", Environment: "prod"})
+
+	require.ErrorContains(t, err, "服务名称已存在")
 }
 
 func TestRepositoryRejectsDeletingServiceWithBlockingDependencies(t *testing.T) {

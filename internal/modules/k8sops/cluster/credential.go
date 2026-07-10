@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/platform/secret"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/platform/secret"
 )
 
 const ClusterCredentialSecretType = "k8s.cluster-credential"

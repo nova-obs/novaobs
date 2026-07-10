@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )

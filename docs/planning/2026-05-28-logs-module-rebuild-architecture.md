@@ -1,4 +1,4 @@
-# NovaObs Logs 模块重构架构草案
+# NovaAPM Logs 模块重构架构草案
 
 > 状态说明：本文是 2026-05-28 的重构草案，部分内容已被当前实现演进替代。当前运行代码以 `K8s / VM` 两类接入来源、`VL / ES / Kafka` 日志下游端点、自动派生采集域、同一 K8s 采集域多服务命名 `logs/<service>` pipeline 为准；不要再按草案中的 `k8s_hostpath`、VL-only 或手选 AgentGroup 语义实现新功能。
 
@@ -271,7 +271,7 @@ GET /api/v1/logs/explore/sample?service_id=...&endpoint_id=...
 说明：
 
 - Explore 不直接暴露复杂 Pipeline 配置。
-- 查询语法由 VMUI 承担，NovaObs 只负责服务上下文和端点选择。
+- 查询语法由 VMUI 承担，NovaAPM 只负责服务上下文和端点选择。
 - 日志分析页不放服务列表，不铺 Agent、告警、端点等状态卡；这些状态进入服务详情页或对应子模块。
 
 ### 采集 Agent 运维

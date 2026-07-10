@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	"novaobs/pkg/response"
+	"novaapm/internal/platform/authctx"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
 
-const SessionCookieName = "novaobs_session"
+const SessionCookieName = "novaapm_session"
 
 func LoginHandler(service *Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {

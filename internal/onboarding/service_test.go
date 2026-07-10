@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
 )

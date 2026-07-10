@@ -3,8 +3,8 @@ package metrics
 import (
 	"time"
 
-	obsendpoint "novaobs/internal/observability/endpoint"
-	"novaobs/internal/servicecatalog"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	"novaapm/internal/servicecatalog"
 )
 
 const (

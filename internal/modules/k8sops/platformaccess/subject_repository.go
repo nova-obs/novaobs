@@ -3,8 +3,8 @@ package platformaccess
 import (
 	"context"
 
-	"novaobs/internal/database"
-	"novaobs/internal/platform/iam"
+	"novaapm/internal/database"
+	"novaapm/internal/platform/iam"
 )
 
 type MemorySubjectRepository struct {

@@ -44,7 +44,7 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	if cfg.Secret.Key == "" {
-		cfg.Secret.Key = os.Getenv("NOVAOBS_SECRET_KEY")
+		cfg.Secret.Key = os.Getenv("NOVAAPM_SECRET_KEY")
 	}
 	return cfg, cfg.Validate()
 }
@@ -63,10 +63,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("database.uri 不能为空")
 	}
 	if c.Secret.Key == "" {
-		return fmt.Errorf("NOVAOBS_SECRET_KEY 不能为空")
+		return fmt.Errorf("NOVAAPM_SECRET_KEY 不能为空")
 	}
 	if len([]byte(c.Secret.Key)) != 32 {
-		return fmt.Errorf("NOVAOBS_SECRET_KEY 长度必须为 32 字节")
+		return fmt.Errorf("NOVAAPM_SECRET_KEY 长度必须为 32 字节")
 	}
 	return nil
 }

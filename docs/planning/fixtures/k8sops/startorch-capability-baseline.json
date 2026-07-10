@@ -4,7 +4,7 @@
     "backend": "startorch",
     "frontend": "u8s-front",
     "route_prefix": "/api",
-    "novaobs_route_prefix": "/api/v1/k8s"
+    "novaapm_route_prefix": "/api/v1/k8s"
   },
   "identity_contract": {
     "resource_identity": [
@@ -43,7 +43,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/dashboard?cluster_id=prod",
+      "novaapm_api": "GET /api/v1/k8s/dashboard?cluster_id=prod",
       "rbac": {
         "resource": "k8s.dashboard",
         "action": "read",
@@ -76,7 +76,7 @@
         "code": "invalid_input",
         "message": "invalid pagination"
       },
-      "novaobs_api": "GET /api/v1/k8s/clusters?q=prod&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/clusters?q=prod&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.cluster",
         "action": "read",
@@ -102,7 +102,7 @@
         "code": "invalid_kubeconfig",
         "message": "cluster connectivity check failed"
       },
-      "novaobs_api": "POST /api/v1/k8s/clusters",
+      "novaapm_api": "POST /api/v1/k8s/clusters",
       "rbac": {
         "resource": "k8s.cluster",
         "action": "create",
@@ -129,7 +129,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "PATCH /api/v1/k8s/clusters/prod",
+      "novaapm_api": "PATCH /api/v1/k8s/clusters/prod",
       "rbac": {
         "resource": "k8s.cluster",
         "action": "update",
@@ -153,7 +153,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/clusters/prod",
+      "novaapm_api": "DELETE /api/v1/k8s/clusters/prod",
       "rbac": {
         "resource": "k8s.cluster",
         "action": "delete",
@@ -178,7 +178,7 @@
         "code": "invalid_kubeconfig",
         "message": "cluster connectivity check failed"
       },
-      "novaobs_api": "POST /api/v1/k8s/clusters/connectivity-check",
+      "novaapm_api": "POST /api/v1/k8s/clusters/connectivity-check",
       "rbac": {
         "resource": "k8s.cluster",
         "action": "preview",
@@ -210,7 +210,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/namespaces?cluster_id=prod&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/namespaces?cluster_id=prod&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.namespace",
         "action": "read",
@@ -234,7 +234,7 @@
         "code": "namespace_exists",
         "message": "namespace already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/namespaces",
+      "novaapm_api": "POST /api/v1/k8s/namespaces",
       "rbac": {
         "resource": "k8s.namespace",
         "action": "create",
@@ -258,7 +258,7 @@
         "code": "namespace_not_found",
         "message": "namespace not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/namespaces/orders?cluster_id=prod",
+      "novaapm_api": "DELETE /api/v1/k8s/namespaces/orders?cluster_id=prod",
       "rbac": {
         "resource": "k8s.namespace",
         "action": "delete",
@@ -294,7 +294,7 @@
         "code": "permission_denied",
         "message": "permission denied"
       },
-      "novaobs_api": "GET /api/v1/k8s/resources?cluster_id=prod&namespace=orders&kind=Deployment&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/resources?cluster_id=prod&namespace=orders&kind=Deployment&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.resource",
         "action": "read",
@@ -320,7 +320,7 @@
         "code": "resource_not_found",
         "message": "resource not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "novaapm_api": "GET /api/v1/k8s/resources/yaml?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
       "rbac": {
         "resource": "k8s.resource",
         "action": "read",
@@ -349,7 +349,7 @@
         "code": "pod_not_found",
         "message": "pod not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-abc&container=app",
+      "novaapm_api": "GET /api/v1/k8s/pod-logs?cluster_id=prod&namespace=orders&pod=orders-api-abc&container=app",
       "rbac": {
         "resource": "k8s.resource",
         "action": "read",
@@ -376,7 +376,7 @@
         "code": "resource_not_found",
         "message": "resource not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/resources?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/resources?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
       "rbac": {
         "resource": "k8s.resource",
         "action": "delete",
@@ -405,7 +405,7 @@
         "code": "permission_denied",
         "message": "permission denied"
       },
-      "novaobs_api": "GET /api/v1/k8s/runtime-groups?cluster_id=prod&namespace=orders",
+      "novaapm_api": "GET /api/v1/k8s/runtime-groups?cluster_id=prod&namespace=orders",
       "rbac": {
         "resource": "k8s.resource",
         "action": "read",
@@ -431,7 +431,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/live-namespaces?cluster_id=prod",
+      "novaapm_api": "GET /api/v1/k8s/live-namespaces?cluster_id=prod",
       "rbac": {
         "resource": "k8s.namespace",
         "action": "read",
@@ -463,7 +463,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.service-account",
         "action": "read",
@@ -488,7 +488,7 @@
         "code": "service_account_exists",
         "message": "service account already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/service-accounts",
+      "novaapm_api": "POST /api/v1/k8s/service-accounts",
       "rbac": {
         "resource": "k8s.service-account",
         "action": "create",
@@ -513,7 +513,7 @@
         "code": "service_account_not_found",
         "message": "service account not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&name=orders-reader&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/service-accounts?cluster_id=prod&namespace=orders&name=orders-reader&uid=",
       "rbac": {
         "resource": "k8s.service-account",
         "action": "delete",
@@ -545,7 +545,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/rbac/roles?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/rbac/roles?cluster_id=prod&namespace=orders&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "read",
@@ -570,7 +570,7 @@
         "code": "role_exists",
         "message": "role already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/roles",
+      "novaapm_api": "POST /api/v1/k8s/rbac/roles",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "create",
@@ -595,7 +595,7 @@
         "code": "role_not_found",
         "message": "role not found"
       },
-      "novaobs_api": "PUT /api/v1/k8s/rbac/roles",
+      "novaapm_api": "PUT /api/v1/k8s/rbac/roles",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -625,7 +625,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders",
+      "novaapm_api": "GET /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "read",
@@ -651,7 +651,7 @@
         "code": "role_binding_exists",
         "message": "role binding already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings",
+      "novaapm_api": "POST /api/v1/k8s/rbac/role-bindings",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "create",
@@ -676,7 +676,7 @@
         "code": "role_binding_not_found",
         "message": "role binding not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders&kind=RoleBinding&name=orders-reader-binding&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/rbac/role-bindings?cluster_id=prod&namespace=orders&kind=RoleBinding&name=orders-reader-binding&uid=",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "delete",
@@ -704,7 +704,7 @@
         "code": "role_binding_not_found",
         "message": "role binding not found"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings/bind",
+      "novaapm_api": "POST /api/v1/k8s/rbac/role-bindings/bind",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -732,7 +732,7 @@
         "code": "role_binding_not_found",
         "message": "role binding not found"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/role-bindings/unbind",
+      "novaapm_api": "POST /api/v1/k8s/rbac/role-bindings/unbind",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -761,7 +761,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/rbac/cluster-roles?cluster_id=prod",
+      "novaapm_api": "GET /api/v1/k8s/rbac/cluster-roles?cluster_id=prod",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "read",
@@ -785,7 +785,7 @@
         "code": "cluster_role_exists",
         "message": "cluster role already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-roles",
+      "novaapm_api": "POST /api/v1/k8s/rbac/cluster-roles",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "create",
@@ -809,7 +809,7 @@
         "code": "cluster_role_not_found",
         "message": "cluster role not found"
       },
-      "novaobs_api": "PUT /api/v1/k8s/rbac/cluster-roles",
+      "novaapm_api": "PUT /api/v1/k8s/rbac/cluster-roles",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -833,7 +833,7 @@
         "code": "cluster_role_not_found",
         "message": "cluster role not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/rbac/cluster-roles?cluster_id=prod&kind=ClusterRole&name=view&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/rbac/cluster-roles?cluster_id=prod&kind=ClusterRole&name=view&uid=",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "delete",
@@ -862,7 +862,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod",
+      "novaapm_api": "GET /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "read",
@@ -887,7 +887,7 @@
         "code": "cluster_role_binding_exists",
         "message": "cluster role binding already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings",
+      "novaapm_api": "POST /api/v1/k8s/rbac/cluster-role-bindings",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "create",
@@ -911,7 +911,7 @@
         "code": "cluster_role_binding_not_found",
         "message": "cluster role binding not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod&kind=ClusterRoleBinding&name=view-binding&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/rbac/cluster-role-bindings?cluster_id=prod&kind=ClusterRoleBinding&name=view-binding&uid=",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "delete",
@@ -941,7 +941,7 @@
         "code": "cluster_role_binding_not_found",
         "message": "cluster role binding not found"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/bind",
+      "novaapm_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/bind",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -971,7 +971,7 @@
         "code": "cluster_role_binding_not_found",
         "message": "cluster role binding not found"
       },
-      "novaobs_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/unbind",
+      "novaapm_api": "POST /api/v1/k8s/rbac/cluster-role-bindings/unbind",
       "rbac": {
         "resource": "k8s.rbac",
         "action": "update",
@@ -999,7 +999,7 @@
         "code": "permission_denied",
         "message": "permission denied"
       },
-      "novaobs_api": "POST /api/v1/k8s/kubeconfigs",
+      "novaapm_api": "POST /api/v1/k8s/kubeconfigs",
       "rbac": {
         "resource": "k8s.kubeconfig",
         "action": "export",
@@ -1031,7 +1031,7 @@
         "code": "invalid_input",
         "message": "invalid template type"
       },
-      "novaobs_api": "GET /api/v1/k8s/templates?template_type=Deployment&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/templates?template_type=Deployment&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.template",
         "action": "read",
@@ -1056,7 +1056,7 @@
         "code": "template_exists",
         "message": "template already exists"
       },
-      "novaobs_api": "POST /api/v1/k8s/templates",
+      "novaapm_api": "POST /api/v1/k8s/templates",
       "rbac": {
         "resource": "k8s.template",
         "action": "create",
@@ -1080,7 +1080,7 @@
         "code": "template_not_found",
         "message": "template not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/templates/tpl-deployment",
+      "novaapm_api": "GET /api/v1/k8s/templates/tpl-deployment",
       "rbac": {
         "resource": "k8s.template",
         "action": "read",
@@ -1104,7 +1104,7 @@
         "code": "template_not_found",
         "message": "template not found"
       },
-      "novaobs_api": "PATCH /api/v1/k8s/templates/tpl-deployment",
+      "novaapm_api": "PATCH /api/v1/k8s/templates/tpl-deployment",
       "rbac": {
         "resource": "k8s.template",
         "action": "update",
@@ -1127,7 +1127,7 @@
         "code": "template_not_found",
         "message": "template not found"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/templates/tpl-deployment",
+      "novaapm_api": "DELETE /api/v1/k8s/templates/tpl-deployment",
       "rbac": {
         "resource": "k8s.template",
         "action": "delete",
@@ -1153,7 +1153,7 @@
         "code": "render_failed",
         "message": "template render failed"
       },
-      "novaobs_api": "POST /api/v1/k8s/templates/render",
+      "novaapm_api": "POST /api/v1/k8s/templates/render",
       "rbac": {
         "resource": "k8s.template",
         "action": "preview",
@@ -1176,7 +1176,7 @@
         "code": "invalid_input",
         "message": "invalid template type"
       },
-      "novaobs_api": "GET /api/v1/k8s/templates/base?template_type=Deployment",
+      "novaapm_api": "GET /api/v1/k8s/templates/base?template_type=Deployment",
       "rbac": {
         "resource": "k8s.template",
         "action": "read",
@@ -1204,7 +1204,7 @@
         "code": "apply_failed",
         "message": "deployment apply failed"
       },
-      "novaobs_api": "POST /api/v1/k8s/deployments",
+      "novaapm_api": "POST /api/v1/k8s/deployments",
       "rbac": {
         "resource": "k8s.deployment",
         "action": "deploy",
@@ -1231,7 +1231,7 @@
         "code": "delete_failed",
         "message": "deployment delete failed"
       },
-      "novaobs_api": "DELETE /api/v1/k8s/deployments?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
+      "novaapm_api": "DELETE /api/v1/k8s/deployments?cluster_id=prod&namespace=orders&api_version=apps/v1&kind=Deployment&name=orders-api&uid=",
       "rbac": {
         "resource": "k8s.deployment",
         "action": "delete",
@@ -1265,7 +1265,7 @@
         "code": "invalid_input",
         "message": "invalid pagination"
       },
-      "novaobs_api": "GET /api/v1/k8s/deployment-history?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/deployment-history?cluster_id=prod&namespace=orders&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.deployment",
         "action": "read",
@@ -1295,7 +1295,7 @@
         "code": "history_not_found",
         "message": "deploy history not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/deployment-history/detail?cluster_id=prod&namespace=orders&name=orders-api",
+      "novaapm_api": "GET /api/v1/k8s/deployment-history/detail?cluster_id=prod&namespace=orders&name=orders-api",
       "rbac": {
         "resource": "k8s.deployment",
         "action": "read",
@@ -1329,7 +1329,7 @@
         "code": "invalid_input",
         "message": "invalid pagination"
       },
-      "novaobs_api": "GET /api/v1/k8s/audit-events?cluster_id=prod&namespace=orders&page=1&page_size=20",
+      "novaapm_api": "GET /api/v1/k8s/audit-events?cluster_id=prod&namespace=orders&page=1&page_size=20",
       "rbac": {
         "resource": "k8s.audit",
         "action": "read",
@@ -1359,7 +1359,7 @@
         "code": "cluster_not_found",
         "message": "cluster not found"
       },
-      "novaobs_api": "GET /api/v1/k8s/certificates?cluster_id=prod",
+      "novaapm_api": "GET /api/v1/k8s/certificates?cluster_id=prod",
       "rbac": {
         "resource": "k8s.certificate",
         "action": "read",
@@ -1386,7 +1386,7 @@
         "code": "exec_failed",
         "message": "kubectl command failed"
       },
-      "novaobs_api": "POST /api/v1/k8s/terminal/exec",
+      "novaapm_api": "POST /api/v1/k8s/terminal/exec",
       "rbac": {
         "resource": "k8s.terminal",
         "action": "exec",

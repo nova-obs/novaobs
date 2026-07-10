@@ -8,16 +8,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/logs"
-	"novaobs/internal/metrics"
-	"novaobs/internal/modules/k8sops"
-	obsendpoint "novaobs/internal/observability/endpoint"
-	platformauth "novaobs/internal/platform/auth"
-	"novaobs/internal/platform/iam"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/alerting"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/logs"
+	"novaapm/internal/metrics"
+	"novaapm/internal/modules/k8sops"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	platformauth "novaapm/internal/platform/auth"
+	"novaapm/internal/platform/iam"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -33,7 +33,7 @@ func TestMetricsAPIRequiresAuthenticatedSubject(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/workspace?service_id=svc-orders", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/products/product-x/services/svc-orders/metrics/workspace", nil)
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
@@ -54,17 +54,18 @@ func TestMetricsAPIServesEndpointsBindingsAndWorkspace(t *testing.T) {
 	require.Equal(t, "pending", nestedString(t, testResult, "data", "status"))
 
 	body := `{"service_id":"` + env.service.ID + `","endpoint_id":"vm-prod","label_match":{"service.name":"orders-api"}}`
-	created := performJSON(t, env.router, http.MethodPost, "/api/v1/metrics/service-bindings", body)
+	bindingsPath := "/api/v1/products/" + env.service.ProductID + "/services/" + env.service.ID + "/metrics/bindings"
+	created := performJSON(t, env.router, http.MethodPost, bindingsPath, body)
 	require.Equal(t, metrics.BindingStatusActive, nestedString(t, created, "data", "binding", "status"))
 	bindingID := nestedString(t, created, "data", "binding", "id")
 
-	patch := performJSON(t, env.router, http.MethodPatch, "/api/v1/metrics/service-bindings/"+bindingID, `{"label_match":{"service.name":"orders-api","namespace":"orders"}}`)
+	patch := performJSON(t, env.router, http.MethodPatch, bindingsPath+"/"+bindingID, `{"label_match":{"service.name":"orders-api","namespace":"orders"}}`)
 	require.Equal(t, "orders", nestedString(t, patch, "data", "binding", "label_match", "namespace"))
 
-	probed := performJSON(t, env.router, http.MethodPost, "/api/v1/metrics/service-bindings/"+bindingID+"/probe", `{}`)
+	probed := performJSON(t, env.router, http.MethodPost, bindingsPath+"/"+bindingID+"/probe", `{}`)
 	require.Equal(t, metrics.ProbeStatusVerified, nestedString(t, probed, "data", "binding", "last_probe_status"))
 
-	workspace := performJSON(t, env.router, http.MethodGet, "/api/v1/metrics/workspace?service_id="+env.service.ID, "")
+	workspace := performJSON(t, env.router, http.MethodGet, "/api/v1/products/"+env.service.ProductID+"/services/"+env.service.ID+"/metrics/workspace", "")
 	require.Equal(t, env.service.ID, nestedString(t, workspace, "data", "active_service_id"))
 	require.Equal(t, "vm-prod", nestedString(t, workspace, "data", "binding", "binding", "endpoint_id"))
 	require.Len(t, nestedValue(t, workspace, "data", "endpoints").([]any), 1)
@@ -73,10 +74,11 @@ func TestMetricsAPIServesEndpointsBindingsAndWorkspace(t *testing.T) {
 func TestMetricsAPIRejectsDuplicateActiveBinding(t *testing.T) {
 	env := newMetricsHTTPTestEnv(t)
 	body := `{"service_id":"` + env.service.ID + `","endpoint_id":"vm-prod","label_match":{"service.name":"orders-api"}}`
-	_ = performJSON(t, env.router, http.MethodPost, "/api/v1/metrics/service-bindings", body)
+	bindingsPath := "/api/v1/products/" + env.service.ProductID + "/services/" + env.service.ID + "/metrics/bindings"
+	_ = performJSON(t, env.router, http.MethodPost, bindingsPath, body)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/service-bindings", bytes.NewBufferString(body))
+	request := httptest.NewRequest(http.MethodPost, bindingsPath, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(recorder, request)
 
@@ -89,7 +91,7 @@ func TestMetricsAPIRejectsMissingEndpoint(t *testing.T) {
 	body := `{"service_id":"` + env.service.ID + `","endpoint_id":"missing","label_match":{"service.name":"orders-api"}}`
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/service-bindings", bytes.NewBufferString(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/products/"+env.service.ProductID+"/services/"+env.service.ID+"/metrics/bindings", bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(recorder, request)
 
@@ -99,7 +101,7 @@ func TestMetricsAPIRejectsMissingEndpoint(t *testing.T) {
 
 func TestMetricsAlertRuleAPITestAndCreateForceMetricsSignal(t *testing.T) {
 	env := newMetricsHTTPTestEnv(t)
-	binding := performJSON(t, env.router, http.MethodPost, "/api/v1/metrics/service-bindings", `{"service_id":"`+env.service.ID+`","endpoint_id":"vm-prod","tenant":{"account_id":"1001","project_id":"2001"},"label_match":{"service.name":"orders-api"},"base_promql":"service:requests:rate5m{service=\"orders-api\"}"}`)
+	binding := performJSON(t, env.router, http.MethodPost, "/api/v1/products/"+env.service.ProductID+"/services/"+env.service.ID+"/metrics/bindings", `{"endpoint_id":"vm-prod","tenant":{"account_id":"1001","project_id":"2001"},"label_match":{"service.name":"orders-api"},"base_promql":"service:requests:rate5m{service=\"orders-api\"}"}`)
 	bindingID := nestedString(t, binding, "data", "binding", "id")
 	spec := metricsAlertRuleSpecJSON(bindingID)
 
@@ -135,8 +137,12 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
 	store := memstore.NewStore()
-	serviceRepo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce"})
+	require.NoError(t, err)
+	serviceRepo := servicecatalog.NewRepository(store.Services(), store.Products())
 	service, err := serviceRepo.Create(ctx, servicecatalog.Service{
+		ProductID:   product.ID,
 		Name:        "orders-api",
 		DisplayName: "订单服务",
 		Environment: "production",
@@ -151,8 +157,9 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 		Name:        "vm-prod",
 		Kind:        obsendpoint.KindVictoriaMetrics,
 		SignalTypes: []string{obsendpoint.SignalTypeMetrics},
-		QueryURL:    "http://victoriametrics:8428/api/v1/query",
-		VMUIURL:     "http://victoriametrics:8428/vmui",
+		WriteURL:    "http://vminsert:8480/insert/0/prometheus/api/v1/write",
+		QueryURL:    "http://vmselect:8481/select/0/prometheus",
+		VMUIURL:     "http://vmselect:8481/select/0/vmui/",
 		Status:      "active",
 	}))
 	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
@@ -165,7 +172,7 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 	})
 	endpointService := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacService))
 	alertRepository := alerting.NewStoreRepository(store.Alerting())
-	alertScopeResolver := alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings())
+	alertScopeResolver := alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products())
 	alertService := alerting.NewService(alerting.Dependencies{
 		Repository:    alertRepository,
 		Authorizer:    rbacService,
@@ -178,6 +185,7 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 	})
 	router := NewRouter(Dependencies{
 		Store:                  store,
+		ProductRepo:            productRepo,
 		ServiceRepo:            serviceRepo,
 		K8sOpsModule:           k8sops.NewModule(),
 		ObservabilityEndpoints: endpointService,

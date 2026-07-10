@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 const (
@@ -87,7 +87,7 @@ func (e KubectlExecutor) Exec(ctx context.Context, subject platformrbac.Subject,
 }
 
 func writeTemporaryKubeconfig(tempDir string, clusterID string, kubeconfig []byte) (string, func(), error) {
-	file, err := os.CreateTemp(tempDir, "novaobs-kubeconfig-"+safeFilename(clusterID)+"-*.yaml")
+	file, err := os.CreateTemp(tempDir, "novaapm-kubeconfig-"+safeFilename(clusterID)+"-*.yaml")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create temporary kubeconfig: %w", err)
 	}

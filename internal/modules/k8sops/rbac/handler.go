@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/response"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

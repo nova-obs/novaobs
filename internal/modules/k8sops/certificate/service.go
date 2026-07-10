@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/platform/secret"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/platform/secret"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -129,7 +129,7 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req C
 		SecretID:    secretID,
 		NotAfter:    notAfter,
 		Status:      certificateStatus(notAfter),
-		Source:      "novaobs",
+		Source:      "novaapm",
 		Certificate: req.CertificatePEM,
 		PrivateKey:  req.PrivateKeyPEM,
 	}

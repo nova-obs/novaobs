@@ -127,12 +127,12 @@ func (i EventIngestor) validateRule(ctx context.Context, instance AlertInstance)
 	rule, err := i.rules.GetRule(ctx, instance.RuleID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return invalidSpec("labels.novaobs_rule_id", "告警事件引用的规则不存在")
+			return invalidSpec("labels.novaapm_rule_id", "告警事件引用的规则不存在")
 		}
 		return err
 	}
 	if rule.State != RuleStateEnabled {
-		return invalidSpec("labels.novaobs_rule_id", "告警事件引用的规则未启用")
+		return invalidSpec("labels.novaapm_rule_id", "告警事件引用的规则未启用")
 	}
 	if rule.Spec.Scope.ServiceID != instance.ServiceID {
 		return invalidSpec("labels.service_id", "告警事件服务身份与规则范围不一致")
@@ -141,7 +141,7 @@ func (i EventIngestor) validateRule(ctx context.Context, instance AlertInstance)
 }
 
 func normalizeAlertIngestEvent(alert AlertIngestAlert, receivedAt time.Time) (AlertInstance, AlertEvent, error) {
-	ruleID := strings.TrimSpace(alert.Labels["novaobs_rule_id"])
+	ruleID := strings.TrimSpace(alert.Labels["novaapm_rule_id"])
 	serviceID := strings.TrimSpace(alert.Labels["service_id"])
 	if ruleID == "" || serviceID == "" || len(ruleID) > 128 || len(serviceID) > 128 {
 		return AlertInstance{}, AlertEvent{}, invalidSpec("labels", "告警事件缺少规则或服务身份")
@@ -175,7 +175,7 @@ func normalizeAlertIngestEvent(alert AlertIngestAlert, receivedAt time.Time) (Al
 		occurredAt = receivedAt
 	}
 	eventID := eventIdentity(fingerprint, state, alert.StartsAt, alert.EndsAt)
-	runtimeID := strings.TrimSpace(alert.Labels["novaobs_runtime_id"])
+	runtimeID := strings.TrimSpace(alert.Labels["novaapm_runtime_id"])
 	instance := AlertInstance{
 		Fingerprint: fingerprint, RuleID: ruleID, ServiceID: serviceID, State: state,
 		Labels: cloneStringMap(alert.Labels), Annotations: cloneStringMap(alert.Annotations),

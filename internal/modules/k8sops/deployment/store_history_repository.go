@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )

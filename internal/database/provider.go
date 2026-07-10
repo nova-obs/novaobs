@@ -13,6 +13,7 @@ var (
 
 // Store is the top-level database abstraction.
 type Store interface {
+	Products() ProductStore
 	Services() ServiceStore
 	ServiceTargets() ServiceTargetStore
 	CollectorGroups() CollectorGroupStore
@@ -50,6 +51,13 @@ type Store interface {
 	K8sDeploymentInventory() K8sDeploymentInventoryStore
 	K8sDeploymentHistory() K8sDeploymentHistoryStore
 	Close(ctx context.Context) error
+}
+
+type ProductStore interface {
+	Insert(ctx context.Context, product interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, product interface{}) error
 }
 
 // ServiceStore manages service catalog entries.

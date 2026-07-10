@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/platform/secret"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/platform/secret"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

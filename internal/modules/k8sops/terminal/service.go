@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 var (
@@ -159,7 +159,7 @@ func (dryRunExecutor) Exec(_ context.Context, subject platformrbac.Subject, req 
 		Status:   "accepted",
 		Verb:     parsed.Verb,
 		Args:     append([]string{}, parsed.Args...),
-		Output:   fmt.Sprintf("NovaObs 已校验只读命令，等待接入受控 Kubernetes executor：kubectl %s", strings.Join(append([]string{parsed.Verb}, parsed.Args...), " ")),
+		Output:   fmt.Sprintf("NovaAPM 已校验只读命令，等待接入受控 Kubernetes executor：kubectl %s", strings.Join(append([]string{parsed.Verb}, parsed.Args...), " ")),
 		ExitCode: 0,
 		Mode:     "dry_run",
 	}, nil

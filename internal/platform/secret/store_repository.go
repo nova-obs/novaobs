@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )

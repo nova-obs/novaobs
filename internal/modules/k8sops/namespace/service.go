@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/rbac"
 )
 
 var (

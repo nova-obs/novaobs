@@ -12,23 +12,24 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/collectorconfig"
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/logs"
-	"novaobs/internal/modules/k8sops"
-	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	obsruntime "novaobs/internal/observability/runtime"
-	"novaobs/internal/onboarding"
-	"novaobs/internal/opamp"
-	"novaobs/internal/platform/audit"
-	platformauth "novaobs/internal/platform/auth"
-	"novaobs/internal/platform/iam"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/internal/collectorconfig"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/logs"
+	"novaapm/internal/modules/k8sops"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	k8sopsresource "novaapm/internal/modules/k8sops/resource"
+	obsruntime "novaapm/internal/observability/runtime"
+	"novaapm/internal/onboarding"
+	"novaapm/internal/opamp"
+	"novaapm/internal/platform/audit"
+	platformauth "novaapm/internal/platform/auth"
+	"novaapm/internal/platform/iam"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/open-telemetry/opamp-go/protobufs"
@@ -38,6 +39,7 @@ import (
 type testEnv struct {
 	router  http.Handler
 	store   *memstore.Store
+	product servicecatalog.Product
 	service servicecatalog.Service
 	group   collectormanagement.CollectorGroup
 	manager *opamp.Manager
@@ -53,7 +55,7 @@ func (testRuntimeDeploymentService) Preview(_ context.Context, _ platformrbac.Su
 		ConfirmationToken: "confirm-runtime",
 		AuditID:           "audit-runtime-preview",
 		Resources: []k8sopsdeployment.ResourceIdentity{{
-			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system",
+			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaapm-system",
 		}},
 	}, nil
 }
@@ -65,9 +67,27 @@ func (testRuntimeDeploymentService) Apply(_ context.Context, _ platformrbac.Subj
 		PreviewID: req.PreviewID,
 		AuditID:   "audit-runtime-apply",
 		Resources: []k8sopsdeployment.ResourceIdentity{{
-			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system",
+			ClusterID: req.ClusterID, APIVersion: "v1", Kind: "Namespace", Name: "novaapm-system",
 		}},
 	}, nil
+}
+
+func testLogsCollectorRuntimeResources(clusterID string, namespace string) []k8sopsresource.ResourceSummary {
+	now := time.Now().UTC()
+	refs := []k8sopsresource.Identity{
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "v1", Kind: "Namespace", Name: namespace, UID: "logs-runtime-namespace"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "novaapm-logs-agent", UID: "logs-runtime-cluster-role"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: "novaapm-logs-agent", UID: "logs-runtime-cluster-role-binding"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "v1", Kind: "ServiceAccount", Name: "novaapm-logs-agent", UID: "logs-runtime-service-account"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "v1", Kind: "ConfigMap", Name: "novaapm-logs-agent-base-config", UID: "logs-runtime-base-config"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "v1", Kind: "Service", Name: "novaapm-logs-agent", UID: "logs-runtime-service"},
+		{ClusterID: clusterID, Namespace: namespace, APIVersion: "apps/v1", Kind: "DaemonSet", Name: "novaapm-logs-agent", UID: "logs-runtime-daemonset"},
+	}
+	items := make([]k8sopsresource.ResourceSummary, 0, len(refs))
+	for _, ref := range refs {
+		items = append(items, k8sopsresource.ResourceSummary{Identity: ref, Status: "active", UpdatedAt: now})
+	}
+	return items
 }
 
 func TestErrorLogMiddlewareLogsServerErrorsWithCause(t *testing.T) {
@@ -153,8 +173,12 @@ func newTestRouter(t *testing.T) testEnv {
 	gin.SetMode(gin.TestMode)
 	store := memstore.NewStore()
 	ctx := context.Background()
-	svcRepo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce", DisplayName: "交易产品"})
+	require.NoError(t, err)
+	svcRepo := servicecatalog.NewRepository(store.Services(), store.Products())
 	svc, err := svcRepo.Create(ctx, servicecatalog.Service{
+		ProductID:   product.ID,
 		Name:        "orders-api",
 		DisplayName: "订单服务",
 		Environment: "production",
@@ -194,9 +218,12 @@ func newTestRouter(t *testing.T) testEnv {
 		rbacSvc,
 	)
 	alertRepository := alerting.NewStoreRepository(store.Alerting())
-	k8sModule := k8sops.NewModuleWithSecurity(nil, nil, nil, k8sopscluster.NewMemoryRepository([]k8sopscluster.Cluster{
-		{ID: "prod-1", Name: "prod-1", Status: "active"},
-	}))
+	k8sModule := k8sops.NewModuleWithSecurity(nil, nil, nil,
+		k8sopscluster.NewMemoryRepository([]k8sopscluster.Cluster{
+			{ID: "prod-1", Name: "prod-1", Status: "active"},
+		}),
+		k8sopsresource.NewMemoryReader(testLogsCollectorRuntimeResources("prod-1", "novaapm-system")),
+	)
 	logsSvc := logs.NewService(
 		store.LogEndpoints(),
 		store.LogSources(),
@@ -218,6 +245,7 @@ func newTestRouter(t *testing.T) testEnv {
 		Endpoints:      store.LogEndpoints(),
 		Runtimes:       store.ObservabilityRuntimes(),
 		Repository:     alertRepository,
+		ScopeResolver:  alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products()),
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
 	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
@@ -228,6 +256,7 @@ func newTestRouter(t *testing.T) testEnv {
 	})
 	router := NewRouter(Dependencies{
 		Store:                  store,
+		ProductRepo:            productRepo,
 		ServiceRepo:            svcRepo,
 		ServiceTargetRepo:      servicecatalog.NewTargetRepository(store.ServiceTargets()),
 		CollectorConfigService: configSvc,
@@ -249,7 +278,7 @@ func newTestRouter(t *testing.T) testEnv {
 		OpAMPManager:       manager,
 		DefaultSubject:     admin,
 	})
-	return testEnv{router: router, store: store, service: svc, group: group, manager: manager}
+	return testEnv{router: router, store: store, product: product, service: svc, group: group, manager: manager}
 }
 
 func TestRouterInjectsDefaultSubjectForK8sOpsWrites(t *testing.T) {
@@ -285,7 +314,7 @@ func TestRouterLogoutClearsSessionCookie(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"status":"logged_out"`)
-	require.Contains(t, recorder.Header().Get("Set-Cookie"), "novaobs_session=")
+	require.Contains(t, recorder.Header().Get("Set-Cookie"), "novaapm_session=")
 	require.Contains(t, recorder.Header().Get("Set-Cookie"), "Max-Age=0")
 }
 
@@ -344,7 +373,7 @@ func TestRouterServesCoreAPIs(t *testing.T) {
 		"/api/v1/services/" + env.service.ID,
 		"/api/v1/services/" + env.service.ID + "/observability-graph",
 		"/api/v1/services/" + env.service.ID + "/onboarding",
-		"/api/v1/logs/onboarding/workspace",
+		"/api/v1/products/" + env.product.ID + "/services/" + env.service.ID + "/logs/workspace",
 		"/api/v1/logs/endpoints",
 		"/api/v1/k8sops/dashboard?cluster_id=prod",
 		"/api/v1/k8s/clusters?q=prod",
@@ -572,7 +601,7 @@ func TestRouterCreatesResources(t *testing.T) {
 		path string
 		body string
 	}{
-		{path: "/api/v1/services", body: `{"name":"inventory-api","environment":"prod","owner_team":"inventory-team","alert_route":"inventory-prod"}`},
+		{path: "/api/v1/products/" + env.product.ID + "/services", body: `{"name":"inventory-api","environment":"prod","owner_team":"inventory-team","alert_route":"inventory-prod"}`},
 		{path: "/api/v1/alerts/rules", body: `{"spec":{"name":"inventory-error-count","scope":{"service_id":"service-inventory","service_name":"inventory-api","log_route_id":"route-inventory","endpoint_id":"vl-prod","account_id":"1","project_id":"1"},"query":{"mode":"contains","expression":"level=error"},"trigger":{"mode":"window","aggregation":"count","operator":"gte","threshold":1,"window":"1m","evaluation_interval":"30s"},"grouping":{"max_instances":100},"notification":{"policy_id":"inventory-oncall","severity":"critical","owner_team":"inventory-team"}}}`},
 	} {
 		recorder := httptest.NewRecorder()
@@ -585,6 +614,24 @@ func TestRouterCreatesResources(t *testing.T) {
 		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body), item.path)
 		require.Equal(t, true, body["success"], item.path)
 	}
+}
+
+func TestRouterCreatesProductThenDerivesServiceTenant(t *testing.T) {
+	env := newTestRouter(t)
+
+	productResponse := performJSON(t, env.router, http.MethodPost, "/api/v1/products", `{"name":"payments","display_name":"支付产品","project_id":"0"}`)
+	productData := productResponse["data"].(map[string]any)
+	productID := productData["id"].(string)
+	projectID := productData["project_id"].(string)
+	require.NotEmpty(t, productID)
+	require.NotEqual(t, "", projectID)
+	require.NotEqual(t, "0", projectID)
+
+	serviceResponse := performJSON(t, env.router, http.MethodPost, "/api/v1/products/"+productID+"/services", `{"name":"payment-api","environment":"prod","account_id":"9527","project_id":"9528"}`)
+	serviceData := serviceResponse["data"].(map[string]any)
+	require.Equal(t, productID, serviceData["product_id"])
+	require.Equal(t, "0", serviceData["account_id"])
+	require.Equal(t, projectID, serviceData["project_id"])
 }
 
 func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
@@ -638,8 +685,12 @@ func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"deployment_manifest_hash":"`+route.Source.DeploymentManifestHash+`"`)
 	require.Contains(t, recorder.Body.String(), `"collector_config_hash":"`+route.Route.CollectorConfigHash+`"`)
 	require.Contains(t, recorder.Body.String(), `"collector_yaml"`)
+	require.Contains(t, recorder.Body.String(), `"collector_config_files"`)
+	require.Contains(t, recorder.Body.String(), `"service_config_path":"services/svc-orders-orders-api-`)
+	require.Contains(t, recorder.Body.String(), `"service_config_yaml"`)
 	require.Contains(t, recorder.Body.String(), "receivers:")
 	require.Contains(t, recorder.Body.String(), "file_log/orders-orders-api")
+	require.Contains(t, recorder.Body.String(), "base.yaml")
 	require.NotContains(t, recorder.Body.String(), "kind: DaemonSet")
 	require.NotContains(t, recorder.Body.String(), "collector.yaml: |")
 }
@@ -657,8 +708,9 @@ func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 		Data logs.LogEndpoint `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
-	require.Equal(t, "9527", created.Data.AccountID)
-	require.Equal(t, "9527", created.Data.ProjectID)
+	require.Empty(t, created.Data.AccountID)
+	require.Empty(t, created.Data.ProjectID)
+	require.NotContains(t, createRecorder.Body.String(), "secret_ref")
 
 	updateBody := `{"name":"vl-prod-fixed","sink_type":"vl","write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs","query_url":"http://victorialogs-fixed:9428/select/logsql/query","vmui_url":"http://victorialogs-fixed:9428/select/vmui","account_id":"9528","project_id":"9529","secret_ref":"secret://vl/prod","scope_type":"global"}`
 	updateRecorder := httptest.NewRecorder()
@@ -670,8 +722,9 @@ func TestRouterUpdatesLogsEndpoint(t *testing.T) {
 	require.Contains(t, updateRecorder.Body.String(), `"id":"`+created.Data.ID+`"`)
 	require.Contains(t, updateRecorder.Body.String(), `"name":"vl-prod-fixed"`)
 	require.Contains(t, updateRecorder.Body.String(), `"write_url":"http://victorialogs-fixed:9428/insert/opentelemetry/v1/logs"`)
-	require.Contains(t, updateRecorder.Body.String(), `"account_id":"9528"`)
-	require.Contains(t, updateRecorder.Body.String(), `"project_id":"9529"`)
+	require.NotContains(t, updateRecorder.Body.String(), "account_id")
+	require.NotContains(t, updateRecorder.Body.String(), "project_id")
+	require.NotContains(t, updateRecorder.Body.String(), "secret_ref")
 }
 
 func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
@@ -688,7 +741,7 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.NoError(t, json.Unmarshal(createRecorder.Body.Bytes(), &created))
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/endpoints/"+created.Data.ID+"/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaapm-api:8080"}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 
@@ -697,7 +750,7 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), `"requires_confirmation":true`)
 	require.Contains(t, publishRecorder.Body.String(), `"manifest_yaml"`)
 	require.Contains(t, publishRecorder.Body.String(), "-datasource.url=http://victorialogs:9428")
-	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaobs-api:8080")
+	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaapm-api:8080")
 }
 
 func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
@@ -714,7 +767,7 @@ func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
 	}))
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/endpoints/vm-prod/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaobs-api:8080"}`))
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/endpoints/vm-prod/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaapm-api:8080"}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 
@@ -729,12 +782,12 @@ func TestRouterDoesNotExposeLegacyLogClusterConfig(t *testing.T) {
 	env := newTestRouter(t)
 
 	getRecorder := httptest.NewRecorder()
-	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/logs/cluster-config?cluster_id=test03&agent_namespace=novaobs-system", nil)
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/logs/cluster-config?cluster_id=test03&agent_namespace=novaapm-system", nil)
 	env.router.ServeHTTP(getRecorder, getRequest)
 	require.Equal(t, http.StatusNotFound, getRecorder.Code)
 
 	putRecorder := httptest.NewRecorder()
-	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/logs/cluster-config", bytes.NewBufferString(`{"cluster_id":"test03","agent_namespace":"novaobs-system","processor_patch":"processors: {}"}`))
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/logs/cluster-config", bytes.NewBufferString(`{"cluster_id":"test03","agent_namespace":"novaapm-system","processor_patch":"processors: {}"}`))
 	putRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(putRecorder, putRequest)
 	require.Equal(t, http.StatusNotFound, putRecorder.Code)
@@ -837,11 +890,11 @@ func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 	t.Helper()
 	now := time.Now().UTC()
 	runtime := obsruntime.Runtime{
-		ID:         "logs-collector:" + env.service.Cluster + ":novaobs-system",
+		ID:         "logs-collector:" + env.service.Cluster + ":novaapm-system",
 		Kind:       obsruntime.KindLogsCollector,
 		SignalType: obsruntime.SignalLogs,
 		ClusterID:  env.service.Cluster,
-		Namespace:  "novaobs-system",
+		Namespace:  "novaapm-system",
 		Status:     obsruntime.StatusReady,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -875,8 +928,9 @@ func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 
 func createVMService(t *testing.T, env testEnv) servicecatalog.Service {
 	t.Helper()
-	repo := servicecatalog.NewRepository(env.store.Services())
+	repo := servicecatalog.NewRepository(env.store.Services(), env.store.Products())
 	service, err := repo.Create(context.Background(), servicecatalog.Service{
+		ProductID:    env.product.ID,
 		Name:         "billing-api",
 		DisplayName:  "billing-api",
 		Environment:  "production",

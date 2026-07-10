@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 )
 
 var ErrUnavailable = errors.New("platform image store unavailable")

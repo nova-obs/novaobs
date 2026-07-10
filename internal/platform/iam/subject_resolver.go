@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 type SubjectResolver struct {

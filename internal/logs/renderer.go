@@ -10,7 +10,7 @@ import (
 	"strings"
 	"text/template"
 
-	platformimages "novaobs/internal/platform/images"
+	platformimages "novaapm/internal/platform/images"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,6 +19,8 @@ import (
 var k8sDaemonSetBundleTemplateSource string
 
 var k8sDaemonSetBundleTemplate = template.Must(template.New("k8s-daemonset-bundle").Parse(k8sDaemonSetBundleTemplateSource))
+
+const k8sLogsAgentName = "novaapm-logs-agent"
 
 type renderInput struct {
 	ServiceName string
@@ -32,6 +34,8 @@ type renderInput struct {
 type renderedRouteConfig struct {
 	ManifestYAML           string
 	CollectorYAML          string
+	CollectorConfigFiles   map[string]string
+	ConfigFileRefs         []LogCollectorConfigFile
 	CollectorConfigHash    string
 	DeploymentManifestYAML string
 	DeploymentManifestHash string
@@ -39,15 +43,34 @@ type renderedRouteConfig struct {
 }
 
 type k8sDaemonSetBundleTemplateData struct {
-	AgentNamespace       string
-	AgentName            string
-	ClusterID            string
-	CollectorGroupID     string
-	CollectorConfigBlock string
+	AgentNamespace   string
+	AgentName        string
+	ClusterID        string
+	CollectorGroupID string
+	ConfigHash       string
+	ConfigMaps       []k8sConfigMapTemplateData
+	ConfigArgs       []string
+	RuntimeLogMounts []k8sRuntimeLogMount
+	OpAMPEnabled     bool
+	OpAMPEndpoint    string
+}
+
+type k8sConfigMapTemplateData struct {
+	Name         string
+	Role         string
+	DataKey      string
+	MountPath    string
+	ContentBlock string
+	ConfigHash   string
+	RouteID      string
+	ServiceID    string
+}
+
+type k8sCollectorConfigBundle struct {
+	CollectorYAML        string
+	CollectorConfigFiles map[string]string
+	ConfigFileRefs       []LogCollectorConfigFile
 	ConfigHash           string
-	RuntimeLogMounts     []k8sRuntimeLogMount
-	OpAMPEnabled         bool
-	OpAMPEndpoint        string
 }
 
 type k8sRuntimeLogMount struct {
@@ -63,19 +86,27 @@ func renderAgentConfig(input renderInput) (string, string) {
 }
 
 func renderK8sCollectorConfigWithHash(inputs []renderInput) (string, string) {
-	yaml, err := renderK8sCollectorConfig(inputs, "")
+	deployment := agentDeploymentOptions{}
+	if len(inputs) > 0 {
+		deployment = inputs[0].Deployment
+	}
+	bundle, err := renderK8sCollectorConfigBundle(inputs, "", deployment)
 	if err != nil {
 		return "", ""
 	}
-	return yaml, hashYAML(yaml)
+	return bundle.CollectorYAML, bundle.ConfigHash
 }
 
 func renderK8sCollectorConfigWithPatchHash(inputs []renderInput, processorPatch string) (string, string, error) {
-	yaml, err := renderK8sCollectorConfig(inputs, processorPatch)
+	deployment := agentDeploymentOptions{}
+	if len(inputs) > 0 {
+		deployment = inputs[0].Deployment
+	}
+	bundle, err := renderK8sCollectorConfigBundle(inputs, processorPatch, deployment)
 	if err != nil {
 		return "", "", err
 	}
-	return yaml, hashYAML(yaml), nil
+	return bundle.CollectorYAML, bundle.ConfigHash, nil
 }
 
 func renderK8sDaemonSetBundle(inputs []renderInput) (string, string) {
@@ -91,16 +122,22 @@ func renderK8sDaemonSetBundleWithHashes(inputs []renderInput, processorPatch str
 }
 
 func renderK8sDaemonSetBundleWithTemplateValues(inputs []renderInput, processorPatch string, templateValues map[string]string) (renderedRouteConfig, error) {
-	collectorYAML, collectorHash, err := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
+	deployment := agentDeploymentOptions{}
+	if len(inputs) > 0 {
+		deployment = inputs[0].Deployment
+	}
+	bundle, err := renderK8sCollectorConfigBundle(inputs, processorPatch, deployment)
 	if err != nil {
 		return renderedRouteConfig{}, err
 	}
-	deploymentManifest := renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, templateValues)
-	yaml := renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, collectorYAML, collectorHash, templateValues)
+	deploymentManifest := renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, placeholderConfigFiles(bundle.CollectorConfigFiles), bundle.ConfigFileRefs, templateValues)
+	yaml := renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, bundle.CollectorConfigFiles, bundle.ConfigFileRefs, bundle.ConfigHash, templateValues)
 	return renderedRouteConfig{
 		ManifestYAML:           yaml,
-		CollectorYAML:          collectorYAML,
-		CollectorConfigHash:    collectorHash,
+		CollectorYAML:          bundle.CollectorYAML,
+		CollectorConfigFiles:   bundle.CollectorConfigFiles,
+		ConfigFileRefs:         bundle.ConfigFileRefs,
+		CollectorConfigHash:    bundle.ConfigHash,
 		DeploymentManifestYAML: deploymentManifest,
 		DeploymentManifestHash: hashYAML(deploymentManifest),
 		RouteIDs:               renderRouteIDs(inputs),
@@ -108,20 +145,18 @@ func renderK8sDaemonSetBundleWithTemplateValues(inputs []renderInput, processorP
 }
 
 func renderK8sCollectorRuntimeBundleWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, inputs []renderInput, processorPatch string, deployment agentDeploymentOptions, templateValues map[string]string) (renderedRouteConfig, error) {
-	collectorYAML, collectorHash, err := renderK8sCollectorConfigWithPatchHash(inputs, processorPatch)
+	bundle, err := renderK8sCollectorConfigBundle(inputs, processorPatch, deployment)
 	if err != nil {
 		return renderedRouteConfig{}, err
 	}
-	if strings.TrimSpace(collectorYAML) == "" {
-		collectorYAML = renderIdleK8sCollectorConfig(deployment)
-		collectorHash = hashYAML(collectorYAML)
-	}
-	deploymentManifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, "<collector-yaml-managed-by-config-version>", "<collector-config-hash>", deployment, templateValues)
-	manifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, collectorYAML, collectorHash, deployment, templateValues)
+	deploymentManifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, placeholderConfigFiles(bundle.CollectorConfigFiles), bundle.ConfigFileRefs, "<collector-config-hash>", deployment, templateValues)
+	manifest := renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, bundle.CollectorConfigFiles, bundle.ConfigFileRefs, bundle.ConfigHash, deployment, templateValues)
 	return renderedRouteConfig{
 		ManifestYAML:           manifest,
-		CollectorYAML:          collectorYAML,
-		CollectorConfigHash:    collectorHash,
+		CollectorYAML:          bundle.CollectorYAML,
+		CollectorConfigFiles:   bundle.CollectorConfigFiles,
+		ConfigFileRefs:         bundle.ConfigFileRefs,
+		CollectorConfigHash:    bundle.ConfigHash,
 		DeploymentManifestYAML: deploymentManifest,
 		DeploymentManifestHash: hashYAML(deploymentManifest),
 		RouteIDs:               renderRouteIDs(inputs),
@@ -129,33 +164,34 @@ func renderK8sCollectorRuntimeBundleWithTemplateValues(clusterID string, agentNa
 }
 
 func renderK8sDeploymentManifestYAML(inputs []renderInput) string {
-	return renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, platformimages.DefaultTemplateValues)
+	deployment := agentDeploymentOptions{}
+	if len(inputs) > 0 {
+		deployment = inputs[0].Deployment
+	}
+	bundle, err := renderK8sCollectorConfigBundle(inputs, "", deployment)
+	if err != nil {
+		return ""
+	}
+	return renderK8sDeploymentManifestYAMLWithTemplateValues(inputs, placeholderConfigFiles(bundle.CollectorConfigFiles), bundle.ConfigFileRefs, platformimages.DefaultTemplateValues)
 }
 
-func renderK8sDeploymentManifestYAMLWithTemplateValues(inputs []renderInput, templateValues map[string]string) string {
+func renderK8sDeploymentManifestYAMLWithTemplateValues(inputs []renderInput, configFiles map[string]string, refs []LogCollectorConfigFile, templateValues map[string]string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
 	first := inputs[0]
 	source := first.Source
-	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
-	agentName := "novaobs-logs-agent"
-	data := k8sDaemonSetBundleTemplateData{
-		AgentNamespace:       agentNamespace,
-		AgentName:            agentName,
-		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
-		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
-		CollectorConfigBlock: "    <collector-yaml-managed-by-config-version>",
-		ConfigHash:           yamlQuote("<collector-config-hash>"),
-		RuntimeLogMounts:     k8sRuntimeLogMounts(),
-		OpAMPEnabled:         opAMPEnabled(first.Deployment),
-		OpAMPEndpoint:        strings.TrimSpace(first.Deployment.OpAMPEndpoint),
-	}
-	var buffer bytes.Buffer
-	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
-		panic(fmt.Sprintf("render k8s deployment manifest template: %v", err))
-	}
-	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
+	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaapm-system")
+	return renderK8sManifestYAMLWithTemplateValues(
+		firstNonEmpty(source.ClusterID, "<cluster-id>"),
+		agentNamespace,
+		firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
+		configFiles,
+		refs,
+		"<collector-config-hash>",
+		first.Deployment,
+		templateValues,
+	)
 }
 
 func renderRouteIDs(inputs []renderInput) []string {
@@ -167,28 +203,65 @@ func renderRouteIDs(inputs []renderInput) []string {
 	return ids
 }
 
-func renderK8sDaemonSetBundleYAML(inputs []renderInput, collectorConfig string, configHash string) string {
-	return renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, collectorConfig, configHash, platformimages.DefaultTemplateValues)
+func renderK8sDaemonSetBundleYAML(inputs []renderInput, configFiles map[string]string, refs []LogCollectorConfigFile, configHash string) string {
+	return renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs, configFiles, refs, configHash, platformimages.DefaultTemplateValues)
 }
 
-func renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs []renderInput, collectorConfig string, configHash string, templateValues map[string]string) string {
+func renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs []renderInput, configFiles map[string]string, refs []LogCollectorConfigFile, configHash string, templateValues map[string]string) string {
 	if len(inputs) == 0 {
 		return ""
 	}
 	first := inputs[0]
 	source := first.Source
-	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
-	agentName := "novaobs-logs-agent"
+	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaapm-system")
+	return renderK8sManifestYAMLWithTemplateValues(
+		firstNonEmpty(source.ClusterID, "<cluster-id>"),
+		agentNamespace,
+		firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
+		configFiles,
+		refs,
+		configHash,
+		first.Deployment,
+		templateValues,
+	)
+}
+
+func renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, configFiles map[string]string, refs []LogCollectorConfigFile, configHash string, deployment agentDeploymentOptions, templateValues map[string]string) string {
+	return renderK8sManifestYAMLWithTemplateValues(clusterID, agentNamespace, collectorGroupID, configFiles, refs, configHash, deployment, templateValues)
+}
+
+func renderK8sRuntimeServiceConfigManifest(manifest string, configMapNames map[string]struct{}) string {
+	filtered := filterYAMLDocuments(manifest, func(identity manifestDocumentIdentity) bool {
+		if identity.Kind == "DaemonSet" {
+			return true
+		}
+		if identity.Kind != "ConfigMap" {
+			return false
+		}
+		if configMapNames == nil {
+			return true
+		}
+		_, ok := configMapNames[identity.Name]
+		return ok
+	})
+	if strings.TrimSpace(filtered) == "" {
+		return manifest
+	}
+	return filtered
+}
+
+func renderK8sManifestYAMLWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, configFiles map[string]string, refs []LogCollectorConfigFile, configHash string, deployment agentDeploymentOptions, templateValues map[string]string) string {
 	data := k8sDaemonSetBundleTemplateData{
-		AgentNamespace:       agentNamespace,
-		AgentName:            agentName,
-		ClusterID:            firstNonEmpty(source.ClusterID, "<cluster-id>"),
-		CollectorGroupID:     firstNonEmpty(first.Route.AgentGroupID, "<collector-group-id>"),
-		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
-		ConfigHash:           yamlQuote(configHash),
-		RuntimeLogMounts:     k8sRuntimeLogMounts(),
-		OpAMPEnabled:         opAMPEnabled(first.Deployment),
-		OpAMPEndpoint:        strings.TrimSpace(first.Deployment.OpAMPEndpoint),
+		AgentNamespace:   firstNonEmpty(agentNamespace, "novaapm-system"),
+		AgentName:        k8sLogsAgentName,
+		ClusterID:        firstNonEmpty(clusterID, "<cluster-id>"),
+		CollectorGroupID: firstNonEmpty(collectorGroupID, "<collector-group-id>"),
+		ConfigHash:       yamlQuote(configHash),
+		ConfigMaps:       k8sConfigMapTemplateDataList(configFiles, refs),
+		ConfigArgs:       k8sConfigArgs(refs),
+		RuntimeLogMounts: k8sRuntimeLogMounts(),
+		OpAMPEnabled:     opAMPEnabled(deployment),
+		OpAMPEndpoint:    strings.TrimSpace(deployment.OpAMPEndpoint),
 	}
 	var buffer bytes.Buffer
 	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
@@ -197,23 +270,70 @@ func renderK8sDaemonSetBundleYAMLWithTemplateValues(inputs []renderInput, collec
 	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
 }
 
-func renderK8sRuntimeDeploymentManifestYAMLWithTemplateValues(clusterID string, agentNamespace string, collectorGroupID string, collectorConfig string, configHash string, deployment agentDeploymentOptions, templateValues map[string]string) string {
-	data := k8sDaemonSetBundleTemplateData{
-		AgentNamespace:       firstNonEmpty(agentNamespace, "novaobs-system"),
-		AgentName:            "novaobs-logs-agent",
-		ClusterID:            firstNonEmpty(clusterID, "<cluster-id>"),
-		CollectorGroupID:     firstNonEmpty(collectorGroupID, "<collector-group-id>"),
-		CollectorConfigBlock: indentYAMLBlock(collectorConfig, "    "),
-		ConfigHash:           yamlQuote(configHash),
-		RuntimeLogMounts:     k8sRuntimeLogMounts(),
-		OpAMPEnabled:         opAMPEnabled(deployment),
-		OpAMPEndpoint:        strings.TrimSpace(deployment.OpAMPEndpoint),
+type manifestDocumentIdentity struct {
+	APIVersion string
+	Kind       string
+	Namespace  string
+	Name       string
+}
+
+func filterYAMLDocuments(raw string, keep func(manifestDocumentIdentity) bool) string {
+	documents := splitYAMLDocuments(raw)
+	selected := make([]string, 0, len(documents))
+	for _, document := range documents {
+		identity, ok := parseManifestDocumentIdentity(document)
+		if !ok || !keep(identity) {
+			continue
+		}
+		selected = append(selected, strings.TrimSpace(document))
 	}
-	var buffer bytes.Buffer
-	if err := k8sDaemonSetBundleTemplate.Execute(&buffer, data); err != nil {
-		panic(fmt.Sprintf("render k8s daemonset bundle template: %v", err))
+	if len(selected) == 0 {
+		return ""
 	}
-	return platformimages.ApplyTemplateValues(buffer.String(), templateValues)
+	return strings.Join(selected, "\n---\n") + "\n"
+}
+
+func splitYAMLDocuments(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	documents := []string{}
+	current := []string{}
+	appendCurrent := func() {
+		document := strings.TrimSpace(strings.Join(current, "\n"))
+		if document != "" {
+			documents = append(documents, document)
+		}
+		current = []string{}
+	}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			appendCurrent()
+			continue
+		}
+		current = append(current, line)
+	}
+	appendCurrent()
+	return documents
+}
+
+func parseManifestDocumentIdentity(raw string) (manifestDocumentIdentity, bool) {
+	var document struct {
+		APIVersion string `yaml:"apiVersion"`
+		Kind       string `yaml:"kind"`
+		Metadata   struct {
+			Namespace string `yaml:"namespace"`
+			Name      string `yaml:"name"`
+		} `yaml:"metadata"`
+	}
+	if err := yaml.Unmarshal([]byte(raw), &document); err != nil {
+		return manifestDocumentIdentity{}, false
+	}
+	identity := manifestDocumentIdentity{
+		APIVersion: strings.TrimSpace(document.APIVersion),
+		Kind:       strings.TrimSpace(document.Kind),
+		Namespace:  strings.TrimSpace(document.Metadata.Namespace),
+		Name:       strings.TrimSpace(document.Metadata.Name),
+	}
+	return identity, identity.APIVersion != "" && identity.Kind != "" && identity.Name != ""
 }
 
 func renderIdleK8sCollectorConfig(deployment agentDeploymentOptions) string {
@@ -222,7 +342,7 @@ func renderIdleK8sCollectorConfig(deployment agentDeploymentOptions) string {
 		opAMPBlock = `  opamp:
     server:
       ws:
-        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
+        endpoint: ${env:NOVAAPM_OPAMP_ENDPOINT}
 `
 	}
 	return fmt.Sprintf(`extensions:
@@ -233,11 +353,11 @@ func renderIdleK8sCollectorConfig(deployment agentDeploymentOptions) string {
     endpoint: 0.0.0.0:13133
 %s
 receivers:
-  file_log/novaobs_idle:
+  file_log/novaapm_idle:
     include:
-      - "/var/log/pods/__novaobs_idle__/*/*.log"
+      - "/var/log/pods/__novaapm_idle__/*/*.log"
     exclude:
-      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+      - "/var/log/pods/*_novaapm-logs-agent-*_*/*/*.log"
       - "/var/log/pods/*/*/*.gz"
       - "/var/log/pods/*/*/*.tmp"
       - "/var/log/pods/*/*/*.log.*"
@@ -269,7 +389,7 @@ service:
   extensions: [%s]
   telemetry:
     resource:
-      service.name: novaobs-logs-agent
+      service.name: novaapm-logs-agent
       k8s.pod.uid: ${env:KUBE_POD_UID}
       k8s.pod.name: ${env:KUBE_POD_NAME}
       k8s.node.name: ${env:KUBE_NODE_NAME}
@@ -284,7 +404,7 @@ service:
                 port: 8888
   pipelines:
     logs/idle:
-      receivers: [file_log/novaobs_idle]
+      receivers: [file_log/novaapm_idle]
       processors: [memory_limiter, k8s_attributes, batch]
       exporters: [debug]`, opAMPBlock, renderServiceExtensions(deployment))
 }
@@ -293,6 +413,123 @@ func k8sRuntimeLogMounts() []k8sRuntimeLogMount {
 	return []k8sRuntimeLogMount{
 		{Name: "docker-containers", Path: "/data/docker/containers"},
 	}
+}
+
+func renderK8sCollectorConfigBundle(inputs []renderInput, processorPatch string, deployment agentDeploymentOptions) (k8sCollectorConfigBundle, error) {
+	files, refs, err := renderK8sCollectorConfigFiles(inputs, processorPatch, deployment)
+	if err != nil {
+		return k8sCollectorConfigBundle{}, err
+	}
+	collectorYAML, err := renderK8sCollectorConfig(inputs, processorPatch)
+	if err != nil {
+		return k8sCollectorConfigBundle{}, err
+	}
+	if strings.TrimSpace(collectorYAML) == "" {
+		collectorYAML = files["base.yaml"]
+	}
+	return k8sCollectorConfigBundle{
+		CollectorYAML:        collectorYAML,
+		CollectorConfigFiles: files,
+		ConfigFileRefs:       refs,
+		ConfigHash:           hashConfigFiles(files),
+	}, nil
+}
+
+func renderK8sCollectorConfigFiles(inputs []renderInput, processorPatch string, deployment agentDeploymentOptions) (map[string]string, []LogCollectorConfigFile, error) {
+	files := map[string]string{}
+	refs := []LogCollectorConfigFile{{
+		Path:          "base.yaml",
+		ConfigMapName: k8sBaseConfigMapName(k8sLogsAgentName),
+		Role:          "base",
+	}}
+	if len(inputs) == 0 {
+		files["base.yaml"] = renderIdleK8sCollectorConfig(deployment)
+		return files, refs, nil
+	}
+	first := inputs[0]
+	files["base.yaml"] = renderK8sBaseCollectorConfig(first.Deployment, processorPatch)
+	suffixes := routeComponentSuffixes(inputs)
+	for _, input := range inputs {
+		suffix := suffixForInput(input, suffixes)
+		fragment, err := renderK8sRouteFragment(input, suffix)
+		if err != nil {
+			return nil, nil, err
+		}
+		fileID := serviceConfigFileID(input, suffix)
+		path := "services/" + fileID + ".yaml"
+		files[path] = fragment
+		refs = append(refs, LogCollectorConfigFile{
+			Path:          path,
+			ConfigMapName: k8sServiceConfigMapName(k8sLogsAgentName, fileID),
+			Role:          "service",
+			RouteID:       input.Route.ID,
+			ServiceID:     input.Route.ServiceID,
+		})
+	}
+	return files, refs, nil
+}
+
+func renderK8sBaseCollectorConfig(deployment agentDeploymentOptions, processorPatch string) string {
+	opAMPBlock := ""
+	if opAMPEnabled(deployment) {
+		opAMPBlock = `  opamp:
+    server:
+      ws:
+        endpoint: ${env:NOVAAPM_OPAMP_ENDPOINT}
+`
+	}
+	patchBlock := ""
+	if trimmed := strings.TrimSpace(processorPatch); trimmed != "" {
+		patchBlock = indentYAMLBlock(trimmed, "  ") + "\n"
+	}
+	return fmt.Sprintf(`extensions:
+  file_storage/filelog_offsets:
+    directory: /var/lib/otelcol/filelog_offsets
+    create_directory: true
+  health_check:
+    endpoint: 0.0.0.0:13133
+%s
+receivers: {}
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  k8s_attributes:
+    auth_type: serviceAccount
+    passthrough: false
+    filter:
+      node_from_env_var: KUBE_NODE_NAME
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.container.name
+        - k8s.deployment.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.cronjob.name
+        - k8s.job.name
+%s  batch:
+exporters: {}
+service:
+  extensions: [%s]
+  telemetry:
+    resource:
+      service.name: novaapm-logs-agent
+      k8s.pod.uid: ${env:KUBE_POD_UID}
+      k8s.pod.name: ${env:KUBE_POD_NAME}
+      k8s.node.name: ${env:KUBE_NODE_NAME}
+      k8s.pod.ip: ${env:KUBE_POD_IP}
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines: {}`, opAMPBlock, patchBlock, renderServiceExtensions(deployment))
 }
 
 func renderK8sCollectorConfig(inputs []renderInput, processorPatch string) (string, error) {
@@ -310,7 +547,7 @@ func renderK8sCollectorConfig(inputs []renderInput, processorPatch string) (stri
 		opAMPBlock = `  opamp:
     server:
       ws:
-        endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}
+        endpoint: ${env:NOVAAPM_OPAMP_ENDPOINT}
 `
 	}
 	patchBlock := ""
@@ -354,7 +591,7 @@ service:
   extensions: [%s]
   telemetry:
     resource:
-      service.name: novaobs-logs-agent
+      service.name: novaapm-logs-agent
       k8s.pod.uid: ${env:KUBE_POD_UID}
       k8s.pod.name: ${env:KUBE_POD_NAME}
       k8s.node.name: ${env:KUBE_NODE_NAME}
@@ -409,7 +646,7 @@ func renderK8sReceiver(input renderInput, suffix string) string {
     include:
       - %s
     exclude:
-      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+      - "/var/log/pods/*_novaapm-logs-agent-*_*/*/*.log"
       - "/var/log/pods/*/*/*.gz"
       - "/var/log/pods/*/*/*.tmp"
       - "/var/log/pods/*/*/*.log.*"
@@ -454,17 +691,9 @@ func collectK8sRouteFragments(inputs []renderInput, suffixes map[string]string) 
 	}
 	for _, input := range inputs {
 		suffix := suffixForInput(input, suffixes)
-		fragment := strings.TrimSpace(input.Source.CollectorFragmentYAML)
-		if fragment == "" {
-			fragment = renderDefaultK8sRouteFragment(input, suffix)
-		} else if input.Endpoint.SinkType == EndpointSinkVL && input.Endpoint.AccountID != "" {
-			root, err := parseCollectorYAML(fragment)
-			if err != nil {
-				return k8sRouteFragmentBundle{}, fmt.Errorf("collector fragment 必须是合法 YAML: %w", err)
-			}
-			if err := validateVictoriaLogsCollectorTenant(yamlMappingValue(root, "exporters"), input.Endpoint); err != nil {
-				return k8sRouteFragmentBundle{}, err
-			}
+		fragment, err := renderK8sRouteFragment(input, suffix)
+		if err != nil {
+			return k8sRouteFragmentBundle{}, err
 		}
 		sections, err := parseK8sRouteFragment(fragment)
 		if err != nil {
@@ -481,6 +710,25 @@ func collectK8sRouteFragments(inputs []renderInput, suffixes map[string]string) 
 		exporters:  renderFragmentMap(merged.exporters),
 		pipelines:  renderFragmentMap(merged.pipelines),
 	}, nil
+}
+
+func renderK8sRouteFragment(input renderInput, suffix string) (string, error) {
+	fragment := strings.TrimSpace(input.Source.CollectorFragmentYAML)
+	if fragment == "" {
+		fragment = renderDefaultK8sRouteFragment(input, suffix)
+	} else if input.Endpoint.SinkType == EndpointSinkVL && input.Endpoint.AccountID != "" {
+		root, err := parseCollectorYAML(fragment)
+		if err != nil {
+			return "", fmt.Errorf("collector fragment 必须是合法 YAML: %w", err)
+		}
+		if err := validateVictoriaLogsCollectorTenant(yamlMappingValue(root, "exporters"), input.Endpoint); err != nil {
+			return "", err
+		}
+	}
+	if _, err := parseK8sRouteFragment(fragment); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(fragment), nil
 }
 
 func renderDefaultK8sRouteFragment(input renderInput, suffix string) string {
@@ -600,9 +848,12 @@ func renderK8sRouteProcessor(input renderInput, suffix string) string {
       - key: service.name
         value: %s
         action: upsert
+      - key: novaapm.service_id
+        value: %s
+        action: upsert
       - key: deployment.environment
         value: %s
-        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Environment))}
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Route.ServiceID), yamlQuote(input.Environment))}
 	if hasEnabledParseRules(input.Source.ParseRules) {
 		lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
 	}
@@ -738,10 +989,10 @@ func renderVMFileConfig(input renderInput) (string, string) {
 	}
 	exporterName, exporterYAML := renderDownstreamExporter(input.Endpoint)
 	parseProcessor := ""
-	pipelineProcessors := "resource/novaobs, batch"
+	pipelineProcessors := "resource/novaapm, batch"
 	if len(source.ParseRules) > 0 {
 		parseProcessor = renderVMParseProcessor(source.ParseRules)
-		pipelineProcessors = "transform/novaobs_parse, resource/novaobs, batch"
+		pipelineProcessors = "transform/novaapm_parse, resource/novaapm, batch"
 	}
 	yaml := fmt.Sprintf(`receivers:
   file_log/vm:
@@ -752,9 +1003,12 @@ func renderVMFileConfig(input renderInput) (string, string) {
     start_at: end
 processors:
 %s
-  resource/novaobs:
+  resource/novaapm:
     attributes:
       - key: service.name
+        value: %s
+        action: upsert
+      - key: novaapm.service_id
         value: %s
         action: upsert
       - key: deployment.environment
@@ -773,6 +1027,7 @@ service:
 		yamlQuote(source.PathPattern),
 		parseProcessor,
 		yamlQuote(input.ServiceName),
+		yamlQuote(input.Route.ServiceID),
 		yamlQuote(input.Environment),
 		exporterYAML,
 		pipelineProcessors,
@@ -825,7 +1080,7 @@ func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 		for _, broker := range splitEndpointList(endpoint.WriteURL) {
 			lines = append(lines, "      - "+yamlQuote(broker))
 		}
-		topic := firstNonEmpty(endpoint.StreamName, "novaobs-logs")
+		topic := firstNonEmpty(endpoint.StreamName, "novaapm-logs")
 		lines = append(lines, "    topic: "+yamlQuote(topic))
 		return strings.Join(lines, "\n")
 	case EndpointSinkOTel:
@@ -851,7 +1106,7 @@ func renderDownstreamExporterYAML(endpoint LogEndpoint, name string) string {
 
 func renderVMParseProcessor(rules []LogParseRule) string {
 	lines := []string{
-		"  transform/novaobs_parse:",
+		"  transform/novaapm_parse:",
 		"    log_statements:",
 		"      - context: log",
 		"        statements:",
@@ -906,6 +1161,110 @@ func yamlQuote(value string) string {
 func hashYAML(yaml string) string {
 	sum := sha256.Sum256([]byte(yaml))
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+func hashConfigFiles(files map[string]string) string {
+	keys := make([]string, 0, len(files))
+	for key := range files {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	hash := sha256.New()
+	for _, key := range keys {
+		hash.Write([]byte(key))
+		hash.Write([]byte{0})
+		hash.Write([]byte(files[key]))
+		hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))[:16]
+}
+
+func placeholderConfigFiles(files map[string]string) map[string]string {
+	out := map[string]string{}
+	for path := range files {
+		if path == "base.yaml" {
+			out[path] = "<collector-base-config-managed-by-version>"
+			continue
+		}
+		out[path] = "<collector-service-config-managed-by-version>"
+	}
+	return out
+}
+
+func k8sConfigMapTemplateDataList(files map[string]string, refs []LogCollectorConfigFile) []k8sConfigMapTemplateData {
+	ordered := sortedConfigFileRefs(refs)
+	out := make([]k8sConfigMapTemplateData, 0, len(ordered))
+	for _, ref := range ordered {
+		content := strings.TrimRight(files[ref.Path], "\n")
+		dataKey := "fragment.yaml"
+		if ref.Role == "base" {
+			dataKey = "base.yaml"
+		}
+		out = append(out, k8sConfigMapTemplateData{
+			Name:         ref.ConfigMapName,
+			Role:         ref.Role,
+			DataKey:      dataKey,
+			MountPath:    ref.Path,
+			ContentBlock: indentYAMLBlock(content, "    "),
+			ConfigHash:   hashYAML(content),
+			RouteID:      ref.RouteID,
+			ServiceID:    ref.ServiceID,
+		})
+	}
+	return out
+}
+
+func k8sConfigArgs(refs []LogCollectorConfigFile) []string {
+	ordered := sortedConfigFileRefs(refs)
+	args := make([]string, 0, len(ordered))
+	for _, ref := range ordered {
+		args = append(args, "--config=/conf/"+ref.Path)
+	}
+	return args
+}
+
+func sortedConfigFileRefs(refs []LogCollectorConfigFile) []LogCollectorConfigFile {
+	ordered := append([]LogCollectorConfigFile{}, refs...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Role == "base" && ordered[j].Role != "base" {
+			return true
+		}
+		if ordered[i].Role != "base" && ordered[j].Role == "base" {
+			return false
+		}
+		return ordered[i].Path < ordered[j].Path
+	})
+	return ordered
+}
+
+func serviceConfigFileID(input renderInput, suffix string) string {
+	parts := []string{"svc", safeSegment(suffix)}
+	if routeID := shortComponentID(input.Route.ID); routeID != "" {
+		parts = append(parts, routeID)
+	}
+	return k8sResourceName(strings.Join(parts, "-"))
+}
+
+func k8sBaseConfigMapName(agentName string) string {
+	return k8sResourceName(agentName + "-base-config")
+}
+
+func k8sServiceConfigMapName(agentName string, fileID string) string {
+	return k8sResourceName(agentName + "-" + fileID)
+}
+
+func k8sResourceName(value string) string {
+	value = safeSegment(value)
+	if len(value) <= 253 {
+		return value
+	}
+	sum := sha256.Sum256([]byte(value))
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
+	prefix := strings.Trim(value[:253-len(suffix)], "-")
+	if prefix == "" {
+		prefix = "novaapm"
+	}
+	return prefix + suffix
 }
 
 func indentYAMLBlock(value string, prefix string) string {

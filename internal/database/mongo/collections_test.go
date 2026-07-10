@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/modules/k8sops/cluster"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/modules/k8sops/cluster"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -105,4 +105,13 @@ func TestScopedUpdateDocumentMovesIDToSetOnInsert(t *testing.T) {
 	require.Equal(t, "version-1", insertID)
 	require.NotContains(t, doc, "_id")
 	require.Equal(t, "pending", doc["status"])
+}
+
+func TestCatalogServiceIndexKeepsProductServiceIdentityUnique(t *testing.T) {
+	model := catalogServiceIndexModel()
+
+	require.Equal(t, "uniq_product_service_name", *model.Options.Name)
+	require.True(t, *model.Options.Unique)
+	require.Nil(t, model.Options.PartialFilterExpression)
+	require.Equal(t, bson.D{{Key: "product_id", Value: 1}, {Key: "name", Value: 1}}, model.Keys)
 }

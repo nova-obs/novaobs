@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/response"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +37,7 @@ func writeTerminalError(ctx *gin.Context, err error, result ExecResult) {
 		ctx.JSON(http.StatusBadRequest, response.Envelope{
 			Success: false,
 			Data:    result,
-			Error:   &response.ErrorBody{Code: "k8s_terminal_command_blocked", Message: "命令不符合 NovaObs 终端安全策略"},
+			Error:   &response.ErrorBody{Code: "k8s_terminal_command_blocked", Message: "命令不符合 NovaAPM 终端安全策略"},
 			Meta:    gin.H{},
 		})
 	default:

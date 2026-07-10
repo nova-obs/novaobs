@@ -8,9 +8,9 @@ import (
 	"io"
 	"strings"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"

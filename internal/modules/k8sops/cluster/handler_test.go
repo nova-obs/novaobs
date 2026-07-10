@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/modules/k8sops/kubeclient"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

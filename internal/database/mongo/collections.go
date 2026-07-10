@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -14,11 +14,43 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type productStore struct{ col *mongo.Collection }
+
+func (s *productStore) Insert(ctx context.Context, product interface{}) error {
+	_, err := s.col.InsertOne(ctx, product)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+func (s *productStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"name": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+func (s *productStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+func (s *productStore) Update(ctx context.Context, id string, product interface{}) error {
+	oid, _ := objectID(id)
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, product)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
 // ---------- ServiceStore ----------
 type svcStore struct{ col *mongo.Collection }
 
 func (s *svcStore) Insert(ctx context.Context, svc interface{}) error {
 	_, err := s.col.InsertOne(ctx, svc)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
 	return err
 }
 func (s *svcStore) FindAll(ctx context.Context, results interface{}) error {

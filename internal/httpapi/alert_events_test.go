@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/platform/audit"
+	"novaapm/internal/alerting"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/platform/audit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestAlertIngestRequiresTokenAndPersistsEvent(t *testing.T) {
 	handler := alertIngestHandler(alerting.NewEventIngestor(repository, repository, "ingest-secret", nil))
 	router := gin.New()
 	router.POST("/ingest", handler)
-	body := `[{"status":"firing","fingerprint":"abc","labels":{"novaobs_rule_id":"rule-a","service_id":"service-a"},"annotations":{"summary":"支付失败"},"startsAt":"2026-06-22T09:59:00Z"}]`
+	body := `[{"status":"firing","fingerprint":"abc","labels":{"novaapm_rule_id":"rule-a","service_id":"service-a"},"annotations":{"summary":"支付失败"},"startsAt":"2026-06-22T09:59:00Z"}]`
 
 	unauthorized := httptest.NewRecorder()
 	unauthorizedRequest := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
@@ -57,7 +57,7 @@ func TestAlertIngestAcceptsDirectVmalertAlerts(t *testing.T) {
 	}))
 	router := gin.New()
 	router.POST("/ingest", alertIngestHandler(alerting.NewEventIngestor(repository, repository, "ingest-secret", nil)))
-	body := `[{"fingerprint":"abc","labels":{"novaobs_rule_id":"rule-a","novaobs_runtime_id":"vmalert-logs:vl-prod","service_id":"service-a"},"annotations":{"summary":"支付失败"},"startsAt":"2026-06-22T09:59:00Z"}]`
+	body := `[{"fingerprint":"abc","labels":{"novaapm_rule_id":"rule-a","novaapm_runtime_id":"vmalert-logs:vl-prod","service_id":"service-a"},"annotations":{"summary":"支付失败"},"startsAt":"2026-06-22T09:59:00Z"}]`
 
 	request := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer ingest-secret")
@@ -85,7 +85,7 @@ func TestVmalertNotifierRouteAcceptsDirectAlerts(t *testing.T) {
 		Store:              store,
 		AlertEventIngestor: alerting.NewEventIngestor(repository, repository, "ingest-secret", nil),
 	})
-	body := `[{"fingerprint":"abc","labels":{"novaobs_rule_id":"rule-a","service_id":"service-a"},"startsAt":"2026-06-22T09:59:00Z"}]`
+	body := `[{"fingerprint":"abc","labels":{"novaapm_rule_id":"rule-a","service_id":"service-a"},"startsAt":"2026-06-22T09:59:00Z"}]`
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/alerts", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer ingest-secret")

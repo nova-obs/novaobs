@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/logs"
-	obsendpoint "novaobs/internal/observability/endpoint"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/logs"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +48,19 @@ func TestServiceRejectsActiveBindingWithUnscopedBasePromQL(t *testing.T) {
 	})
 
 	require.ErrorContains(t, err, "active metrics binding 必须具备可收敛服务作用域")
+}
+
+func TestServiceRejectsBindingForAnotherServiceName(t *testing.T) {
+	fixture := newMetricsFixture(t)
+	endpoint := fixture.createMetricsEndpoint(t, "vm-prod")
+
+	_, err := fixture.service.CreateBinding(context.Background(), platformrbac.DevAdminSubject(), CreateServiceBindingRequest{
+		ServiceID:  fixture.serviceCatalog.ID,
+		EndpointID: endpoint.ID,
+		LabelMatch: map[string]string{"service.name": "payments-api"},
+	})
+
+	require.ErrorContains(t, err, "必须与当前服务名称一致")
 }
 
 func TestServiceRejectsDuplicateActiveBinding(t *testing.T) {
@@ -157,17 +170,23 @@ func TestServiceWorkspaceReturnsServiceEndpointsAndBinding(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	workspace, err := fixture.service.Workspace(ctx, platformrbac.DevAdminSubject(), fixture.serviceCatalog.ID)
+	workspace, err := fixture.service.Workspace(ctx, platformrbac.DevAdminSubject(), fixture.serviceCatalog.ProductID, fixture.serviceCatalog.ID)
 
 	require.NoError(t, err)
 	require.Equal(t, fixture.serviceCatalog.ID, workspace.ActiveServiceID)
 	require.Len(t, workspace.Services, 1)
+	require.Equal(t, fixture.serviceCatalog.AccountID, workspace.Services[0].AccountID)
+	require.Equal(t, fixture.serviceCatalog.ProjectID, workspace.Services[0].ProjectID)
 	require.Len(t, workspace.Endpoints, 1)
+	require.Equal(t, fixture.serviceCatalog.AccountID, workspace.Endpoints[0].Tenant.AccountID)
+	require.Equal(t, fixture.serviceCatalog.ProjectID, workspace.Endpoints[0].Tenant.ProjectID)
 	require.NotNil(t, workspace.Binding)
 	require.Equal(t, endpoint.ID, workspace.Binding.Binding.EndpointID)
+	require.Equal(t, fixture.serviceCatalog.AccountID, workspace.Binding.Binding.Tenant.AccountID)
+	require.Equal(t, fixture.serviceCatalog.ProjectID, workspace.Binding.Binding.Tenant.ProjectID)
 }
 
-func TestServiceWorkspaceDefaultsToFirstReadableService(t *testing.T) {
+func TestServiceWorkspaceRequiresExplicitService(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	serviceRepo := servicecatalog.NewRepository(store.Services())
@@ -200,10 +219,10 @@ func TestServiceWorkspaceDefaultsToFirstReadableService(t *testing.T) {
 		},
 	})
 
-	workspace, err := service.Workspace(ctx, platformrbac.Subject{ID: "alice", Type: "user"}, "")
+	_, err = service.Workspace(ctx, platformrbac.Subject{ID: "alice", Type: "user"}, "", "")
 
-	require.NoError(t, err)
-	require.Equal(t, readable.ID, workspace.ActiveServiceID)
+	require.ErrorContains(t, err, "service_id")
+	_ = readable
 }
 
 func TestServiceWorkspaceDoesNotLeakEndpointOrBindingWithoutReadPermissions(t *testing.T) {
@@ -237,7 +256,7 @@ func TestServiceWorkspaceDoesNotLeakEndpointOrBindingWithoutReadPermissions(t *t
 		},
 	})
 
-	workspace, err := service.Workspace(ctx, platformrbac.Subject{ID: "alice", Type: "user"}, "")
+	workspace, err := service.Workspace(ctx, platformrbac.Subject{ID: "alice", Type: "user"}, fixture.serviceCatalog.ProductID, fixture.serviceCatalog.ID)
 
 	require.NoError(t, err)
 	require.Equal(t, fixture.serviceCatalog.ID, workspace.ActiveServiceID)
@@ -261,8 +280,12 @@ func newMetricsFixtureWithAuthorizer(t *testing.T, authorizer Authorizer) metric
 	t.Helper()
 	ctx := context.Background()
 	store := memstore.NewStore()
-	serviceRepo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce"})
+	require.NoError(t, err)
+	serviceRepo := servicecatalog.NewRepository(store.Services(), store.Products())
 	serviceCatalog, err := serviceRepo.Create(ctx, servicecatalog.Service{
+		ProductID:   product.ID,
 		Name:        "orders-api",
 		DisplayName: "订单服务",
 		Environment: "production",
@@ -300,8 +323,9 @@ func (f metricsFixture) createMetricsEndpoint(t *testing.T, id string) obsendpoi
 		Name:        id,
 		Kind:        obsendpoint.KindVictoriaMetrics,
 		SignalTypes: []string{obsendpoint.SignalTypeMetrics},
-		QueryURL:    "http://" + id + ":8428/api/v1/query",
-		VMUIURL:     "http://" + id + ":8428/vmui",
+		WriteURL:    "http://" + id + ":8480/insert/0/prometheus/api/v1/write",
+		QueryURL:    "http://" + id + ":8481/select/0/prometheus",
+		VMUIURL:     "http://" + id + ":8481/select/0/vmui/",
 		Status:      "active",
 	}))
 	endpoint, err := obsendpoint.NewLogEndpointFacade(f.store.LogEndpoints()).Get(ctx, id)

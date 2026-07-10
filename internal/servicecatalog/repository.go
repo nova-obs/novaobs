@@ -5,24 +5,36 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Repository struct {
-	store database.ServiceStore
+	store    database.ServiceStore
+	products database.ProductStore
 }
 
-func NewRepository(store database.ServiceStore) Repository {
-	return Repository{store: store}
+func NewRepository(store database.ServiceStore, products ...database.ProductStore) Repository {
+	repo := Repository{store: store}
+	if len(products) > 0 {
+		repo.products = products[0]
+	}
+	return repo
 }
 
 func (r Repository) List(ctx context.Context, filters ...ListFilter) ([]Service, error) {
 	var services []Service
 	if err := r.store.FindAll(ctx, &services); err != nil {
 		return nil, err
+	}
+	for index := range services {
+		resolved, err := r.resolveTenant(ctx, services[index])
+		if err != nil {
+			return nil, err
+		}
+		services[index] = resolved
 	}
 	if len(filters) == 0 {
 		return applyFilter(services, ListFilter{}), nil
@@ -33,11 +45,17 @@ func (r Repository) List(ctx context.Context, filters ...ListFilter) ([]Service,
 func (r Repository) Get(ctx context.Context, id string) (Service, error) {
 	var service Service
 	err := r.store.FindByID(ctx, id, &service)
-	return service, err
+	if err != nil {
+		return Service{}, err
+	}
+	return r.resolveTenant(ctx, service)
 }
 
 func (r Repository) Create(ctx context.Context, service Service) (Service, error) {
 	if err := validateService(service); err != nil {
+		return Service{}, err
+	}
+	if err := r.validateProduct(ctx, service.ProductID); err != nil {
 		return Service{}, err
 	}
 	if service.ID == "" {
@@ -55,6 +73,42 @@ func (r Repository) Create(ctx context.Context, service Service) (Service, error
 	if err := r.store.Insert(ctx, service); err != nil {
 		return Service{}, err
 	}
+	return r.resolveTenant(ctx, service)
+}
+
+func (r Repository) validateProduct(ctx context.Context, productID string) error {
+	productID = strings.TrimSpace(productID)
+	if r.products == nil {
+		return nil
+	}
+	if productID == "" {
+		return apperr.InvalidRequest("服务所属产品不能为空")
+	}
+	var product Product
+	if err := r.products.FindByID(ctx, productID, &product); err != nil {
+		return apperr.InvalidRequest("所属产品不存在")
+	}
+	if product.Status != "" && product.Status != "active" {
+		return apperr.InvalidRequest("所属产品不可用")
+	}
+	return nil
+}
+
+func (r Repository) resolveTenant(ctx context.Context, service Service) (Service, error) {
+	service.AccountID = ""
+	service.ProjectID = ""
+	if r.products == nil {
+		return service, nil
+	}
+	if service.ProductID == "" {
+		return Service{}, apperr.InvalidRequest("服务未归属产品，请先完成产品迁移")
+	}
+	var product Product
+	if err := r.products.FindByID(ctx, service.ProductID, &product); err != nil {
+		return Service{}, err
+	}
+	service.AccountID = "0"
+	service.ProjectID = product.ProjectID
 	return service, nil
 }
 
@@ -62,6 +116,9 @@ func (r Repository) Update(ctx context.Context, id string, req UpdateRequest) (S
 	current, err := r.Get(ctx, id)
 	if err != nil {
 		return Service{}, err
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) != current.Name {
+		return Service{}, apperr.InvalidRequest("service.name 创建后不可修改；请新建服务以保留历史数据边界")
 	}
 	updated := applyUpdate(current, req)
 	if err := validateService(updated); err != nil {
@@ -107,22 +164,19 @@ func (r Repository) Delete(ctx context.Context, id string, deps DeleteDependenci
 }
 
 func (r Repository) ensureUnique(ctx context.Context, service Service) error {
-	services, err := r.List(ctx)
-	if err != nil {
+	var services []Service
+	if err := r.store.FindAll(ctx, &services); err != nil {
 		return err
 	}
 	for _, existing := range services {
 		if existing.ID == service.ID {
 			continue
 		}
-		if existing.Status == "deleted" {
-			continue
-		}
 		if service.CMDBServiceID != "" && existing.CMDBServiceID == service.CMDBServiceID {
 			return apperr.Conflict("CMDB 服务 ID 已存在")
 		}
 		if sameServiceIdentity(existing, service) {
-			return apperr.Conflict("相同名称、环境、集群和 Namespace 的服务已存在")
+			return apperr.Conflict("同一产品下的服务名称已存在")
 		}
 	}
 	return nil
@@ -152,6 +206,7 @@ func validateService(service Service) error {
 
 func normalizeService(service Service) Service {
 	service.Name = strings.TrimSpace(service.Name)
+	service.ProductID = strings.TrimSpace(service.ProductID)
 	service.Environment = strings.TrimSpace(service.Environment)
 	service.Cluster = strings.TrimSpace(service.Cluster)
 	service.Namespace = strings.TrimSpace(service.Namespace)
@@ -291,8 +346,5 @@ func serviceMatchesQuery(service Service, query string) bool {
 }
 
 func sameServiceIdentity(a Service, b Service) bool {
-	return a.Name == b.Name &&
-		a.Environment == b.Environment &&
-		a.Cluster == b.Cluster &&
-		a.Namespace == b.Namespace
+	return a.ProductID == b.ProductID && a.Name == b.Name
 }

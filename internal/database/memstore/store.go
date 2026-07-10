@@ -7,13 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 )
 
 // Store is a thread-safe in-memory implementation of database.Store.
 // Useful for tests and local development without MongoDB.
 type Store struct {
 	mu    sync.RWMutex
+	prds  map[string]interface{}
 	svcs  map[string]interface{}
 	stgs  map[string]interface{}
 	cgs   map[string]interface{}
@@ -59,6 +60,7 @@ type Store struct {
 
 func NewStore() *Store {
 	return &Store{
+		prds:  map[string]interface{}{},
 		svcs:  map[string]interface{}{},
 		stgs:  map[string]interface{}{},
 		cgs:   map[string]interface{}{},
@@ -107,6 +109,7 @@ func (s *Store) Close(ctx context.Context) error { return nil }
 
 // ---------- Sub-store accessors ----------
 
+func (s *Store) Products() database.ProductStore                     { return &productStore{s} }
 func (s *Store) Services() database.ServiceStore                     { return &svcStore{s} }
 func (s *Store) ServiceTargets() database.ServiceTargetStore         { return &targetStore{s} }
 func (s *Store) CollectorGroups() database.CollectorGroupStore       { return &cgStore{s} }
@@ -173,6 +176,54 @@ func (s *Store) K8sDeploymentHistory() database.K8sDeploymentHistoryStore {
 }
 
 // ---------- Services ----------
+
+type productStore struct{ s *Store }
+
+func (st *productStore) Insert(_ context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	if id == "" {
+		id = newID()
+	}
+	for _, existing := range st.s.prds {
+		var left, right struct {
+			ProjectID string `json:"project_id"`
+			Name      string `json:"name"`
+		}
+		if copyValue(existing, &left) == nil && copyValue(v, &right) == nil && (left.ProjectID == right.ProjectID || strings.EqualFold(left.Name, right.Name)) {
+			return database.ErrConflict
+		}
+	}
+	st.s.prds[id] = v
+	return nil
+}
+
+func (st *productStore) FindAll(_ context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.prds, results)
+}
+
+func (st *productStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.prds[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *productStore) Update(_ context.Context, id string, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.prds[id]; !ok {
+		return errNotFound
+	}
+	st.s.prds[id] = value
+	return nil
+}
 
 type svcStore struct{ s *Store }
 

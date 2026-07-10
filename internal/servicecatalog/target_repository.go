@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )

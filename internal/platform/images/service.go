@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/pkg/apperr"
+	"novaapm/pkg/apperr"
 )
 
 type Service struct {

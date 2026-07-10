@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

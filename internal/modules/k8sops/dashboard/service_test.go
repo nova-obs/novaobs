@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -64,7 +64,7 @@ func TestStaticReaderDefaultsUnknownClusterHealth(t *testing.T) {
 	require.Equal(t, "prod", snapshot.Stats.ClusterID)
 	require.Equal(t, HealthUnknown, snapshot.Stats.Health)
 	require.Equal(t, SyncUnknown, snapshot.Sync.Status)
-	require.Equal(t, "NovaObs", snapshot.Sync.Source)
+	require.Equal(t, "NovaAPM", snapshot.Sync.Source)
 	require.Equal(t, "等待真实集群接入", snapshot.Sync.TimeWindow)
 	require.Empty(t, snapshot.Signals)
 }

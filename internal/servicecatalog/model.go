@@ -4,6 +4,9 @@ import "time"
 
 type Service struct {
 	ID            string     `json:"id" bson:"_id"`
+	ProductID     string     `json:"product_id" bson:"product_id"`
+	AccountID     string     `json:"account_id" bson:"-"`
+	ProjectID     string     `json:"project_id" bson:"-"`
 	CMDBServiceID string     `json:"cmdb_service_id" bson:"cmdb_service_id"`
 	BusinessID    string     `json:"business_id" bson:"business_id"`
 	ApplicationID string     `json:"application_id" bson:"application_id"`
@@ -25,6 +28,17 @@ type Service struct {
 	LastSyncedAt  *time.Time `json:"last_synced_at,omitempty" bson:"last_synced_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at" bson:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at" bson:"updated_at"`
+}
+
+type Product struct {
+	ID          string    `json:"id" bson:"_id"`
+	Name        string    `json:"name" bson:"name"`
+	DisplayName string    `json:"display_name" bson:"display_name"`
+	Description string    `json:"description" bson:"description"`
+	ProjectID   string    `json:"project_id" bson:"project_id"`
+	Status      string    `json:"status" bson:"status"`
+	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
 }
 
 type ObservedTarget struct {

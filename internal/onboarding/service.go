@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"

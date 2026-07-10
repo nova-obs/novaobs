@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/logs"
-	"novaobs/internal/metrics"
-	obsendpoint "novaobs/internal/observability/endpoint"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/logs"
+	"novaapm/internal/metrics"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +17,7 @@ func TestStoreScopeResolverResolvesExternalLogTarget(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	service, endpoint := seedExternalTargetScope(t, ctx, store)
-	resolver := NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints())
+	resolver := NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.Products())
 
 	scope, err := resolver.ResolveScope(ctx, RuleSpec{
 		Scope: RuleScope{
@@ -33,8 +33,8 @@ func TestStoreScopeResolverResolvesExternalLogTarget(t *testing.T) {
 	require.Equal(t, "target-orders", scope.LogTargetID)
 	require.Empty(t, scope.LogRouteID)
 	require.Equal(t, endpoint.ID, scope.EndpointID)
-	require.Equal(t, "1001", scope.AccountID)
-	require.Equal(t, "2001", scope.ProjectID)
+	require.Equal(t, service.AccountID, scope.AccountID)
+	require.Equal(t, service.ProjectID, scope.ProjectID)
 	require.Equal(t, `"stream":"orders"`, scope.BaseFilter)
 
 	target, err := resolver.ResolveQueryTarget(ctx, scope)
@@ -43,11 +43,31 @@ func TestStoreScopeResolverResolvesExternalLogTarget(t *testing.T) {
 	require.Equal(t, `"stream":"orders"`, target.BaseFilter)
 }
 
+func TestStoreScopeResolverPrefersExternalLogTargetTenant(t *testing.T) {
+	ctx := context.Background()
+	store := memstore.NewStore()
+	service, endpoint := seedExternalTargetScope(t, ctx, store)
+	var target logs.LogTarget
+	require.NoError(t, store.LogTargets().FindByID(ctx, "target-orders", &target))
+	target.AccountID = "1001"
+	target.ProjectID = "2001"
+	require.NoError(t, store.LogTargets().Update(ctx, target.ID, target))
+	resolver := NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.Products())
+
+	scope, err := resolver.ResolveScope(ctx, RuleSpec{Scope: RuleScope{
+		ServiceID: service.ID, LogTargetID: target.ID, EndpointID: endpoint.ID,
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, "1001", scope.AccountID)
+	require.Equal(t, "2001", scope.ProjectID)
+}
+
 func TestStoreScopeResolverResolvesExplicitMetricsBinding(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	service := seedMetricsBindingScope(t, ctx, store, metrics.BindingStatusActive)
-	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings())
+	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products())
 
 	scope, err := resolver.ResolveScope(ctx, RuleSpec{
 		SignalType: SignalTypeMetrics,
@@ -59,8 +79,8 @@ func TestStoreScopeResolverResolvesExplicitMetricsBinding(t *testing.T) {
 	require.Equal(t, service.Name, scope.ServiceName)
 	require.Equal(t, "binding-orders", scope.MetricsBindingID)
 	require.Equal(t, "vm-prod", scope.EndpointID)
-	require.Equal(t, "1001", scope.AccountID)
-	require.Equal(t, "2001", scope.ProjectID)
+	require.Equal(t, service.AccountID, scope.AccountID)
+	require.Equal(t, service.ProjectID, scope.ProjectID)
 	require.Equal(t, `service:requests:rate5m{service="orders-api"}`, scope.BasePromQL)
 }
 
@@ -74,7 +94,7 @@ func TestStoreScopeResolverSelectsActiveMetricsBindingForService(t *testing.T) {
 		EndpointID: "vm-disabled",
 		Status:     metrics.BindingStatusDisabled,
 	}))
-	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings())
+	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products())
 
 	scope, err := resolver.ResolveScope(ctx, RuleSpec{
 		SignalType: SignalTypeMetrics,
@@ -98,7 +118,7 @@ func TestStoreScopeResolverRejectsMetricsBindingWithoutQueryScope(t *testing.T) 
 		BasePromQL: `up`,
 		Status:     metrics.BindingStatusActive,
 	}))
-	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings())
+	resolver := NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products())
 
 	_, err := resolver.ResolveScope(ctx, RuleSpec{
 		SignalType: SignalTypeMetrics,
@@ -134,7 +154,7 @@ func TestStoreScopeResolverRejectsExternalTargetEndpointMismatch(t *testing.T) {
 		ProjectID: "2001",
 		Status:    "active",
 	}))
-	resolver := NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints())
+	resolver := NewStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.Products())
 
 	_, err := resolver.ResolveScope(ctx, RuleSpec{
 		Scope: RuleScope{
@@ -150,8 +170,12 @@ func TestStoreScopeResolverRejectsExternalTargetEndpointMismatch(t *testing.T) {
 
 func seedExternalTargetScope(t *testing.T, ctx context.Context, store *memstore.Store) (servicecatalog.Service, logs.LogEndpoint) {
 	t.Helper()
-	repo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce"})
+	require.NoError(t, err)
+	repo := servicecatalog.NewRepository(store.Services(), store.Products())
 	service, err := repo.Create(ctx, servicecatalog.Service{
+		ProductID:    product.ID,
 		Name:         "orders-api",
 		DisplayName:  "订单服务",
 		Environment:  "prod",
@@ -188,8 +212,12 @@ func seedExternalTargetScope(t *testing.T, ctx context.Context, store *memstore.
 
 func seedMetricsBindingScope(t *testing.T, ctx context.Context, store *memstore.Store, status string) servicecatalog.Service {
 	t.Helper()
-	repo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce"})
+	require.NoError(t, err)
+	repo := servicecatalog.NewRepository(store.Services(), store.Products())
 	service, err := repo.Create(ctx, servicecatalog.Service{
+		ProductID:    product.ID,
 		Name:         "orders-api",
 		DisplayName:  "订单服务",
 		Environment:  "prod",

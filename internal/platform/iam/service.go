@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"golang.org/x/crypto/bcrypt"
 )

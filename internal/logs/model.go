@@ -3,7 +3,7 @@ package logs
 import (
 	"time"
 
-	obsruntime "novaobs/internal/observability/runtime"
+	obsruntime "novaapm/internal/observability/runtime"
 )
 
 const (
@@ -43,9 +43,8 @@ type LogEndpoint struct {
 	WriteURL    string    `json:"write_url" bson:"write_url"`
 	QueryURL    string    `json:"query_url" bson:"query_url"`
 	VMUIURL     string    `json:"vmui_url" bson:"vmui_url"`
-	AccountID   string    `json:"account_id" bson:"account_id"`
-	ProjectID   string    `json:"project_id" bson:"project_id"`
-	SecretRef   string    `json:"secret_ref" bson:"secret_ref"`
+	AccountID   string    `json:"account_id,omitempty" bson:"-"`
+	ProjectID   string    `json:"project_id,omitempty" bson:"-"`
 	ScopeType   string    `json:"scope_type" bson:"scope_type"`
 	ClusterID   string    `json:"cluster_id" bson:"cluster_id"`
 	Status      string    `json:"status" bson:"status"`
@@ -75,14 +74,24 @@ type LogSource struct {
 }
 
 type LogCollectorConfigVersion struct {
-	ID                  string    `json:"id" bson:"_id"`
-	CollectorConfigHash string    `json:"collector_config_hash" bson:"collector_config_hash"`
-	SourceType          string    `json:"source_type" bson:"source_type"`
-	ClusterID           string    `json:"cluster_id" bson:"cluster_id"`
-	AgentNamespace      string    `json:"agent_namespace" bson:"agent_namespace"`
-	CollectorYAML       string    `json:"collector_yaml" bson:"collector_yaml"`
-	RouteIDs            []string  `json:"route_ids" bson:"route_ids"`
-	CreatedAt           time.Time `json:"created_at" bson:"created_at"`
+	ID                  string                   `json:"id" bson:"_id"`
+	CollectorConfigHash string                   `json:"collector_config_hash" bson:"collector_config_hash"`
+	SourceType          string                   `json:"source_type" bson:"source_type"`
+	ClusterID           string                   `json:"cluster_id" bson:"cluster_id"`
+	AgentNamespace      string                   `json:"agent_namespace" bson:"agent_namespace"`
+	CollectorYAML       string                   `json:"collector_yaml" bson:"collector_yaml"`
+	ConfigFiles         map[string]string        `json:"config_files" bson:"config_files"`
+	ConfigFileRefs      []LogCollectorConfigFile `json:"config_file_refs" bson:"config_file_refs"`
+	RouteIDs            []string                 `json:"route_ids" bson:"route_ids"`
+	CreatedAt           time.Time                `json:"created_at" bson:"created_at"`
+}
+
+type LogCollectorConfigFile struct {
+	Path          string `json:"path" bson:"path"`
+	ConfigMapName string `json:"config_map_name" bson:"config_map_name"`
+	Role          string `json:"role" bson:"role"`
+	RouteID       string `json:"route_id,omitempty" bson:"route_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty" bson:"service_id,omitempty"`
 }
 
 type LogDeploymentManifestVersion struct {
@@ -146,6 +155,8 @@ type LogTarget struct {
 	SourceKind       string     `json:"source_kind" bson:"source_kind"`
 	LogRouteID       string     `json:"log_route_id,omitempty" bson:"log_route_id,omitempty"`
 	BaseFilter       string     `json:"base_filter" bson:"base_filter"`
+	AccountID        string     `json:"account_id,omitempty" bson:"account_id,omitempty"`
+	ProjectID        string     `json:"project_id,omitempty" bson:"project_id,omitempty"`
 	Status           string     `json:"status" bson:"status"`
 	LastProbeStatus  string     `json:"last_probe_status" bson:"last_probe_status"`
 	LastProbeMessage string     `json:"last_probe_message" bson:"last_probe_message"`
@@ -202,6 +213,7 @@ type LogCollectorClusterConfig struct {
 }
 
 type SyncK8sNamespaceRequest struct {
+	ProductID    string `json:"product_id"`
 	ClusterID    string `json:"cluster_id"`
 	Namespace    string `json:"namespace"`
 	Environment  string `json:"environment"`
@@ -238,18 +250,49 @@ type PublishRouteRequest struct {
 }
 
 type K8sCollectorRuntimePublishRequest struct {
-	ClusterID         string `json:"cluster_id"`
-	Namespace         string `json:"namespace"`
-	PreviewID         string `json:"preview_id,omitempty"`
-	ConfirmationToken string `json:"confirmation_token,omitempty"`
+	ClusterID         string   `json:"cluster_id"`
+	Namespace         string   `json:"namespace"`
+	TaskType          string   `json:"task_type"`
+	RouteIDs          []string `json:"route_ids,omitempty"`
+	PreviewID         string   `json:"preview_id,omitempty"`
+	ConfirmationToken string   `json:"confirmation_token,omitempty"`
+}
+
+type K8sCollectorRuntimeStatusRequest struct {
+	ClusterID string `json:"cluster_id"`
+	Namespace string `json:"namespace"`
+}
+
+type K8sCollectorRuntimeStatus struct {
+	ClusterID        string                              `json:"cluster_id"`
+	Namespace        string                              `json:"namespace"`
+	Ready            bool                                `json:"ready"`
+	Status           string                              `json:"status"`
+	Message          string                              `json:"message"`
+	Runtime          *obsruntime.Runtime                 `json:"runtime,omitempty"`
+	Resources        []K8sCollectorRuntimeResourceStatus `json:"resources"`
+	MissingResources []K8sCollectorRuntimeResourceStatus `json:"missing_resources"`
+}
+
+type K8sCollectorRuntimeResourceStatus struct {
+	ClusterID  string `json:"cluster_id"`
+	APIVersion string `json:"api_version"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace,omitempty"`
+	Name       string `json:"name"`
+	Required   bool   `json:"required"`
+	Exists     bool   `json:"exists"`
 }
 
 type K8sCollectorRuntimePublishResult struct {
 	Runtime              obsruntime.Runtime `json:"runtime"`
+	TaskType             string             `json:"task_type"`
 	ManifestYAML         string             `json:"manifest_yaml"`
 	CollectorYAML        string             `json:"collector_yaml"`
+	CollectorConfigFiles map[string]string  `json:"collector_config_files"`
 	CollectorConfigHash  string             `json:"collector_config_hash"`
 	ManifestHash         string             `json:"manifest_hash"`
+	ChangedConfigMaps    []string           `json:"changed_config_maps"`
 	Status               string             `json:"status"`
 	Message              string             `json:"message"`
 	RequiresConfirmation bool               `json:"requires_confirmation"`
@@ -267,13 +310,17 @@ type CreateLogTargetRequest struct {
 	EndpointID string `json:"endpoint_id"`
 	SourceKind string `json:"source_kind"`
 	BaseFilter string `json:"base_filter"`
+	AccountID  string `json:"account_id"`
+	ProjectID  string `json:"project_id"`
 }
 
 type UpdateLogTargetRequest struct {
-	Name       string `json:"name"`
-	EndpointID string `json:"endpoint_id"`
-	BaseFilter string `json:"base_filter"`
-	Status     string `json:"status"`
+	Name       string  `json:"name"`
+	EndpointID string  `json:"endpoint_id"`
+	BaseFilter string  `json:"base_filter"`
+	AccountID  *string `json:"account_id"`
+	ProjectID  *string `json:"project_id"`
+	Status     string  `json:"status"`
 }
 
 type Workspace struct {
@@ -287,6 +334,9 @@ type Workspace struct {
 
 type ServiceSummary struct {
 	ID           string `json:"id"`
+	ProductID    string `json:"product_id"`
+	AccountID    string `json:"account_id"`
+	ProjectID    string `json:"project_id"`
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
 	Environment  string `json:"environment"`
@@ -350,24 +400,32 @@ type LogRouteView struct {
 }
 
 type LogRoutePreview struct {
-	Source                 LogSource   `json:"source"`
-	Endpoint               LogEndpoint `json:"endpoint"`
-	AgentYAML              string      `json:"agent_yaml"`
-	CollectorYAML          string      `json:"collector_yaml"`
-	CollectorConfigHash    string      `json:"collector_config_hash"`
-	DeploymentManifestHash string      `json:"deployment_manifest_hash"`
-	Mode                   string      `json:"mode"`
-	PublishBlocked         bool        `json:"publish_blocked"`
-	PublishBlockedReason   string      `json:"publish_blocked_reason"`
-	Warnings               []string    `json:"warnings"`
+	Source                 LogSource         `json:"source"`
+	Endpoint               LogEndpoint       `json:"endpoint"`
+	AgentYAML              string            `json:"agent_yaml"`
+	CollectorYAML          string            `json:"collector_yaml"`
+	CollectorConfigFiles   map[string]string `json:"collector_config_files"`
+	ServiceConfigPath      string            `json:"service_config_path"`
+	ServiceConfigMapName   string            `json:"service_config_map_name"`
+	ServiceConfigYAML      string            `json:"service_config_yaml"`
+	CollectorConfigHash    string            `json:"collector_config_hash"`
+	DeploymentManifestHash string            `json:"deployment_manifest_hash"`
+	Mode                   string            `json:"mode"`
+	PublishBlocked         bool              `json:"publish_blocked"`
+	PublishBlockedReason   string            `json:"publish_blocked_reason"`
+	Warnings               []string          `json:"warnings"`
 }
 
 type LogRouteCollectorConfig struct {
-	RouteID                string `json:"route_id"`
-	CollectorConfigHash    string `json:"collector_config_hash"`
-	DeploymentManifestHash string `json:"deployment_manifest_hash"`
-	SourceType             string `json:"source_type"`
-	CollectorYAML          string `json:"collector_yaml"`
+	RouteID                string            `json:"route_id"`
+	CollectorConfigHash    string            `json:"collector_config_hash"`
+	DeploymentManifestHash string            `json:"deployment_manifest_hash"`
+	SourceType             string            `json:"source_type"`
+	CollectorYAML          string            `json:"collector_yaml"`
+	CollectorConfigFiles   map[string]string `json:"collector_config_files"`
+	ServiceConfigPath      string            `json:"service_config_path"`
+	ServiceConfigMapName   string            `json:"service_config_map_name"`
+	ServiceConfigYAML      string            `json:"service_config_yaml"`
 }
 
 type PublishRouteResult struct {

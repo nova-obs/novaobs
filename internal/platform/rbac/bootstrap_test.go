@@ -21,6 +21,21 @@ func TestEnsureK8sOpsDefaultsAllowsDevAdminTerminal(t *testing.T) {
 	require.True(t, decision.Allowed)
 }
 
+func TestEnsurePlatformDefaultsAllowsExternalLogTenantOverride(t *testing.T) {
+	repo := NewMemoryRepository()
+	subject := Subject{ID: "platform-admin", Type: "user"}
+
+	err := EnsurePlatformDefaults(repo, subject)
+
+	require.NoError(t, err)
+	decision := NewService(repo).Authorize(subject, Request{
+		Resource: "logs.external-tenant",
+		Action:   "manage",
+		Scope:    Scope{Global: true},
+	})
+	require.True(t, decision.Allowed)
+}
+
 func TestDevK8sOpsScopeDoesNotSeedDemoClusterNamespace(t *testing.T) {
 	scope := DevK8sOpsScope()
 

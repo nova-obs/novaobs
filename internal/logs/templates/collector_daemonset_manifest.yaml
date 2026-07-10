@@ -30,15 +30,29 @@ subjects:
   - kind: ServiceAccount
     name: {{ .AgentName }}
     namespace: {{ .AgentNamespace }}
+{{- range .ConfigMaps }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .AgentName }}-config
-  namespace: {{ .AgentNamespace }}
+  name: {{ .Name }}
+  namespace: {{ $.AgentNamespace }}
+  labels:
+    app.kubernetes.io/name: {{ $.AgentName }}
+    app.kubernetes.io/part-of: novaapm
+    novaapm.io/config-role: {{ .Role }}
+  annotations:
+    novaapm.io/config-hash: {{ .ConfigHash | printf "%q" }}
+    {{ if .RouteID }}
+    novaapm.io/log-route-id: {{ .RouteID | printf "%q" }}
+    {{ end }}
+    {{ if .ServiceID }}
+    novaapm.io/service-id: {{ .ServiceID | printf "%q" }}
+    {{ end }}
 data:
-  collector.yaml: |
-{{ .CollectorConfigBlock }}
+  {{ .DataKey }}: |
+{{ .ContentBlock }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -51,7 +65,7 @@ metadata:
     prometheus.io/port: "8888"
   labels:
     app.kubernetes.io/name: {{ .AgentName }}
-    app.kubernetes.io/part-of: novaobs
+    app.kubernetes.io/part-of: novaapm
 spec:
   type: ClusterIP
   selector:
@@ -71,7 +85,7 @@ metadata:
   namespace: {{ .AgentNamespace }}
   labels:
     app.kubernetes.io/name: {{ .AgentName }}
-    app.kubernetes.io/part-of: novaobs
+    app.kubernetes.io/part-of: novaapm
 spec:
   selector:
     matchLabels:
@@ -80,9 +94,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: {{ .AgentName }}
-        app.kubernetes.io/part-of: novaobs
+        app.kubernetes.io/part-of: novaapm
       annotations:
-        novaobs.io/config-hash: {{ .ConfigHash }}
+        novaapm.io/config-hash: {{ .ConfigHash }}
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
         prometheus.io/port: "8888"
@@ -91,8 +105,11 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: otelcol
-          image: __NOVAOBS_IMAGE_OTEL_COLLECTOR__
-          args: ["--config=/conf/collector.yaml"]
+          image: __NOVAAPM_IMAGE_OTEL_COLLECTOR__
+          args:
+            {{ range .ConfigArgs }}
+            - {{ . | printf "%q" }}
+            {{ end }}
           ports:
             - name: metrics
               containerPort: 8888
@@ -129,14 +146,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            - name: NOVAOBS_CLUSTER_ID
+            - name: NOVAAPM_CLUSTER_ID
               value: {{ .ClusterID | printf "%q" }}
-            - name: NOVAOBS_COLLECTOR_GROUP_ID
+            - name: NOVAAPM_COLLECTOR_GROUP_ID
               value: {{ .CollectorGroupID | printf "%q" }}
-            - name: NOVAOBS_AGENT_NAMESPACE
+            - name: NOVAAPM_AGENT_NAMESPACE
               value: {{ .AgentNamespace | printf "%q" }}
             {{- if .OpAMPEnabled }}
-            - name: NOVAOBS_OPAMP_ENDPOINT
+            - name: NOVAAPM_OPAMP_ENDPOINT
               value: {{ .OpAMPEndpoint | printf "%q" }}
             {{- end }}
           readinessProbe:
@@ -167,8 +184,16 @@ spec:
               mountPath: /var/lib/otelcol
       volumes:
         - name: config
-          configMap:
-            name: {{ .AgentName }}-config
+          projected:
+            defaultMode: 0444
+            sources:
+              {{ range .ConfigMaps }}
+              - configMap:
+                  name: {{ .Name }}
+                  items:
+                    - key: {{ .DataKey }}
+                      path: {{ .MountPath }}
+              {{ end }}
         - name: pod-logs
           hostPath:
             path: /var/log/pods

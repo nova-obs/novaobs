@@ -3,8 +3,8 @@ package images
 import "time"
 
 const (
-	OTelCollectorImagePlaceholder = "__NOVAOBS_IMAGE_OTEL_COLLECTOR__"
-	VmalertImagePlaceholder       = "__NOVAOBS_IMAGE_VMALERT__"
+	OTelCollectorImagePlaceholder = "__NOVAAPM_IMAGE_OTEL_COLLECTOR__"
+	VmalertImagePlaceholder       = "__NOVAAPM_IMAGE_VMALERT__"
 )
 
 var DefaultTemplateValues = map[string]string{

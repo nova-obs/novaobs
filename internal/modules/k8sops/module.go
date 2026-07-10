@@ -1,20 +1,20 @@
 package k8sops
 
 import (
-	"novaobs/internal/modules/k8sops/certificate"
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/modules/k8sops/dashboard"
-	"novaobs/internal/modules/k8sops/deployment"
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/modules/k8sops/kubeconfig"
-	"novaobs/internal/modules/k8sops/namespace"
-	"novaobs/internal/modules/k8sops/platformaccess"
-	k8srbac "novaobs/internal/modules/k8sops/rbac"
-	"novaobs/internal/modules/k8sops/resource"
-	"novaobs/internal/modules/k8sops/serviceaccount"
-	k8stemplate "novaobs/internal/modules/k8sops/template"
-	"novaobs/internal/modules/k8sops/terminal"
-	"novaobs/internal/platform/secret"
+	"novaapm/internal/modules/k8sops/certificate"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/modules/k8sops/dashboard"
+	"novaapm/internal/modules/k8sops/deployment"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/modules/k8sops/kubeconfig"
+	"novaapm/internal/modules/k8sops/namespace"
+	"novaapm/internal/modules/k8sops/platformaccess"
+	k8srbac "novaapm/internal/modules/k8sops/rbac"
+	"novaapm/internal/modules/k8sops/resource"
+	"novaapm/internal/modules/k8sops/serviceaccount"
+	k8stemplate "novaapm/internal/modules/k8sops/template"
+	"novaapm/internal/modules/k8sops/terminal"
+	"novaapm/internal/platform/secret"
 )
 
 type Module struct {

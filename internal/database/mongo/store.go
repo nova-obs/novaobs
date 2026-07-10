@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -17,6 +17,7 @@ const dbName = "observability_platform"
 type Store struct {
 	client  *mongo.Client
 	db      *mongo.Database
+	prdCol  *mongo.Collection
 	svcCol  *mongo.Collection
 	stgCol  *mongo.Collection
 	cgCol   *mongo.Collection
@@ -73,6 +74,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 	store := &Store{
 		client:  client,
 		db:      db,
+		prdCol:  db.Collection("products"),
 		svcCol:  db.Collection("services"),
 		stgCol:  db.Collection("service_targets"),
 		cgCol:   db.Collection("collector_groups"),
@@ -114,6 +116,10 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		kdiCol:  db.Collection("k8s_deployment_inventory"),
 		kdhCol:  db.Collection("k8s_deployment_history"),
 	}
+	if err := store.ensureCatalogIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("初始化服务索引失败: %w", err)
+	}
 	if err := store.ensureAlertingIndexes(ctx); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("初始化告警索引失败: %w", err)
@@ -123,6 +129,31 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		return nil, fmt.Errorf("初始化指标索引失败: %w", err)
 	}
 	return store, nil
+}
+
+func (s *Store) ensureCatalogIndexes(ctx context.Context) error {
+	_, err := s.prdCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "project_id", Value: 1}},
+			Options: options.Index().SetName("uniq_product_project_id").SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "name", Value: 1}},
+			Options: options.Index().SetName("uniq_product_name").SetUnique(true),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.svcCol.Indexes().CreateOne(ctx, catalogServiceIndexModel())
+	return err
+}
+
+func catalogServiceIndexModel() mongo.IndexModel {
+	return mongo.IndexModel{
+		Keys:    bson.D{{Key: "product_id", Value: 1}, {Key: "name", Value: 1}},
+		Options: options.Index().SetName("uniq_product_service_name").SetUnique(true),
+	}
 }
 
 func (s *Store) ensureAlertingIndexes(ctx context.Context) error {
@@ -175,6 +206,7 @@ func (s *Store) Close(ctx context.Context) error {
 
 // ---------- sub-store accessors ----------
 
+func (s *Store) Products() database.ProductStore                     { return &productStore{s.prdCol} }
 func (s *Store) Services() database.ServiceStore                     { return &svcStore{s.svcCol} }
 func (s *Store) ServiceTargets() database.ServiceTargetStore         { return &targetStore{s.stgCol} }
 func (s *Store) CollectorGroups() database.CollectorGroupStore       { return &cgStore{s.cgCol} }

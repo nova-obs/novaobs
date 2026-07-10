@@ -15,7 +15,7 @@ func TestEventIngestorCreatesIdempotentInstanceTransition(t *testing.T) {
 	})
 	payload := []AlertIngestAlert{{
 		Status: "firing", Fingerprint: "abc123",
-		Labels:       map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a", "severity": "critical"},
+		Labels:       map[string]string{"novaapm_rule_id": "rule-a", "service_id": "service-a", "severity": "critical"},
 		Annotations:  map[string]string{"summary": "支付失败"},
 		StartsAt:     time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
 		GeneratorURL: "http://vmalert.local/vmalert/alert",
@@ -39,8 +39,8 @@ func TestEventIngestorAcceptsDirectVmalertAlerts(t *testing.T) {
 	alerts := []AlertIngestAlert{{
 		Fingerprint: "abc123",
 		Labels: map[string]string{
-			"novaobs_rule_id":    "rule-a",
-			"novaobs_runtime_id": "vmalert-logs:vl-prod",
+			"novaapm_rule_id":    "rule-a",
+			"novaapm_runtime_id": "vmalert-logs:vl-prod",
 			"service_id":         "service-a",
 			"severity":           "critical",
 		},
@@ -65,7 +65,7 @@ func TestEventIngestorInfersResolvedDirectAlertsFromEndedAt(t *testing.T) {
 
 	count, err := ingestor.IngestAlerts(context.Background(), "shared-secret", []AlertIngestAlert{{
 		Fingerprint: "abc123",
-		Labels:      map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a"},
+		Labels:      map[string]string{"novaapm_rule_id": "rule-a", "service_id": "service-a"},
 		StartsAt:    time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
 		EndsAt:      time.Date(2026, 6, 22, 9, 59, 30, 0, time.UTC),
 	}})
@@ -89,7 +89,7 @@ func TestEventIngestorRejectsInvalidTokenAndMissingRuleIdentity(t *testing.T) {
 func TestEventIngestorRejectsUnknownDisabledOrMismatchedRule(t *testing.T) {
 	payload := []AlertIngestAlert{{
 		Status: "firing", Fingerprint: "abc123",
-		Labels:   map[string]string{"novaobs_rule_id": "rule-a", "service_id": "service-a"},
+		Labels:   map[string]string{"novaapm_rule_id": "rule-a", "service_id": "service-a"},
 		StartsAt: time.Date(2026, 6, 22, 9, 59, 0, 0, time.UTC),
 	}}
 

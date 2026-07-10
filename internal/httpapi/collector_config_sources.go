@@ -1,11 +1,11 @@
 package httpapi
 
 import (
-	"novaobs/internal/collectorconfig"
-	"novaobs/internal/opamp"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/collectorconfig"
+	"novaapm/internal/opamp"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

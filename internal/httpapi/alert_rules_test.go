@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"novaobs/internal/alerting"
+	"novaapm/internal/alerting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

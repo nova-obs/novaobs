@@ -23,7 +23,7 @@ func DefaultCommandPolicy() CommandPolicy {
 
 func (p CommandPolicy) Parse(command string) (ParsedCommand, string, error) {
 	if containsShellMeta(command) {
-		return ParsedCommand{}, "命令包含 shell 元字符，NovaObs 终端第一版只接受结构化 kubectl 参数", nil
+		return ParsedCommand{}, "命令包含 shell 元字符，NovaAPM 终端第一版只接受结构化 kubectl 参数", nil
 	}
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
@@ -74,7 +74,7 @@ func (p CommandPolicy) TrimOutput(output string) (string, bool) {
 			cut = len(output)
 		}
 	}
-	return output[:cut] + "\n... output truncated by NovaObs terminal policy ...", true
+	return output[:cut] + "\n... output truncated by NovaAPM terminal policy ...", true
 }
 
 func allowedReadOnlyVerb(verb string) bool {

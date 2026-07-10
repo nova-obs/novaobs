@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Finish the next phase after startorch runtime topology parity: make the migrated K8s module reachable in real API runtime, close the remaining resource-management gaps, and prepare NovaObs-native RBAC/user authorization surfaces.
+**Goal:** Finish the next phase after startorch runtime topology parity: make the migrated K8s module reachable in real API runtime, close the remaining resource-management gaps, and prepare NovaAPM-native RBAC/user authorization surfaces.
 
-**Architecture:** Keep NovaObs as the unified frontend and backend API surface. K8s cluster access continues through NovaObs credential/provider/RBAC boundaries; startorch behavior is used as functional baseline, but old startorch permission code is not carried forward.
+**Architecture:** Keep NovaAPM as the unified frontend and backend API surface. K8s cluster access continues through NovaAPM credential/provider/RBAC boundaries; startorch behavior is used as functional baseline, but old startorch permission code is not carried forward.
 
-**Tech Stack:** Go/Gin backend, Kubernetes client-go typed + dynamic clients, React/Vite frontend, TanStack Query, NovaObs platform RBAC/audit modules.
+**Tech Stack:** Go/Gin backend, Kubernetes client-go typed + dynamic clients, React/Vite frontend, TanStack Query, NovaAPM platform RBAC/audit modules.
 
 ---
 
@@ -23,7 +23,7 @@
 
 1. Local real API runtime still needs backend restart/recheck: previous screenshot showed `/api/v1/k8s/runtime-groups` returning 404 from port `7890`, likely because the running backend was stale.
 2. Resource detail/YAML for cluster-scoped resources such as `PersistentVolume` needs explicit real-cluster validation because frontend still requires namespace context while dynamic reader can return empty namespace.
-3. NovaObs-native user/RBAC management UI is not implemented; existing K8s users page is still not the final platform authorization surface.
+3. NovaAPM-native user/RBAC management UI is not implemented; existing K8s users page is still not the final platform authorization surface.
 4. Apply/Delete execution path exists in plan history, but K8s resource pages are still mostly read-only and do not expose a reviewed operation flow consistently.
 5. Real cluster read-only validation is pending.
 
@@ -32,17 +32,17 @@
 ### Task 1: Real Backend Runtime Smoke Test
 
 **Files:**
-- Verify: `/Users/user/Documents/NovaObs/novaobs/cmd/server/main.go`
-- Verify: `/Users/user/Documents/NovaObs/novaobs/configs`
-- Verify: `/Users/user/Documents/NovaObs/novaobs-fe/vite.config.ts`
-- Modify only if needed: `/Users/user/Documents/NovaObs/novaobs/README.md`
+- Verify: `/Users/user/Documents/NovaAPM/novaapm/cmd/server/main.go`
+- Verify: `/Users/user/Documents/NovaAPM/novaapm/configs`
+- Verify: `/Users/user/Documents/NovaAPM/novaapm-fe/vite.config.ts`
+- Modify only if needed: `/Users/user/Documents/NovaAPM/novaapm/README.md`
 
 - [ ] **Step 1: Start the current backend build**
 
 Run:
 
 ```bash
-export NOVAOBS_SECRET_KEY="12345678901234567890123456789012"
+export NOVAAPM_SECRET_KEY="12345678901234567890123456789012"
 go run ./cmd/server
 ```
 
@@ -65,7 +65,7 @@ Expected: not `404`. Acceptable results are:
 
 - [ ] **Step 3: Confirm frontend proxy points at the same backend**
 
-Check `/Users/user/Documents/NovaObs/novaobs-fe/vite.config.ts`:
+Check `/Users/user/Documents/NovaAPM/novaapm-fe/vite.config.ts`:
 
 ```ts
 proxy: {
@@ -84,9 +84,9 @@ Update run notes in final response and, if Notion is available, create `阶段�
 ### Task 2: Resource Detail/YAML Real Coverage For Expanded Kinds
 
 **Files:**
-- Modify: `/Users/user/Documents/NovaObs/novaobs/internal/modules/k8sops/resource/kubernetes_reader.go`
-- Modify: `/Users/user/Documents/NovaObs/novaobs/internal/modules/k8sops/resource/kubernetes_reader_test.go`
-- Modify: `/Users/user/Documents/NovaObs/novaobs-fe/src/pages/k8s/ResourcePage.tsx`
+- Modify: `/Users/user/Documents/NovaAPM/novaapm/internal/modules/k8sops/resource/kubernetes_reader.go`
+- Modify: `/Users/user/Documents/NovaAPM/novaapm/internal/modules/k8sops/resource/kubernetes_reader_test.go`
+- Modify: `/Users/user/Documents/NovaAPM/novaapm-fe/src/pages/k8s/ResourcePage.tsx`
 
 - [ ] **Step 1: Add tests for cluster-scoped detail/YAML**
 
@@ -151,17 +151,17 @@ Expected: PV rows do not look broken in resource table.
 
 ---
 
-### Task 3: NovaObs-Native RBAC/User Authorization Surface
+### Task 3: NovaAPM-Native RBAC/User Authorization Surface
 
 **Files:**
-- Inspect: `/Users/user/Documents/NovaObs/novaobs/internal/platform/rbac`
-- Inspect: `/Users/user/Documents/NovaObs/novaobs/internal/modules/k8sops/rbac`
-- Create or modify backend module under: `/Users/user/Documents/NovaObs/novaobs/internal/platform`
+- Inspect: `/Users/user/Documents/NovaAPM/novaapm/internal/platform/rbac`
+- Inspect: `/Users/user/Documents/NovaAPM/novaapm/internal/modules/k8sops/rbac`
+- Create or modify backend module under: `/Users/user/Documents/NovaAPM/novaapm/internal/platform`
 - Modify frontend route/nav:
-  - `/Users/user/Documents/NovaObs/novaobs-fe/src/app/routes.tsx`
-  - `/Users/user/Documents/NovaObs/novaobs-fe/src/pages/k8s/navigation.ts`
+  - `/Users/user/Documents/NovaAPM/novaapm-fe/src/app/routes.tsx`
+  - `/Users/user/Documents/NovaAPM/novaapm-fe/src/pages/k8s/navigation.ts`
 - Create frontend page if needed:
-  - `/Users/user/Documents/NovaObs/novaobs-fe/src/pages/k8s/PlatformAccessPage.tsx`
+  - `/Users/user/Documents/NovaAPM/novaapm-fe/src/pages/k8s/PlatformAccessPage.tsx`
 
 - [ ] **Step 1: Inventory current platform RBAC model**
 
@@ -224,10 +224,10 @@ No marketing copy or decorative hero.
 ### Task 4: Resource Operation Entry Points
 
 **Files:**
-- Inspect: `/Users/user/Documents/NovaObs/novaobs/internal/modules/k8sops/deployment`
+- Inspect: `/Users/user/Documents/NovaAPM/novaapm/internal/modules/k8sops/deployment`
 - Modify frontend:
-  - `/Users/user/Documents/NovaObs/novaobs-fe/src/pages/k8s/ResourcePage.tsx`
-  - `/Users/user/Documents/NovaObs/novaobs-fe/src/pages/k8s/api.ts`
+  - `/Users/user/Documents/NovaAPM/novaapm-fe/src/pages/k8s/ResourcePage.tsx`
+  - `/Users/user/Documents/NovaAPM/novaapm-fe/src/pages/k8s/api.ts`
 
 - [ ] **Step 1: Verify existing backend operation routes**
 
@@ -307,7 +307,7 @@ Expected: screenshots show real API state or clear permission/empty-state messag
 1. Task 1: Real backend route smoke test.
 2. Task 2: Expanded resource detail/YAML cluster-scoped validation.
 3. Task 5: Real read-only cluster validation.
-4. Task 3: NovaObs-native RBAC/user authorization surface.
+4. Task 3: NovaAPM-native RBAC/user authorization surface.
 5. Task 4: Resource operation entry points.
 
 Reason: route/runtime correctness should be verified before adding more UI and permission workflows. RBAC should precede actual operation controls, because apply/delete/terminal behavior depends on clean permission semantics.

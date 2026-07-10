@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
 )
 
 func TestServiceListsDefaultImages(t *testing.T) {
@@ -37,7 +37,7 @@ func TestServiceUpsertOverridesDefaultImage(t *testing.T) {
 
 	_, err := svc.Upsert(context.Background(), UpsertRequest{
 		Key:   OTelCollectorImagePlaceholder,
-		Value: "harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0",
+		Value: "harbor.example.com/novaapm/opentelemetry-collector-contrib:0.153.0",
 	})
 	if err != nil {
 		t.Fatalf("Upsert returned error: %v", err)
@@ -47,7 +47,7 @@ func TestServiceUpsertOverridesDefaultImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TemplateValues returned error: %v", err)
 	}
-	if values[OTelCollectorImagePlaceholder] != "harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0" {
+	if values[OTelCollectorImagePlaceholder] != "harbor.example.com/novaapm/opentelemetry-collector-contrib:0.153.0" {
 		t.Fatalf("override not applied: %s", values[OTelCollectorImagePlaceholder])
 	}
 }
@@ -88,11 +88,11 @@ func TestStoreRepositoryReturnsUnavailableWhenStoreMissing(t *testing.T) {
 
 func TestApplyTemplateValuesReplacesKnownPlaceholders(t *testing.T) {
 	rendered := ApplyTemplateValues(
-		"image: __NOVAOBS_IMAGE_OTEL_COLLECTOR__\nsidecar: __UNKNOWN_IMAGE__",
-		map[string]string{OTelCollectorImagePlaceholder: "harbor.example.com/novaobs/otel:1"},
+		"image: __NOVAAPM_IMAGE_OTEL_COLLECTOR__\nsidecar: __UNKNOWN_IMAGE__",
+		map[string]string{OTelCollectorImagePlaceholder: "harbor.example.com/novaapm/otel:1"},
 	)
 
-	if !strings.Contains(rendered, "image: harbor.example.com/novaobs/otel:1") {
+	if !strings.Contains(rendered, "image: harbor.example.com/novaapm/otel:1") {
 		t.Fatalf("known placeholder was not replaced: %s", rendered)
 	}
 	if !strings.Contains(rendered, "sidecar: __UNKNOWN_IMAGE__") {

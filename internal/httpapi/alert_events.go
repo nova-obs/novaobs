@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/alerting"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

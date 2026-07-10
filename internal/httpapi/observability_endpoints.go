@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	obsendpoint "novaobs/internal/observability/endpoint"
-	"novaobs/internal/platform/authctx"
-	"novaobs/pkg/response"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	"novaapm/internal/platform/authctx"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

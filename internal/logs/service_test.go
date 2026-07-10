@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database/memstore"
-	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	k8sopsresource "novaobs/internal/modules/k8sops/resource"
-	obsruntime "novaobs/internal/observability/runtime"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database/memstore"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	k8sopsresource "novaapm/internal/modules/k8sops/resource"
+	obsruntime "novaapm/internal/observability/runtime"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -26,6 +26,7 @@ func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 
 	result, err := fixture.service.SyncK8sNamespaceServices(ctx, SyncK8sNamespaceRequest{
+		ProductID:    fixture.productID,
 		ClusterID:    "test03",
 		Namespace:    "logplatform",
 		Environment:  "prod",
@@ -38,6 +39,9 @@ func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
 	utrace := result.Services[1]
 	require.True(t, utrace.Created)
 	require.Equal(t, "utrace-api", utrace.Service.Name)
+	require.Equal(t, fixture.productID, utrace.Service.ProductID)
+	require.Equal(t, "0", utrace.Service.AccountID)
+	require.NotEmpty(t, utrace.Service.ProjectID)
 	require.Equal(t, "k8s_workload", utrace.Service.IdentityType)
 	require.Equal(t, "k8s", utrace.Service.Source)
 	require.Equal(t, "synced", utrace.Service.SyncStatus)
@@ -54,10 +58,21 @@ func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
 	require.Equal(t, "utrace-api", targets[0].IdentityAttributes["k8s.workload.name"])
 }
 
+func TestSyncK8sNamespaceServicesRequiresProduct(t *testing.T) {
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+
+	_, err := fixture.service.SyncK8sNamespaceServices(context.Background(), SyncK8sNamespaceRequest{
+		ClusterID: "test03",
+		Namespace: "logplatform",
+	})
+
+	require.ErrorContains(t, err, "产品")
+}
+
 func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	service := fixture.createService(t, "utrace-api")
 	group := fixture.createGroup(t)
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
@@ -86,12 +101,16 @@ func TestPreviewRouteUsesClusterBoundEndpointWhenEndpointIDIsEmpty(t *testing.T)
 	require.Contains(t, preview.AgentYAML, "logs_endpoint: \"http://vl.test03:9428/insert/opentelemetry/v1/logs\"")
 	require.Contains(t, preview.CollectorYAML, "receivers:")
 	require.Contains(t, preview.CollectorYAML, "file_log/logplatform-utrace-api")
+	require.Contains(t, preview.CollectorYAML, "novaapm.service_id")
+	require.Contains(t, preview.CollectorYAML, service.ID)
+	require.Contains(t, preview.CollectorYAML, `AccountID: "0"`)
+	require.Contains(t, preview.CollectorYAML, `ProjectID: "`+service.ProjectID+`"`)
 	require.NotContains(t, preview.CollectorYAML, "kind: DaemonSet")
 }
 
 func TestPreviewK8sRouteRequiresObservabilityRuntimeReady(t *testing.T) {
 	ctx := context.Background()
-	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroupsWithoutCollector("test03", "logplatform"))
 	service := fixture.createService(t, "utrace-api")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -114,7 +133,55 @@ func TestPreviewK8sRouteRequiresObservabilityRuntimeReady(t *testing.T) {
 		},
 	})
 
-	require.ErrorContains(t, err, "尚未启用 logs_collector 观测接入")
+	require.ErrorContains(t, err, "logs_collector 基础组件缺失")
+	require.ErrorContains(t, err, "请到 K8s / 观测接入重新部署")
+}
+
+func TestCheckK8sCollectorRuntimeStatusNormalizesLegacyDefaultNamespace(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroupsWithoutCollector("test03", "logplatform"))
+
+	status, err := fixture.service.CheckK8sCollectorRuntimeStatus(ctx, K8sCollectorRuntimeStatusRequest{
+		ClusterID: "test03",
+		Namespace: legacyK8sCollectorNamespace,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, defaultK8sCollectorNamespace, status.Namespace)
+	require.NotContains(t, status.Message, legacyK8sCollectorNamespace)
+	require.NotEmpty(t, status.MissingResources)
+	for _, resource := range status.MissingResources {
+		require.NotEqual(t, legacyK8sCollectorNamespace, resource.Namespace)
+	}
+}
+
+func TestPreviewK8sRouteAllowsClusterResourcesWithoutRuntimeRecord(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createService(t, "utrace-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:      "vl-test03",
+		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
+		QueryURL:  "http://vl.test03:9428/select/logsql/query",
+		VMUIURL:   "http://vl.test03:9428/select/vmui",
+		ClusterID: "test03",
+	})
+	require.NoError(t, err)
+
+	preview, err := fixture.service.PreviewRoute(ctx, UpsertRouteRequest{
+		ServiceID:  service.ID,
+		SourceType: SourceTypeK8sStdout,
+		EndpointID: endpoint.ID,
+		K8s: K8sSourceInput{
+			ClusterID:    "test03",
+			Namespace:    "logplatform",
+			WorkloadKind: "Deployment",
+			WorkloadName: "utrace-api",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, endpoint.ID, preview.Endpoint.ID)
 }
 
 func TestMetricsOnlyEndpointDoesNotLeakIntoLogsEndpointsOrRouteSelection(t *testing.T) {
@@ -154,7 +221,7 @@ func TestMetricsOnlyEndpointDoesNotLeakIntoLogsEndpointsOrRouteSelection(t *test
 func TestPreviewRouteRejectsRouteFragmentWithPlatformProcessor(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	service := fixture.createService(t, "utrace-api")
 	_, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -168,6 +235,11 @@ func TestPreviewRouteRejectsRouteFragmentWithPlatformProcessor(t *testing.T) {
 		validK8sRouteFragment("custom-route", "http://vl.test03:9428/insert/opentelemetry/v1/logs"),
 		"processors:\n  resource/custom-route:",
 		"processors:\n  memory_limiter:\n    check_interval: 1s\n  resource/custom-route:",
+		1,
+	)
+	fragment = strings.Replace(fragment,
+		"    logs_endpoint: \"http://vl.test03:9428/insert/opentelemetry/v1/logs\"",
+		"    logs_endpoint: \"http://vl.test03:9428/insert/opentelemetry/v1/logs\"\n    headers:\n      AccountID: \"0\"\n      ProjectID: \""+service.ProjectID+"\"",
 		1,
 	)
 
@@ -252,10 +324,183 @@ func TestCreateExternalVLogsTargetRegistersServiceQueryScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, groups)
 
-	workspace, err := fixture.service.Workspace(ctx)
+	workspace, err := fixture.service.Workspace(ctx, platformrbac.DevAdminSubject(), service.ProductID, service.ID)
 	require.NoError(t, err)
+	require.Len(t, workspace.Services, 1)
+	require.Equal(t, service.AccountID, workspace.Services[0].AccountID)
+	require.Equal(t, service.ProjectID, workspace.Services[0].ProjectID)
+	require.Equal(t, service.AccountID, workspace.Endpoints[0].AccountID)
+	require.Equal(t, service.ProjectID, workspace.Endpoints[0].ProjectID)
 	require.Len(t, workspace.Targets, 1)
 	require.Empty(t, workspace.Routes)
+}
+
+func TestCreateExternalVLogsTargetPrefersExplicitExternalTenant(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		Name:       "orders 历史 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api"`,
+		AccountID:  "1001",
+		ProjectID:  "2001",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "1001", created.Target.AccountID)
+	require.Equal(t, "2001", created.Target.ProjectID)
+	require.Equal(t, "1001", created.Endpoint.AccountID)
+	require.Equal(t, "2001", created.Endpoint.ProjectID)
+	require.NotEqual(t, service.ProjectID, created.Endpoint.ProjectID)
+}
+
+func TestCreateExternalVLogsTargetValidatesOptionalExternalTenant(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	request := CreateLogTargetRequest{
+		Name:       "orders 历史 VL",
+		ServiceID:  service.ID,
+		EndpointID: endpoint.ID,
+		BaseFilter: `"service.name":="orders-api"`,
+		AccountID:  "1001",
+	}
+
+	_, err = fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), request)
+	require.ErrorContains(t, err, "AccountID 和 ProjectID 必须同时填写")
+
+	request.ProjectID = "4294967296"
+	_, err = fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), request)
+	require.ErrorContains(t, err, "ProjectID 必须是 uint32")
+}
+
+func TestCreateExternalVLogsTargetRequiresGlobalTenantOverridePermission(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	fixture.service.authorizer = targetManagerOnlyAuthorizer{}
+
+	subject := platformrbac.Subject{ID: "target-manager", Type: "user"}
+	request := CreateLogTargetRequest{
+		ServiceID: service.ID, EndpointID: endpoint.ID, BaseFilter: `"service.name":="orders-api"`,
+		AccountID: "1001", ProjectID: "2001",
+	}
+	_, err = fixture.service.CreateTarget(ctx, subject, request)
+
+	require.ErrorIs(t, err, ErrPermissionDenied)
+	request.AccountID, request.ProjectID = "", ""
+	created, err := fixture.service.CreateTarget(ctx, subject, request)
+	require.NoError(t, err)
+	accountID, projectID := "1001", "2001"
+	_, err = fixture.service.UpdateTarget(ctx, subject, created.Target.ID, UpdateLogTargetRequest{
+		AccountID: &accountID, ProjectID: &projectID,
+	})
+	require.ErrorIs(t, err, ErrPermissionDenied)
+}
+
+func TestUpdateExternalVLogsTargetCanReturnToProductTenant(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		ServiceID: service.ID, EndpointID: endpoint.ID, BaseFilter: `"service.name":="orders-api"`,
+		AccountID: "1001", ProjectID: "2001",
+	})
+	require.NoError(t, err)
+	emptyAccountID, emptyProjectID := "", ""
+
+	updated, err := fixture.service.UpdateTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID, UpdateLogTargetRequest{
+		AccountID: &emptyAccountID, ProjectID: &emptyProjectID,
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, updated.Target.AccountID)
+	require.Empty(t, updated.Target.ProjectID)
+	require.Equal(t, service.AccountID, updated.Endpoint.AccountID)
+	require.Equal(t, service.ProjectID, updated.Endpoint.ProjectID)
+}
+
+func TestUpdateExternalVLogsTargetResetsVerificationWhenTenantChanges(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		ServiceID: service.ID, EndpointID: endpoint.ID, BaseFilter: `"service.name":="orders-api"`,
+	})
+	require.NoError(t, err)
+	verified, err := fixture.service.ProbeTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID)
+	require.NoError(t, err)
+	require.Equal(t, LogTargetStatusVerified, verified.Target.Status)
+	accountID, projectID := "1001", "2001"
+
+	updated, err := fixture.service.UpdateTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID, UpdateLogTargetRequest{
+		AccountID: &accountID, ProjectID: &projectID,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, LogTargetStatusPendingVerification, updated.Target.Status)
+	require.Empty(t, updated.Target.LastProbeStatus)
+	require.Empty(t, updated.Target.LastProbeMessage)
+	require.Nil(t, updated.Target.LastProbeAt)
+}
+
+func TestUpdateExternalVLogsTargetRejectsForgedVerifiedStatus(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createService(t, "orders-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
+		Name:     "vl-external",
+		WriteURL: "http://vl.external:9428/insert/opentelemetry/v1/logs",
+		QueryURL: "http://vl.external:9428/select/logsql/query",
+		VMUIURL:  "http://vl.external:9428/select/vmui",
+	})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateTarget(ctx, platformrbac.DevAdminSubject(), CreateLogTargetRequest{
+		ServiceID: service.ID, EndpointID: endpoint.ID, BaseFilter: `"service.name":="orders-api"`,
+	})
+	require.NoError(t, err)
+
+	_, err = fixture.service.UpdateTarget(ctx, platformrbac.DevAdminSubject(), created.Target.ID, UpdateLogTargetRequest{Status: LogTargetStatusVerified})
+
+	require.ErrorContains(t, err, "verified 状态只能通过探测产生")
 }
 
 func TestCreateExternalVLogsTargetRejectsUnsafeBaseFilter(t *testing.T) {
@@ -313,7 +558,7 @@ func TestProbeExternalVLogsTargetMarksVerifiedWithoutCreatingRoute(t *testing.T)
 func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	service := fixture.createService(t, "utrace-api")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -340,10 +585,10 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	require.NotEmpty(t, route.Route.AgentGroupID)
 	group, err := collectormanagement.NewService(fixture.store.CollectorGroups(), fixture.store.CollectorInstances()).GetGroup(ctx, route.Route.AgentGroupID)
 	require.NoError(t, err)
-	require.Equal(t, "logs-k8s-test03-novaobs-system", group.Name)
+	require.Equal(t, "logs-k8s-test03-novaapm-system", group.Name)
 	require.Equal(t, "dedicated_collector", group.Mode)
 	require.Equal(t, "test03", group.Cluster)
-	require.Equal(t, "novaobs-system", group.Namespace)
+	require.Equal(t, "novaapm-system", group.Namespace)
 
 	secondService := fixture.createService(t, "payment-api")
 	secondRoute, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{
@@ -353,7 +598,7 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 		K8s: K8sSourceInput{
 			ClusterID:      "test03",
 			Namespace:      "logplatform",
-			AgentNamespace: "novaobs-system",
+			AgentNamespace: "novaapm-system",
 			WorkloadKind:   "Deployment",
 			WorkloadName:   "payment-api",
 		},
@@ -370,7 +615,7 @@ func TestCreateK8sRouteAutoCreatesClusterAgentGroup(t *testing.T) {
 	require.Len(t, sources, 1)
 	require.Equal(t, SourceTypeK8sStdout, sources[0].SourceType)
 	require.Equal(t, "test03", sources[0].ClusterID)
-	require.Equal(t, "novaobs-system", sources[0].AgentNamespace)
+	require.Equal(t, "novaapm-system", sources[0].AgentNamespace)
 	require.Empty(t, sources[0].Namespace)
 	require.Empty(t, sources[0].WorkloadName)
 }
@@ -483,18 +728,18 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 	esEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:       "es-prod",
 		SinkType:   EndpointSinkES,
-		StreamName: "novaobs-logs",
+		StreamName: "novaapm-logs",
 		WriteURL:   "http://elasticsearch.prod:9200",
 		ScopeType:  EndpointScopeVM,
 	})
 	require.NoError(t, err)
 	require.Equal(t, EndpointSinkES, esEndpoint.SinkType)
-	require.Equal(t, "novaobs-logs", esEndpoint.StreamName)
+	require.Equal(t, "novaapm-logs", esEndpoint.StreamName)
 
 	kafkaEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:       "kafka-prod",
 		SinkType:   EndpointSinkKafka,
-		StreamName: "novaobs-logs",
+		StreamName: "novaapm-logs",
 		WriteURL:   "kafka-0.prod:9092,kafka-1.prod:9092",
 		ScopeType:  EndpointScopeVM,
 	})
@@ -521,7 +766,7 @@ func TestCreateEndpointSupportsFlexibleDownstreamTypes(t *testing.T) {
 	require.Contains(t, rendered, "logs_endpoint: \"http://otel-gateway.prod:4318/v1/logs\"")
 }
 
-func TestCreateVictoriaLogsEndpointPersistsTenantAndRendersHeaders(t *testing.T) {
+func TestCreateVictoriaLogsEndpointIgnoresEndpointTenantAndCredential(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 
@@ -536,15 +781,13 @@ func TestCreateVictoriaLogsEndpointPersistsTenantAndRendersHeaders(t *testing.T)
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "9527", endpoint.AccountID)
-	require.Equal(t, "9527", endpoint.ProjectID)
+	require.Empty(t, endpoint.AccountID)
+	require.Empty(t, endpoint.ProjectID)
 	rendered := renderDownstreamExporterYAML(endpoint, "otlp_http/logs_downstream")
-	require.Contains(t, rendered, "headers:")
-	require.Contains(t, rendered, `AccountID: "9527"`)
-	require.Contains(t, rendered, `ProjectID: "9527"`)
+	require.NotContains(t, rendered, "headers:")
 }
 
-func TestCreateVictoriaLogsEndpointValidatesTenantPair(t *testing.T) {
+func TestCreateVictoriaLogsEndpointDoesNotValidateClientTenant(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 	base := LogEndpoint{
@@ -556,12 +799,10 @@ func TestCreateVictoriaLogsEndpointValidatesTenantPair(t *testing.T) {
 		AccountID: "9527",
 	}
 
-	_, err := fixture.service.CreateEndpoint(ctx, base)
-	require.ErrorContains(t, err, "AccountID 和 ProjectID 必须同时填写")
-
-	base.ProjectID = "4294967296"
-	_, err = fixture.service.CreateEndpoint(ctx, base)
-	require.ErrorContains(t, err, "ProjectID 必须是 uint32")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, base)
+	require.NoError(t, err)
+	require.Empty(t, endpoint.AccountID)
+	require.Empty(t, endpoint.ProjectID)
 }
 
 func TestVictoriaLogsTenantCannotBeBypassedByCustomCollectorYAML(t *testing.T) {
@@ -688,7 +929,7 @@ func TestCreateRouteRejectsUnsafeCollectorYAML(t *testing.T) {
 		VM: VMSourceInput{
 			HostGroup:     "billing-vms",
 			PathPattern:   "/data/logs/*.log",
-			CollectorYAML: validCollectorYAML(endpoint.WriteURL, "    headers:\n      authorization: Bearer plain-token\n"),
+			CollectorYAML: validCollectorYAML(endpoint.WriteURL, "    headers:\n      AccountID: \""+service.AccountID+"\"\n      ProjectID: \""+service.ProjectID+"\"\n      authorization: Bearer plain-token\n"),
 		},
 	})
 	require.ErrorContains(t, err, "collector_yaml 不能直接包含")
@@ -698,7 +939,7 @@ func TestValidateCollectorYAMLSupportsESAndKafkaExporters(t *testing.T) {
 	esEndpoint := LogEndpoint{SinkType: EndpointSinkES, WriteURL: "http://elasticsearch.prod:9200"}
 	require.NoError(t, validateCollectorYAML(validESCollectorYAML(esEndpoint.WriteURL), esEndpoint))
 
-	kafkaEndpoint := LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaobs-logs"}
+	kafkaEndpoint := LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaapm-logs"}
 	require.NoError(t, validateCollectorYAML(validKafkaCollectorYAML([]string{"kafka-0.prod:9092", "kafka-1.prod:9092"}), kafkaEndpoint))
 
 	err := validateCollectorYAML(validKafkaCollectorYAML([]string{"kafka-other.prod:9092"}), kafkaEndpoint)
@@ -744,14 +985,14 @@ func TestK8sCollectorYAMLRejectsUnsafeNodeLogIncludes(t *testing.T) {
 
 func TestK8sCollectorYAMLRequiresFilelogSafetyDefaults(t *testing.T) {
 	raw := `receivers:
-  file_log/novaobs:
+  file_log/novaapm:
     include:
       - /var/log/pods/logplatform_*_*/*/*.log
     start_at: end
     include_file_path: true
     include_file_name: false
 processors:
-  resource/novaobs:
+  resource/novaapm:
     attributes:
       - key: service.name
         value: logplatform
@@ -763,14 +1004,14 @@ exporters:
 service:
   pipelines:
     logs:
-      receivers: [file_log/novaobs]
-      processors: [resource/novaobs, batch]
+      receivers: [file_log/novaapm]
+      processors: [resource/novaapm, batch]
       exporters: [otlp_http/logs_downstream]
 `
 	err := validateGeneratedK8sCollectorConfig(raw)
 	require.ErrorContains(t, err, "poll_interval")
 
-	aliasReceiver := strings.Replace(raw, "file_log/novaobs", "filelog/novaobs", 1)
+	aliasReceiver := strings.Replace(raw, "file_log/novaapm", "filelog/novaapm", 1)
 	err = validateGeneratedK8sCollectorConfig(aliasReceiver)
 	require.ErrorContains(t, err, "不支持 filelog alias")
 }
@@ -778,7 +1019,7 @@ service:
 func TestK8sRouteUsesCollectorDomainBundleWhenMultipleRoutes(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -845,7 +1086,7 @@ func TestK8sRouteUsesCollectorDomainBundleWhenMultipleRoutes(t *testing.T) {
 func TestK8sRouteRejectsAmbiguousOrVMEndpoint(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	service := fixture.createService(t, "utrace-api")
 	group := fixture.createGroup(t)
 	globalEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
@@ -909,7 +1150,7 @@ func TestPublishK8sCollectorRuntimeCombinesRoutesAndParseRulesIntoOneDaemonSet(t
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	group := fixture.createGroup(t)
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
@@ -957,31 +1198,86 @@ func TestPublishK8sCollectorRuntimeCombinesRoutesAndParseRulesIntoOneDaemonSet(t
 
 	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID: "test03",
-		Namespace: "novaobs-system",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
 	})
 
 	require.NoError(t, err)
 	require.True(t, result.RequiresConfirmation)
+	require.Equal(t, "incremental", result.TaskType)
+	require.NotEmpty(t, result.ChangedConfigMaps)
 	require.Equal(t, "logs_collector", result.Runtime.Kind)
-	require.Equal(t, "logs-collector:test03:novaobs-system", result.Runtime.ID)
+	require.Equal(t, "logs-collector:test03:novaapm-system", result.Runtime.ID)
 	require.Equal(t, "previewed", result.Runtime.Status)
 	require.Len(t, result.Resources, 2)
 	require.Len(t, result.Diffs, 2)
 	require.True(t, deploy.lastPreviewReq.ForceConflicts)
 	require.Contains(t, deploy.lastPreviewYAML, "kind: DaemonSet")
-	require.Contains(t, deploy.lastPreviewYAML, "name: novaobs-logs-agent")
+	require.Contains(t, deploy.lastPreviewYAML, "name: novaapm-logs-agent")
 	require.Equal(t, 1, strings.Count(deploy.lastPreviewYAML, "kind: DaemonSet"))
+	require.Contains(t, deploy.lastPreviewYAML, "kind: ConfigMap")
+	require.NotContains(t, deploy.lastPreviewYAML, "kind: Namespace")
+	require.NotContains(t, deploy.lastPreviewYAML, "kind: ClusterRole")
+	require.NotContains(t, deploy.lastPreviewYAML, "kind: ClusterRoleBinding")
+	require.NotContains(t, deploy.lastPreviewYAML, "kind: ServiceAccount")
+	require.NotContains(t, deploy.lastPreviewYAML, "kind: Service\n")
 	require.Contains(t, deploy.lastPreviewYAML, "utrace-api")
 	require.Contains(t, deploy.lastPreviewYAML, "payment-api")
 	require.Contains(t, deploy.lastPreviewYAML, "ExtractPatterns(body,")
 	require.Contains(t, deploy.lastPreviewYAML, "payment-text")
 }
 
+func TestPublishK8sCollectorRuntimeUsesFullManifestWhenRuntimeResourcesMissing(t *testing.T) {
+	ctx := context.Background()
+	deploy := &fakeDeploymentService{}
+	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroupsWithoutCollector("test03", "logplatform"), deploy)
+
+	_, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
+	})
+	require.ErrorContains(t, err, "logs_collector 基础组件缺失")
+
+	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		TaskType:  "base",
+		Namespace: "novaapm-system",
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.RequiresConfirmation)
+	require.Equal(t, "base", result.TaskType)
+	require.Empty(t, result.ChangedConfigMaps)
+	require.Contains(t, deploy.lastPreviewYAML, "kind: Namespace")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: ClusterRole")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: ClusterRoleBinding")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: ServiceAccount")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: Service")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: ConfigMap")
+	require.Contains(t, deploy.lastPreviewYAML, "kind: DaemonSet")
+	require.Contains(t, deploy.lastPreviewYAML, "name: novaapm-logs-agent-base-config")
+}
+
+func TestPublishK8sCollectorRuntimeRejectsBaseTaskWhenRuntimeReady(t *testing.T) {
+	ctx := context.Background()
+	deploy := &fakeDeploymentService{}
+	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
+
+	_, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
+		ClusterID: "test03",
+		TaskType:  "base",
+		Namespace: "novaapm-system",
+	})
+	require.ErrorContains(t, err, "logs_collector 基础组件已就绪")
+}
+
 func TestPublishK8sCollectorRuntimeCombinesSameClusterRoutesWithDifferentEndpoints(t *testing.T) {
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	firstEndpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-logplatform",
 		WriteURL:  "http://vl-logplatform:9428/insert/opentelemetry/v1/logs",
@@ -1033,7 +1329,8 @@ func TestPublishK8sCollectorRuntimeCombinesSameClusterRoutesWithDifferentEndpoin
 
 	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID: "test03",
-		Namespace: "novaobs-system",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
 	})
 
 	require.NoError(t, err)
@@ -1049,6 +1346,13 @@ func TestPublishK8sCollectorRuntimeCombinesSameClusterRoutesWithDifferentEndpoin
 	require.Contains(t, deploy.lastPreviewYAML, "logs/mtu-test-mtu-api")
 	require.Contains(t, deploy.lastPreviewYAML, "otlp_http/endpoint_vl-logplatform")
 	require.Contains(t, deploy.lastPreviewYAML, "otlp_http/endpoint_vl-mtu")
+	require.Contains(t, deploy.lastPreviewYAML, "name: novaapm-logs-agent-base-config")
+	require.Contains(t, deploy.lastPreviewYAML, "name: novaapm-logs-agent-svc-logplatform-prometheus-")
+	require.Contains(t, deploy.lastPreviewYAML, "name: novaapm-logs-agent-svc-mtu-test-mtu-api-")
+	require.Contains(t, deploy.lastPreviewYAML, "path: services/svc-logplatform-prometheus-")
+	require.Contains(t, deploy.lastPreviewYAML, "path: services/svc-mtu-test-mtu-api-")
+	require.Contains(t, deploy.lastPreviewYAML, "--config=/conf/base.yaml")
+	require.NotContains(t, deploy.lastPreviewYAML, "collector.yaml: |")
 	require.NotContains(t, deploy.lastPreviewYAML, "logs/route_")
 	require.Contains(t, deploy.lastPreviewYAML, "ParseJSON(body)")
 }
@@ -1057,7 +1361,7 @@ func TestPublishK8sCollectorRuntimeUpdatesAllRoutesInSameCollectorDomain(t *test
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1083,12 +1387,14 @@ func TestPublishK8sCollectorRuntimeUpdatesAllRoutesInSameCollectorDomain(t *test
 	require.NoError(t, err)
 	preview, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID: "test03",
-		Namespace: "novaobs-system",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
 	})
 	require.NoError(t, err)
 	_, err = fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID:         "test03",
-		Namespace:         "novaobs-system",
+		TaskType:          "incremental",
+		Namespace:         "novaapm-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
@@ -1108,12 +1414,14 @@ func TestPublishK8sCollectorRuntimeUpdatesAllRoutesInSameCollectorDomain(t *test
 	require.NoError(t, err)
 	preview, err = fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID: "test03",
-		Namespace: "novaobs-system",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
 	})
 	require.NoError(t, err)
 	applied, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID:         "test03",
-		Namespace:         "novaobs-system",
+		TaskType:          "incremental",
+		Namespace:         "novaapm-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
@@ -1123,15 +1431,22 @@ func TestPublishK8sCollectorRuntimeUpdatesAllRoutesInSameCollectorDomain(t *test
 	require.NoError(t, err)
 	require.Len(t, firstAfter, 1)
 	require.Equal(t, applied.CollectorConfigHash, firstAfter[0].Route.CollectorConfigHash)
+	require.Equal(t, "incremental", applied.TaskType)
+	require.Len(t, preview.ChangedConfigMaps, 1)
+	require.Contains(t, preview.ChangedConfigMaps[0], "novaapm-logs-agent-svc-logplatform-mtu-api-")
 	require.Equal(t, "applied", firstAfter[0].Route.LastPublishStatus)
-	require.Contains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-prometheus")
+	require.NotContains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-prometheus")
 	require.Contains(t, deploy.lastApplyReq.YAMLContent, "file_log/logplatform-mtu-api")
+	require.Contains(t, deploy.lastApplyReq.YAMLContent, "novaapm-logs-agent-svc-logplatform-prometheus-")
+	require.Contains(t, deploy.lastApplyReq.YAMLContent, "novaapm-logs-agent-svc-logplatform-mtu-api-")
+	require.Equal(t, 1, strings.Count(deploy.lastApplyReq.YAMLContent, "kind: ConfigMap"))
+	require.Equal(t, 1, strings.Count(deploy.lastApplyReq.YAMLContent, "kind: DaemonSet"))
 }
 
-func TestK8sDeploymentManifestHashDoesNotChangeWhenCollectorConfigChanges(t *testing.T) {
+func TestK8sDeploymentManifestHashChangesWhenServiceConfigMapSetChanges(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1170,13 +1485,13 @@ func TestK8sDeploymentManifestHashDoesNotChangeWhenCollectorConfigChanges(t *tes
 
 	require.NoError(t, err)
 	require.NotEqual(t, firstRoute.Route.CollectorConfigHash, secondRoute.Route.CollectorConfigHash)
-	require.Equal(t, firstDeploymentHash, secondRoute.Source.DeploymentManifestHash)
+	require.NotEqual(t, firstDeploymentHash, secondRoute.Source.DeploymentManifestHash)
 }
 
 func TestPublishK8sRouteRejectsCollectorInfrastructurePublish(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1207,7 +1522,7 @@ func TestPublishK8sCollectorRuntimeApplyForcesManagedFieldConflicts(t *testing.T
 	ctx := context.Background()
 	deploy := &fakeDeploymentService{}
 	fixture := newLogsFixtureWithDeploy(t, fakeK8sRuntimeGroups("test03", "logplatform"), deploy)
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1232,12 +1547,14 @@ func TestPublishK8sCollectorRuntimeApplyForcesManagedFieldConflicts(t *testing.T
 
 	preview, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID: "test03",
-		Namespace: "novaobs-system",
+		TaskType:  "incremental",
+		Namespace: "novaapm-system",
 	})
 	require.NoError(t, err)
 	result, err := fixture.service.PublishK8sCollectorRuntime(ctx, platformrbac.DevAdminSubject(), K8sCollectorRuntimePublishRequest{
 		ClusterID:         "test03",
-		Namespace:         "novaobs-system",
+		TaskType:          "incremental",
+		Namespace:         "novaapm-system",
 		PreviewID:         preview.PreviewID,
 		ConfirmationToken: preview.ConfirmationToken,
 	})
@@ -1333,7 +1650,7 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.NotEmpty(t, rendered.DeploymentManifestHash)
 	require.NotEmpty(t, rendered.CollectorConfigHash)
 	require.Equal(t, collectorHash, rendered.CollectorConfigHash)
-	require.Equal(t, hashYAML(collectorYAML), rendered.CollectorConfigHash)
+	require.NotEqual(t, hashYAML(collectorYAML), rendered.CollectorConfigHash)
 	require.Equal(t, hashYAML(rendered.DeploymentManifestYAML), rendered.DeploymentManifestHash)
 	require.NotEqual(t, rendered.CollectorConfigHash, rendered.DeploymentManifestHash)
 	require.Contains(t, yaml, `- "/var/log/pods/logplatform_utrace-api*_*/*/*.log"`)
@@ -1347,7 +1664,7 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, "file_storage/filelog_offsets")
 	require.NotContains(t, collectorYAML, "opamp:")
 	require.NotContains(t, collectorYAML, "service:\n  extensions: [file_storage/filelog_offsets, health_check, opamp]")
-	require.NotContains(t, yaml, "NOVAOBS_OPAMP_ENDPOINT")
+	require.NotContains(t, yaml, "NOVAAPM_OPAMP_ENDPOINT")
 	require.Contains(t, collectorYAML, "k8s.pod.uid: ${env:KUBE_POD_UID}")
 	require.Contains(t, yaml, "health_check:")
 	require.Contains(t, yaml, "endpoint: 0.0.0.0:13133")
@@ -1361,7 +1678,7 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, "max_concurrent_files: 64")
 	require.Contains(t, yaml, "max_batches: 2")
 	require.Contains(t, yaml, "file_cache_advise: true")
-	require.Contains(t, yaml, `- "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"`)
+	require.Contains(t, yaml, `- "/var/log/pods/*_novaapm-logs-agent-*_*/*/*.log"`)
 	require.Contains(t, yaml, `- "/var/log/pods/*/*/*.gz"`)
 	require.Contains(t, yaml, "memory_limiter")
 	require.Contains(t, yaml, "storage: file_storage/filelog_offsets")
@@ -1373,9 +1690,9 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	require.Contains(t, yaml, "containerPort: 13133")
 	require.Contains(t, yaml, "readinessProbe:")
 	require.Contains(t, yaml, "livenessProbe:")
-	require.Contains(t, yaml, "NOVAOBS_CLUSTER_ID")
-	require.Contains(t, yaml, "NOVAOBS_COLLECTOR_GROUP_ID")
-	require.Contains(t, yaml, `novaobs.io/config-hash: "`)
+	require.Contains(t, yaml, "NOVAAPM_CLUSTER_ID")
+	require.Contains(t, yaml, "NOVAAPM_COLLECTOR_GROUP_ID")
+	require.Contains(t, yaml, `novaapm.io/config-hash: "`)
 	require.Contains(t, yaml, rendered.CollectorConfigHash)
 }
 
@@ -1395,13 +1712,13 @@ func TestK8sDaemonSetUsesImageTemplateOverride(t *testing.T) {
 	}
 
 	rendered, err := renderK8sDaemonSetBundleWithTemplateValues([]renderInput{input}, "", map[string]string{
-		"__NOVAOBS_IMAGE_OTEL_COLLECTOR__": "harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0",
+		"__NOVAAPM_IMAGE_OTEL_COLLECTOR__": "harbor.example.com/novaapm/opentelemetry-collector-contrib:0.153.0",
 	})
 
 	require.NoError(t, err)
-	require.Contains(t, rendered.ManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
-	require.Contains(t, rendered.DeploymentManifestYAML, "image: harbor.example.com/novaobs/opentelemetry-collector-contrib:0.153.0")
-	require.NotContains(t, rendered.ManifestYAML, "__NOVAOBS_IMAGE_OTEL_COLLECTOR__")
+	require.Contains(t, rendered.ManifestYAML, "image: harbor.example.com/novaapm/opentelemetry-collector-contrib:0.153.0")
+	require.Contains(t, rendered.DeploymentManifestYAML, "image: harbor.example.com/novaapm/opentelemetry-collector-contrib:0.153.0")
+	require.NotContains(t, rendered.ManifestYAML, "__NOVAAPM_IMAGE_OTEL_COLLECTOR__")
 }
 
 func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
@@ -1428,7 +1745,11 @@ func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
 	require.Contains(t, rendered.CollectorYAML, "logs/custom-route")
 	require.Contains(t, rendered.CollectorYAML, "manual.fragment")
 	require.NotContains(t, rendered.CollectorYAML, "file_log/logplatform-utrace-api")
-	require.Contains(t, rendered.ManifestYAML, "collector.yaml: |")
+	require.Contains(t, rendered.CollectorConfigFiles["services/svc-logplatform-utrace-api-route-cu.yaml"], "file_log/custom-route")
+	require.Contains(t, rendered.ManifestYAML, "name: novaapm-logs-agent-base-config")
+	require.Contains(t, rendered.ManifestYAML, "name: novaapm-logs-agent-svc-logplatform-utrace-api-route-cu")
+	require.Contains(t, rendered.ManifestYAML, "path: services/svc-logplatform-utrace-api-route-cu.yaml")
+	require.NotContains(t, rendered.ManifestYAML, "collector.yaml: |")
 	require.Contains(t, rendered.ManifestYAML, "file_log/custom-route")
 }
 
@@ -1442,7 +1763,7 @@ func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
 			Namespace:      "logplatform",
 			WorkloadKind:   "Deployment",
 			WorkloadName:   "utrace-api",
-			AgentNamespace: "novaobs-system",
+			AgentNamespace: "novaapm-system",
 		},
 		Endpoint: LogEndpoint{WriteURL: "http://vl.test03:9428/insert/opentelemetry/v1/logs"},
 		Route:    LogRoute{ID: "route-001"},
@@ -1450,23 +1771,23 @@ func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
 
 	defaultYAML, _ := renderK8sDaemonSetBundle([]renderInput{input})
 	require.NotContains(t, defaultYAML, "opamp:")
-	require.NotContains(t, defaultYAML, "NOVAOBS_OPAMP_ENDPOINT")
+	require.NotContains(t, defaultYAML, "NOVAAPM_OPAMP_ENDPOINT")
 
-	input.Deployment.OpAMPEndpoint = "ws://novaobs.example.com/v1/opamp"
+	input.Deployment.OpAMPEndpoint = "ws://novaapm.example.com/v1/opamp"
 	enabledYAML, _ := renderK8sDaemonSetBundle([]renderInput{input})
 	collectorYAML, _ := renderK8sCollectorConfigWithHash([]renderInput{input})
 
 	require.Contains(t, collectorYAML, "opamp:")
-	require.Contains(t, collectorYAML, "endpoint: ${env:NOVAOBS_OPAMP_ENDPOINT}")
+	require.Contains(t, collectorYAML, "endpoint: ${env:NOVAAPM_OPAMP_ENDPOINT}")
 	require.Contains(t, collectorYAML, "service:\n  extensions: [file_storage/filelog_offsets, health_check, opamp]")
-	require.Contains(t, enabledYAML, "NOVAOBS_OPAMP_ENDPOINT")
-	require.Contains(t, enabledYAML, `value: "ws://novaobs.example.com/v1/opamp"`)
+	require.Contains(t, enabledYAML, "NOVAAPM_OPAMP_ENDPOINT")
+	require.Contains(t, enabledYAML, `value: "ws://novaapm.example.com/v1/opamp"`)
 }
 
 func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1504,6 +1825,10 @@ func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 	require.Equal(t, SourceTypeK8sStdout, config.SourceType)
 	require.Contains(t, config.CollectorYAML, "receivers:")
 	require.Contains(t, config.CollectorYAML, "file_log/logplatform-utrace-api")
+	require.Contains(t, config.CollectorConfigFiles["base.yaml"], "memory_limiter")
+	require.Contains(t, config.ServiceConfigYAML, "file_log/logplatform-utrace-api")
+	require.Equal(t, config.ServiceConfigYAML, config.CollectorConfigFiles[config.ServiceConfigPath])
+	require.NotContains(t, config.ServiceConfigYAML, "memory_limiter:")
 	require.NotContains(t, config.CollectorYAML, "kind: DaemonSet")
 	require.NotContains(t, config.CollectorYAML, "collector.yaml: |")
 }
@@ -1511,7 +1836,7 @@ func TestRouteCollectorConfigReturnsCollectorYAMLForK8sHash(t *testing.T) {
 func TestRouteCollectorConfigReadsPersistedCollectorYAMLByHash(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
-	fixture.enableLogsCollectorRuntime(t, "test03", "novaobs-system")
+	fixture.enableLogsCollectorRuntime(t, "test03", "novaapm-system")
 	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{
 		Name:      "vl-test03",
 		WriteURL:  "http://vl.test03:9428/insert/opentelemetry/v1/logs",
@@ -1585,12 +1910,13 @@ func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 		"ClusterRole",
 		"ClusterRoleBinding",
 		"ConfigMap",
+		"ConfigMap",
 		"Service",
 		"DaemonSet",
 	}, renderedKinds(t, rendered))
 }
 
-func TestK8sDaemonSetUsesManagedCollectorYAMLForK8sSources(t *testing.T) {
+func TestK8sDaemonSetUsesManagedCollectorConfigMapsForK8sSources(t *testing.T) {
 	input := renderInput{
 		ServiceName: "utrace-api",
 		Environment: "prod",
@@ -1608,8 +1934,13 @@ func TestK8sDaemonSetUsesManagedCollectorYAMLForK8sSources(t *testing.T) {
 	yaml, hash := renderK8sDaemonSetBundle([]renderInput{input})
 
 	require.NotEmpty(t, hash)
-	require.Contains(t, yaml, "collector.yaml: |")
-	require.Contains(t, yaml, "    receivers:\n      file_log/logplatform-utrace-api:")
+	require.Contains(t, yaml, "base.yaml: |")
+	require.Contains(t, yaml, "fragment.yaml: |")
+	require.Contains(t, yaml, "path: services/svc-logplatform-utrace-api-route-00.yaml")
+	require.Contains(t, yaml, "--config=/conf/base.yaml")
+	require.Contains(t, yaml, "--config=/conf/services/svc-logplatform-utrace-api-route-00.yaml")
+	require.NotContains(t, yaml, "collector.yaml: |")
+	require.Contains(t, yaml, "    file_log/logplatform-utrace-api:")
 	require.Contains(t, yaml, `logs_endpoint: "http://vl.test03:9428/insert/opentelemetry/v1/logs"`)
 	require.NotContains(t, yaml, "file_log/custom")
 }
@@ -1636,6 +1967,52 @@ func TestVMFileConfigUsesCustomCollectorYAML(t *testing.T) {
 	require.NotContains(t, yaml, "service.name")
 }
 
+func TestVMFileConfigUsesProductTenantForDefaultVictoriaLogsExporter(t *testing.T) {
+	input := renderInput{
+		ServiceName: "legacy-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:  SourceTypeVMFile,
+			PathPattern: "/data/logs/*.log",
+		},
+		Endpoint: LogEndpoint{
+			SinkType:  EndpointSinkVL,
+			WriteURL:  "http://vl.vm:9428/insert/opentelemetry/v1/logs",
+			AccountID: "0",
+			ProjectID: "9528",
+		},
+		Route: LogRoute{ID: "route-vm", ServiceID: "svc-vm"},
+	}
+
+	yaml, _ := renderVMFileConfig(input)
+
+	require.Contains(t, yaml, `AccountID: "0"`)
+	require.Contains(t, yaml, `ProjectID: "9528"`)
+}
+
+func TestVMRouteConfigUsesRouteScopedConfigFile(t *testing.T) {
+	input := renderInput{
+		ServiceName: "legacy-api",
+		Environment: "prod",
+		Source: LogSource{
+			SourceType:          SourceTypeVMFile,
+			HostGroup:           "vm-prod",
+			PathPattern:         "/data/logs/*.log",
+			CustomCollectorYAML: validCollectorYAML("http://vl.vm:9428/insert/opentelemetry/v1/logs", ""),
+		},
+		Endpoint: LogEndpoint{WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs"},
+		Route:    LogRoute{ID: "route-vm", ServiceID: "svc-vm"},
+	}
+
+	rendered, err := Service{}.renderRouteConfigWithHashes(context.Background(), input)
+
+	require.NoError(t, err)
+	require.Contains(t, rendered.CollectorConfigFiles["vm/route-vm.yaml"], "file_log/custom")
+	require.NotContains(t, rendered.CollectorConfigFiles, "collector.yaml")
+	require.Equal(t, "vm/route-vm.yaml", rendered.ConfigFileRefs[0].Path)
+	require.Equal(t, "vm", rendered.ConfigFileRefs[0].Role)
+}
+
 func TestRenderConfigUsesDownstreamExporterByEndpointType(t *testing.T) {
 	vmInput := renderInput{
 		ServiceName: "billing-api",
@@ -1649,20 +2026,20 @@ func TestRenderConfigUsesDownstreamExporterByEndpointType(t *testing.T) {
 	}
 
 	esInput := vmInput
-	esInput.Endpoint = LogEndpoint{SinkType: EndpointSinkES, WriteURL: "http://elasticsearch.prod:9200", StreamName: "novaobs-logs"}
+	esInput.Endpoint = LogEndpoint{SinkType: EndpointSinkES, WriteURL: "http://elasticsearch.prod:9200", StreamName: "novaapm-logs"}
 	esYAML, _ := renderVMFileConfig(esInput)
 	require.Contains(t, esYAML, "elasticsearch/logs_downstream:")
 	require.Contains(t, esYAML, `- "http://elasticsearch.prod:9200"`)
-	require.Contains(t, esYAML, `logs_index: "novaobs-logs"`)
+	require.Contains(t, esYAML, `logs_index: "novaapm-logs"`)
 	require.Contains(t, esYAML, "exporters: [elasticsearch/logs_downstream]")
 
 	kafkaInput := vmInput
-	kafkaInput.Endpoint = LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaobs-logs"}
+	kafkaInput.Endpoint = LogEndpoint{SinkType: EndpointSinkKafka, WriteURL: "kafka-0.prod:9092,kafka-1.prod:9092", StreamName: "novaapm-logs"}
 	kafkaYAML, _ := renderVMFileConfig(kafkaInput)
 	require.Contains(t, kafkaYAML, "kafka/logs_downstream:")
 	require.Contains(t, kafkaYAML, `- "kafka-0.prod:9092"`)
 	require.Contains(t, kafkaYAML, `- "kafka-1.prod:9092"`)
-	require.Contains(t, kafkaYAML, `topic: "novaobs-logs"`)
+	require.Contains(t, kafkaYAML, `topic: "novaapm-logs"`)
 	require.Contains(t, kafkaYAML, "exporters: [kafka/logs_downstream]")
 }
 
@@ -1688,10 +2065,17 @@ func renderedKinds(t *testing.T, raw string) []string {
 }
 
 type logsFixture struct {
-	store   *memstore.Store
-	repo    servicecatalog.Repository
-	targets servicecatalog.TargetRepository
-	service Service
+	store     *memstore.Store
+	repo      servicecatalog.Repository
+	targets   servicecatalog.TargetRepository
+	service   Service
+	productID string
+}
+
+type targetManagerOnlyAuthorizer struct{}
+
+func (targetManagerOnlyAuthorizer) Authorize(_ platformrbac.Subject, req platformrbac.Request) platformrbac.Decision {
+	return platformrbac.Decision{Allowed: req.Resource == "logs.target" && req.Action == "manage"}
 }
 
 func newLogsFixture(t *testing.T, resources K8sResourceService) logsFixture {
@@ -1702,7 +2086,10 @@ func newLogsFixture(t *testing.T, resources K8sResourceService) logsFixture {
 func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy K8sDeploymentService) logsFixture {
 	t.Helper()
 	store := memstore.NewStore()
-	repo := servicecatalog.NewRepository(store.Services())
+	productRepo := servicecatalog.NewProductRepository(store.Products())
+	product, err := productRepo.Create(context.Background(), servicecatalog.Product{Name: "test-product"})
+	require.NoError(t, err)
+	repo := servicecatalog.NewRepository(store.Services(), store.Products())
 	targets := servicecatalog.NewTargetRepository(store.ServiceTargets())
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances())
 	service := NewService(
@@ -1722,12 +2109,13 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()), platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject()))),
 	)
-	return logsFixture{store: store, repo: repo, targets: targets, service: service}
+	return logsFixture{store: store, repo: repo, targets: targets, service: service, productID: product.ID}
 }
 
 func (f logsFixture) createService(t *testing.T, name string) servicecatalog.Service {
 	t.Helper()
 	service, err := f.repo.Create(context.Background(), servicecatalog.Service{
+		ProductID:    f.productID,
 		Name:         name,
 		DisplayName:  name,
 		Environment:  "prod",
@@ -1750,7 +2138,7 @@ func (f logsFixture) enableLogsCollectorRuntime(t *testing.T, clusterID string, 
 		Kind:       obsruntime.KindLogsCollector,
 		SignalType: obsruntime.SignalLogs,
 		ClusterID:  clusterID,
-		Namespace:  firstNonEmpty(namespace, "novaobs-system"),
+		Namespace:  firstNonEmpty(namespace, "novaapm-system"),
 		Status:     obsruntime.StatusReady,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -1761,6 +2149,7 @@ func (f logsFixture) enableLogsCollectorRuntime(t *testing.T, clusterID string, 
 func (f logsFixture) createVMService(t *testing.T, name string) servicecatalog.Service {
 	t.Helper()
 	service, err := f.repo.Create(context.Background(), servicecatalog.Service{
+		ProductID:    f.productID,
 		Name:         name,
 		DisplayName:  name,
 		Environment:  "prod",
@@ -1782,7 +2171,7 @@ func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGrou
 		Mode:        "dedicated_collector",
 		Environment: "prod",
 		Cluster:     "test03",
-		Namespace:   "novaobs-system",
+		Namespace:   "novaapm-system",
 		Status:      "active",
 	})
 	require.NoError(t, err)
@@ -1799,7 +2188,7 @@ func validK8sRouteFragment(name string, writeURL string) string {
     include:
       - "/var/log/pods/logplatform_utrace-api*_*/*/*.log"
     exclude:
-      - "/var/log/pods/*_novaobs-logs-agent-*_*/*/*.log"
+      - "/var/log/pods/*_novaapm-logs-agent-*_*/*/*.log"
     poll_interval: 10s
     max_concurrent_files: 64
     max_batches: 2
@@ -1839,7 +2228,7 @@ receivers:
   file_log/custom:
     include: [` + include + `]
     exclude:
-      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*_novaapm-logs-agent-*_*/*/*.log
       - /var/log/pods/*/*/*.gz
       - /var/log/pods/*/*/*.tmp
       - /var/log/pods/*/*/*.log.*
@@ -1886,7 +2275,7 @@ receivers:
     include:
       - /var/log/pods/logplatform_prometheus*_*/*/*.log
     exclude:
-      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*_novaapm-logs-agent-*_*/*/*.log
       - /var/log/pods/*/*/*.gz
       - /var/log/pods/*/*/*.tmp
       - /var/log/pods/*/*/*.log.*
@@ -1903,7 +2292,7 @@ receivers:
     include:
       - /var/log/pods/mtu-test_mtu-ds*_*/*/*.log
     exclude:
-      - /var/log/pods/*_novaobs-logs-agent-*_*/*/*.log
+      - /var/log/pods/*_novaapm-logs-agent-*_*/*/*.log
       - /var/log/pods/*/*/*.gz
       - /var/log/pods/*/*/*.tmp
       - /var/log/pods/*/*/*.log.*
@@ -1999,7 +2388,7 @@ func validKafkaCollectorYAML(brokers []string) string {
 		lines = append(lines, `      - "`+broker+`"`)
 	}
 	lines = append(lines,
-		`    topic: "novaobs-logs"`,
+		`    topic: "novaapm-logs"`,
 		"service:",
 		"  pipelines:",
 		"    logs:",
@@ -2024,7 +2413,8 @@ func (fakeClusterService) Get(ctx context.Context, id string) (k8sopscluster.Clu
 }
 
 type fakeRuntimeGroups struct {
-	response k8sopsresource.RuntimeGroupsResponse
+	response  k8sopsresource.RuntimeGroupsResponse
+	resources []k8sopsresource.ResourceSummary
 }
 
 func fakeK8sRuntimeGroups(clusterID string, namespace string) fakeRuntimeGroups {
@@ -2053,7 +2443,58 @@ func fakeK8sRuntimeGroups(clusterID string, namespace string) fakeRuntimeGroups 
 				PodsSummary:    k8sopsresource.RuntimePodSummary{Total: 1, Running: 1},
 			}},
 		}},
-	}}
+	}, resources: fakeLogsCollectorRuntimeResources(clusterID, "novaapm-system")}
+}
+
+func fakeK8sRuntimeGroupsWithoutCollector(clusterID string, namespace string) fakeRuntimeGroups {
+	groups := fakeK8sRuntimeGroups(clusterID, namespace)
+	groups.resources = nil
+	return groups
+}
+
+func fakeLogsCollectorRuntimeResources(clusterID string, namespace string) []k8sopsresource.ResourceSummary {
+	required := logsCollectorRuntimeRequiredResources(clusterID, namespace)
+	items := make([]k8sopsresource.ResourceSummary, 0, len(required))
+	for index, resource := range required {
+		items = append(items, k8sopsresource.ResourceSummary{
+			Identity: k8sopsresource.Identity{
+				ClusterID:  resource.ClusterID,
+				Namespace:  resource.Namespace,
+				APIVersion: resource.APIVersion,
+				Kind:       resource.Kind,
+				Name:       resource.Name,
+				UID:        fmt.Sprintf("logs-runtime-%d", index),
+			},
+			Status:    "active",
+			UpdatedAt: time.Now().UTC(),
+		})
+	}
+	return items
+}
+
+func (f fakeRuntimeGroups) List(ctx context.Context, filter k8sopsresource.ListFilter) ([]k8sopsresource.ResourceSummary, error) {
+	items := make([]k8sopsresource.ResourceSummary, 0, len(f.resources))
+	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	for _, item := range f.resources {
+		identity := item.Identity
+		if filter.ClusterID != "" && identity.ClusterID != filter.ClusterID {
+			continue
+		}
+		if filter.APIVersion != "" && identity.APIVersion != filter.APIVersion {
+			continue
+		}
+		if filter.Kind != "" && identity.Kind != filter.Kind {
+			continue
+		}
+		if filter.Namespace != "" && identity.Namespace != "" && identity.Namespace != filter.Namespace {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(identity.Name), query) && !strings.Contains(strings.ToLower(item.Status), query) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
 }
 
 func (f fakeRuntimeGroups) ListRuntimeGroups(ctx context.Context, query k8sopsresource.RuntimeGroupsQuery) (k8sopsresource.RuntimeGroupsResponse, error) {
@@ -2079,27 +2520,27 @@ func (f *fakeDeploymentService) Preview(ctx context.Context, subject platformrba
 			ClusterID:  "test03",
 			APIVersion: "v1",
 			Kind:       "Namespace",
-			Name:       "novaobs-system",
+			Name:       "novaapm-system",
 		}, {
 			ClusterID:  "test03",
-			Namespace:  "novaobs-system",
+			Namespace:  "novaapm-system",
 			APIVersion: "apps/v1",
 			Kind:       "DaemonSet",
-			Name:       "novaobs-logs-agent",
+			Name:       "novaapm-logs-agent",
 		}},
 		Diffs: []k8sopsdeployment.ResourceDiff{{
 			ClusterID:  "test03",
 			APIVersion: "v1",
 			Kind:       "Namespace",
-			Name:       "novaobs-system",
+			Name:       "novaapm-system",
 			Operation:  "apply",
 			AfterHash:  "namespace-hash",
 		}, {
 			ClusterID:  "test03",
-			Namespace:  "novaobs-system",
+			Namespace:  "novaapm-system",
 			APIVersion: "apps/v1",
 			Kind:       "DaemonSet",
-			Name:       "novaobs-logs-agent",
+			Name:       "novaapm-logs-agent",
 			Operation:  "apply",
 			AfterHash:  "daemonset-hash",
 		}},

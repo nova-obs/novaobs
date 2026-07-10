@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"strings"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/metrics"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/internal/metrics"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -56,7 +56,7 @@ func getMetricsWorkspaceHandler(service metrics.Service) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		workspace, err := service.Workspace(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Query("service_id")))
+		workspace, err := service.Workspace(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("productId")), strings.TrimSpace(ctx.Param("id")))
 		if err != nil {
 			writeMetricsError(ctx, err)
 			return
@@ -71,7 +71,11 @@ func listMetricsServiceBindingsHandler(service metrics.Service) gin.HandlerFunc 
 		if !ok {
 			return
 		}
-		bindings, err := service.ListBindings(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Query("service_id")))
+		if err := service.ValidateServiceScope(ctx.Request.Context(), ctx.Param("productId"), ctx.Param("id")); err != nil {
+			writeMetricsError(ctx, err)
+			return
+		}
+		bindings, err := service.ListBindings(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")))
 		if err != nil {
 			writeMetricsError(ctx, err)
 			return
@@ -91,6 +95,16 @@ func createMetricsServiceBindingHandler(service metrics.Service) gin.HandlerFunc
 			writeError(ctx, apperr.InvalidRequest("指标服务绑定请求无效"))
 			return
 		}
+		if err := service.ValidateServiceScope(ctx.Request.Context(), ctx.Param("productId"), ctx.Param("id")); err != nil {
+			writeMetricsError(ctx, err)
+			return
+		}
+		pathServiceID := strings.TrimSpace(ctx.Param("id"))
+		if body.ServiceID != "" && strings.TrimSpace(body.ServiceID) != pathServiceID {
+			writeError(ctx, apperr.InvalidRequest("service_id 与路径服务不一致"))
+			return
+		}
+		body.ServiceID = pathServiceID
 		binding, err := service.CreateBinding(ctx.Request.Context(), subject, body)
 		if err != nil {
 			writeMetricsError(ctx, err)
@@ -111,7 +125,11 @@ func updateMetricsServiceBindingHandler(service metrics.Service) gin.HandlerFunc
 			writeError(ctx, apperr.InvalidRequest("指标服务绑定更新请求无效"))
 			return
 		}
-		binding, err := service.UpdateBinding(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
+		if err := service.ValidateServiceScope(ctx.Request.Context(), ctx.Param("productId"), ctx.Param("id")); err != nil {
+			writeMetricsError(ctx, err)
+			return
+		}
+		binding, err := service.UpdateServiceBinding(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), strings.TrimSpace(ctx.Param("bindingId")), body)
 		if err != nil {
 			writeMetricsError(ctx, err)
 			return
@@ -126,7 +144,11 @@ func probeMetricsServiceBindingHandler(service metrics.Service) gin.HandlerFunc 
 		if !ok {
 			return
 		}
-		binding, err := service.ProbeBinding(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")))
+		if err := service.ValidateServiceScope(ctx.Request.Context(), ctx.Param("productId"), ctx.Param("id")); err != nil {
+			writeMetricsError(ctx, err)
+			return
+		}
+		binding, err := service.ProbeServiceBinding(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), strings.TrimSpace(ctx.Param("bindingId")))
 		if err != nil {
 			writeMetricsError(ctx, err)
 			return

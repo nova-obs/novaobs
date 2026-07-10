@@ -3,7 +3,7 @@ package platformaccess
 import (
 	"errors"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 type MemoryRepository struct {

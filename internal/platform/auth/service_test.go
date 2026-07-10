@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/iam"
+	"novaapm/internal/platform/iam"
 
 	"github.com/stretchr/testify/require"
 )

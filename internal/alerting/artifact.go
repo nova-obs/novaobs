@@ -66,13 +66,13 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 		if rule.Spec.Notification.RunbookURL != "" {
 			annotations["runbook_url"] = rule.Spec.Notification.RunbookURL
 		}
-		alertPrefix := "NovaObsLogAlert_"
+		alertPrefix := "NovaAPMLogAlert_"
 		if signalType == SignalTypeMetrics {
-			alertPrefix = "NovaObsMetricAlert_"
+			alertPrefix = "NovaAPMMetricAlert_"
 		}
 		labels := map[string]string{
-			"novaobs_rule_id":        rule.ID,
-			"novaobs_runtime_id":     runtimeID,
+			"novaapm_rule_id":        rule.ID,
+			"novaapm_runtime_id":     runtimeID,
 			"signal_type":            signalType,
 			"service_id":             rule.Spec.Scope.ServiceID,
 			"endpoint_id":            rule.Spec.Scope.EndpointID,
@@ -97,18 +97,18 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 			if err != nil {
 				return Artifact{}, fmt.Errorf("编译趋势指标 %s: %w", rule.ID, err)
 			}
-			labels := map[string]string{"novaobs_rule_id": rule.ID, "service_id": rule.Spec.Scope.ServiceID}
+			labels := map[string]string{"novaapm_rule_id": rule.ID, "service_id": rule.Spec.Scope.ServiceID}
 			for key, value := range metric.Labels {
 				labels[key] = value
 			}
-			recordName := "novaobs_log_matches"
+			recordName := "novaapm_log_matches"
 			if metric.Signal == "match_rate" {
-				recordName = "novaobs_log_match_rate"
+				recordName = "novaapm_log_match_rate"
 			}
 			runtimeRules = append(runtimeRules, vmalertRule{Record: recordName, Expr: recordingQuery, Labels: labels})
 		}
 		group := vmalertGroup{
-			Name:      "novaobs_log_" + safeAlertName(rule.ID),
+			Name:      "novaapm_log_" + safeAlertName(rule.ID),
 			Type:      "vlogs",
 			Interval:  rule.Spec.Trigger.EvaluationInterval,
 			EvalDelay: omitZeroDuration(rule.Spec.Trigger.EvaluationDelay),
@@ -120,7 +120,7 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 			Rules: runtimeRules,
 		}
 		if signalType == SignalTypeMetrics {
-			group.Name = "novaobs_metrics_" + safeAlertName(rule.ID)
+			group.Name = "novaapm_metrics_" + safeAlertName(rule.ID)
 			group.Type = ""
 			group.Headers = nil
 		}

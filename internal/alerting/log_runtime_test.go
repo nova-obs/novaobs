@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/logs"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/database/memstore"
+	"novaapm/internal/logs"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 )
@@ -36,6 +36,9 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	spec.Scope.EndpointID = endpoint.ID
 	spec.Scope.AccountID = "1001"
 	spec.Scope.ProjectID = "2001"
+	resolvedScope := spec.Scope
+	resolvedScope.AccountID = "3001"
+	resolvedScope.ProjectID = "4001"
 	require.NoError(t, repository.SaveChange(ctx, ChangeSet{
 		Rule:   Rule{ID: "rule-a", Spec: spec, State: RuleStateEnabled, ApplyStatus: ApplyStatusPending, CurrentUpdateID: "update-a", CreatedAt: now, UpdatedAt: now},
 		Update: UpdateRecord{ID: "update-a", RuleID: "rule-a", Action: UpdateActionCreate, ResultingState: RuleStateEnabled, Spec: spec, CreatedAt: now},
@@ -44,8 +47,9 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	deployments := &recordingRuntimeDeploymentService{}
 	service := NewLogRuntimeService(LogRuntimeDependencies{
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: repository, K8sDeployments: deployments,
-		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
+		DefaultAlertIngestURL: "http://novaapm-api.novaapm-system.svc.cluster.local:8080",
 		Clock:                 func() time.Time { return now },
+		ScopeResolver:         staticRuntimeScopeResolver{scope: resolvedScope},
 	})
 
 	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{})
@@ -55,11 +59,12 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	require.Equal(t, "http://vmauth.internal/customer-a/logs", preview.DatasourceURL)
 	require.Contains(t, deployments.lastPreview.YAMLContent, "image: hub-test.service.ucloud.cn/logsplatfrom/vmalert:v1.145.0")
 	require.Contains(t, deployments.lastPreview.YAMLContent, "-datasource.url=http://vmauth.internal/customer-a/logs")
-	require.Contains(t, deployments.lastPreview.YAMLContent, "-notifier.url=http://novaobs-api.novaobs-system.svc.cluster.local:8080")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "-notifier.url=http://novaapm-api.novaapm-system.svc.cluster.local:8080")
 	require.Contains(t, deployments.lastPreview.YAMLContent, "runtime.yaml: |")
-	require.Contains(t, deployments.lastPreview.YAMLContent, "novaobs_runtime_id: vmalert-logs:vl-prod")
-	require.Contains(t, deployments.lastPreview.YAMLContent, "AccountID: 1001")
-	require.Contains(t, deployments.lastPreview.YAMLContent, "ProjectID: 2001")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "novaapm_runtime_id: vmalert-logs:vl-prod")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "AccountID: 3001")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "ProjectID: 4001")
+	require.NotContains(t, deployments.lastPreview.YAMLContent, "AccountID: 1001")
 	var runtimeRecord struct {
 		ID         string `json:"id"`
 		Kind       string `json:"kind"`
@@ -74,7 +79,7 @@ func TestLogRuntimePublishesVmalertManifestForEndpointAndMarksRuntimeRulesApplie
 	require.Equal(t, "previewed", runtimeRecord.Status)
 
 	applied, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{
-		DeployClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
+		DeployClusterID: endpoint.ClusterID, Namespace: "novaapm-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
 	})
 	require.NoError(t, err)
 	require.False(t, applied.RequiresConfirmation)
@@ -116,7 +121,7 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	deployments := &recordingRuntimeDeploymentService{}
 	service := NewMetricsRuntimeService(MetricsRuntimeDependencies{
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: repository, K8sDeployments: deployments,
-		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
+		DefaultAlertIngestURL: "http://novaapm-api.novaapm-system.svc.cluster.local:8080",
 		Clock:                 func() time.Time { return now },
 	})
 
@@ -125,8 +130,8 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	require.True(t, preview.RequiresConfirmation)
 	require.Equal(t, "vmalert-metrics:vm-prod", preview.RuntimeID)
 	require.Equal(t, "http://victoriametrics:8428/select/0/prometheus", preview.DatasourceURL)
-	require.Contains(t, deployments.lastPreview.YAMLContent, "novaobs_runtime_id: vmalert-metrics:vm-prod")
-	require.Contains(t, deployments.lastPreview.YAMLContent, "NovaObsMetricAlert_rule_metrics")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "novaapm_runtime_id: vmalert-metrics:vm-prod")
+	require.Contains(t, deployments.lastPreview.YAMLContent, "NovaAPMMetricAlert_rule_metrics")
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "-rule.defaultRuleType=vlogs")
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "AccountID:")
 	require.NotContains(t, deployments.lastPreview.YAMLContent, "ProjectID:")
@@ -139,7 +144,7 @@ func TestMetricsRuntimePublishesVmalertManifestWithoutVLogsDefaultRuleType(t *te
 	require.Equal(t, "previewed", runtimeRecord.Status)
 
 	applied, err := service.Publish(ctx, platformrbac.DevAdminSubject(), endpoint.ID, LogRuntimePublishRequest{
-		DeployClusterID: endpoint.ClusterID, Namespace: "novaobs-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
+		DeployClusterID: endpoint.ClusterID, Namespace: "novaapm-system", PreviewID: preview.PreviewID, ConfirmationToken: preview.ConfirmationToken,
 	})
 	require.NoError(t, err)
 	require.False(t, applied.RequiresConfirmation)
@@ -159,7 +164,7 @@ func TestLogRuntimeAllowsDeployClusterOutsideEndpointBinding(t *testing.T) {
 	}))
 	service := NewLogRuntimeService(LogRuntimeDependencies{
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
-		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
+		DefaultAlertIngestURL: "http://novaapm-api.novaapm-system.svc.cluster.local:8080",
 	})
 
 	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-prod", LogRuntimePublishRequest{DeployClusterID: "prod-2"})
@@ -175,11 +180,11 @@ func TestLogRuntimeRejectsNamespaceOutsideFixedPlatformNamespace(t *testing.T) {
 	}))
 	service := NewLogRuntimeService(LogRuntimeDependencies{
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
-		DefaultAlertIngestURL: "http://novaobs-api.novaobs-system.svc.cluster.local:8080",
+		DefaultAlertIngestURL: "http://novaapm-api.novaapm-system.svc.cluster.local:8080",
 	})
 
 	_, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-prod", LogRuntimePublishRequest{Namespace: "business-ns"})
-	require.ErrorContains(t, err, "固定 namespace novaobs-system")
+	require.ErrorContains(t, err, "固定 namespace novaapm-system")
 }
 
 func TestLogRuntimeRejectsNonClusterVictoriaLogsEndpoint(t *testing.T) {
@@ -192,7 +197,7 @@ func TestLogRuntimeRejectsNonClusterVictoriaLogsEndpoint(t *testing.T) {
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: &recordingRuntimeDeploymentService{},
 	})
 
-	_, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-global", LogRuntimePublishRequest{AlertIngestURL: "http://novaobs-api:8080"})
+	_, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-global", LogRuntimePublishRequest{AlertIngestURL: "http://novaapm-api:8080"})
 	require.ErrorContains(t, err, "deploy_cluster_id")
 }
 
@@ -205,7 +210,7 @@ func TestLogRuntimeDeploysGlobalDatasourceToSelectedCluster(t *testing.T) {
 	deployments := &recordingRuntimeDeploymentService{}
 	service := NewLogRuntimeService(LogRuntimeDependencies{
 		Endpoints: store.LogEndpoints(), Runtimes: store.ObservabilityRuntimes(), Repository: NewStoreRepository(store.Alerting()), K8sDeployments: deployments,
-		DefaultAlertIngestURL: "http://novaobs-api:8080",
+		DefaultAlertIngestURL: "http://novaapm-api:8080",
 	})
 
 	preview, err := service.Publish(ctx, platformrbac.DevAdminSubject(), "vl-global", LogRuntimePublishRequest{DeployClusterID: "ops-cluster"})
@@ -219,6 +224,12 @@ type recordingRuntimeDeploymentService struct {
 	lastApply   k8sopsdeployment.OperationRequest
 }
 
+type staticRuntimeScopeResolver struct{ scope RuleScope }
+
+func (r staticRuntimeScopeResolver) ResolveScope(context.Context, RuleSpec) (RuleScope, error) {
+	return r.scope, nil
+}
+
 func (s *recordingRuntimeDeploymentService) Preview(_ context.Context, _ platformrbac.Subject, req k8sopsdeployment.OperationRequest) (k8sopsdeployment.OperationResult, error) {
 	s.lastPreview = req
 	return runtimeOperationResult("previewed", "preview-1", "confirm-1"), nil
@@ -230,13 +241,13 @@ func (s *recordingRuntimeDeploymentService) Apply(_ context.Context, _ platformr
 }
 
 func runtimeOperationResult(status string, previewID string, token string) k8sopsdeployment.OperationResult {
-	name := "novaobs-vmalert-prod-logs"
+	name := "novaapm-vmalert-prod-logs"
 	return k8sopsdeployment.OperationResult{
 		Status: status, Message: status, PreviewID: previewID, ConfirmationToken: token, AuditID: "audit-runtime",
 		Resources: []k8sopsdeployment.ResourceIdentity{{
-			ClusterID: "prod-1", APIVersion: "v1", Kind: "Namespace", Name: "novaobs-system",
+			ClusterID: "prod-1", APIVersion: "v1", Kind: "Namespace", Name: "novaapm-system",
 		}, {
-			ClusterID: "prod-1", Namespace: "novaobs-system", APIVersion: "apps/v1", Kind: "Deployment", Name: name,
+			ClusterID: "prod-1", Namespace: "novaapm-system", APIVersion: "apps/v1", Kind: "Deployment", Name: name,
 		}},
 		Warnings: []string{},
 	}

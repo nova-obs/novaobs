@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -74,7 +74,7 @@ func (s Service) Create(ctx context.Context, subject platformrbac.Subject, req U
 		YAMLContent: req.YAMLContent,
 		Variables:   cloneVariables(req.Variables),
 		Description: req.Description,
-		Source:      "novaobs",
+		Source:      "novaapm",
 		CreatedBy:   subject.ID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -196,8 +196,8 @@ func BaseTemplate(templateType string) (BaseTemplateResult, error) {
 		Type:        kind,
 		YAMLContent: content,
 		Variables:   variables,
-		Description: "NovaObs 内置 K8s 发布模板基线",
-		Source:      "novaobs-base",
+		Description: "NovaAPM 内置 K8s 发布模板基线",
+		Source:      "novaapm-base",
 	}, nil
 }
 

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 var (
@@ -193,7 +193,7 @@ func (s Service) CreateBinding(ctx context.Context, subject platformrbac.Subject
 	role := platformrbac.Role{
 		ID:          roleID(req.PermissionIDs),
 		Name:        "K8s 平台授权组合",
-		Description: "由 NovaObs 平台访问授权页生成的 K8s 运维权限组合",
+		Description: "由 NovaAPM 平台访问授权页生成的 K8s 运维权限组合",
 		Permissions: permissions,
 		CreatedAt:   now,
 		UpdatedAt:   now,

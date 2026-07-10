@@ -22,7 +22,7 @@ func TestValidateRejectsMissingSecretKey(t *testing.T) {
 		Database: DatabaseConfig{Driver: "mongodb", URI: "mongodb://localhost:27017"},
 	}
 
-	require.ErrorContains(t, cfg.Validate(), "NOVAOBS_SECRET_KEY")
+	require.ErrorContains(t, cfg.Validate(), "NOVAAPM_SECRET_KEY")
 }
 
 func TestValidateRejectsShortSecretKey(t *testing.T) {

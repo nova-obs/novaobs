@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	obsendpoint "novaobs/internal/observability/endpoint"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -75,6 +75,17 @@ func (s Service) ListEndpoints(ctx context.Context, subject platformrbac.Subject
 	return s.endpoints.List(ctx, obsendpoint.ListFilter{SignalType: obsendpoint.SignalTypeMetrics})
 }
 
+func (s Service) ValidateServiceScope(ctx context.Context, productID string, serviceID string) error {
+	service, err := s.services.Get(ctx, strings.TrimSpace(serviceID))
+	if err != nil {
+		return normalizeNotFound(err, "服务不存在")
+	}
+	if service.ProductID == "" || service.ProductID != strings.TrimSpace(productID) {
+		return apperr.InvalidRequest("服务不属于路径中的产品")
+	}
+	return nil
+}
+
 func (s Service) TestEndpoint(ctx context.Context, subject platformrbac.Subject, endpointID string) (obsendpoint.TestResult, error) {
 	if !s.allowed(subject, "", "metrics.endpoint", "read") {
 		return obsendpoint.TestResult{}, ErrPermissionDenied
@@ -129,11 +140,17 @@ func (s Service) CreateBinding(ctx context.Context, subject platformrbac.Subject
 	if err != nil {
 		return ServiceBindingView{}, normalizeNotFound(err, "服务不存在")
 	}
+	if err := validateServiceLabelMatch(req.LabelMatch, service.Name); err != nil {
+		return ServiceBindingView{}, err
+	}
 	if !s.allowed(subject, service.ID, "metrics.binding", "manage") {
 		return ServiceBindingView{}, ErrPermissionDenied
 	}
 	endpoint, err := s.metricsEndpoint(ctx, req.EndpointID)
 	if err != nil {
+		return ServiceBindingView{}, err
+	}
+	if _, err := resolveMetricsEndpointForService(endpoint, service); err != nil {
 		return ServiceBindingView{}, err
 	}
 	status := firstNonEmpty(req.Status, BindingStatusActive)
@@ -155,7 +172,7 @@ func (s Service) CreateBinding(ctx context.Context, subject platformrbac.Subject
 		ID:               primitive.NewObjectID().Hex(),
 		ServiceID:        service.ID,
 		EndpointID:       endpoint.ID,
-		Tenant:           firstTenant(req.Tenant, endpoint.Tenant),
+		Tenant:           tenantForService(service),
 		LabelMatch:       copyLabels(req.LabelMatch),
 		BasePromQL:       basePromQL,
 		Status:           status,
@@ -185,24 +202,29 @@ func (s Service) UpdateBinding(ctx context.Context, subject platformrbac.Subject
 	}
 	req = normalizeUpdateRequest(req)
 	updated := current
+	service, err := s.services.Get(ctx, current.ServiceID)
+	if err != nil {
+		return ServiceBindingView{}, normalizeNotFound(err, "服务不存在")
+	}
 	if req.EndpointID != "" {
 		endpoint, err := s.metricsEndpoint(ctx, req.EndpointID)
 		if err != nil {
 			return ServiceBindingView{}, err
 		}
-		updated.EndpointID = endpoint.ID
-		if req.Tenant.AccountID == "" && req.Tenant.ProjectID == "" {
-			updated.Tenant = endpoint.Tenant
+		if _, err := resolveMetricsEndpointForService(endpoint, service); err != nil {
+			return ServiceBindingView{}, err
 		}
+		updated.EndpointID = endpoint.ID
 	}
-	if req.Tenant.AccountID != "" || req.Tenant.ProjectID != "" {
-		updated.Tenant = req.Tenant
-	}
+	updated.Tenant = tenantForService(service)
 	if req.LabelMatch != nil {
 		if len(req.LabelMatch) == 0 {
 			return ServiceBindingView{}, apperr.InvalidRequest("label_match 不能为空")
 		}
 		if err := validateLabelMatch(req.LabelMatch); err != nil {
+			return ServiceBindingView{}, err
+		}
+		if err := validateServiceLabelMatch(req.LabelMatch, service.Name); err != nil {
 			return ServiceBindingView{}, err
 		}
 		updated.LabelMatch = copyLabels(req.LabelMatch)
@@ -234,6 +256,17 @@ func (s Service) UpdateBinding(ctx context.Context, subject platformrbac.Subject
 		return ServiceBindingView{}, normalizeNotFound(err, "指标服务绑定不存在")
 	}
 	return s.bindingView(ctx, updated)
+}
+
+func (s Service) UpdateServiceBinding(ctx context.Context, subject platformrbac.Subject, serviceID string, id string, req UpdateServiceBindingRequest) (ServiceBindingView, error) {
+	current, err := s.getBinding(ctx, id)
+	if err != nil {
+		return ServiceBindingView{}, err
+	}
+	if current.ServiceID != strings.TrimSpace(serviceID) {
+		return ServiceBindingView{}, apperr.InvalidRequest("指标服务绑定不属于路径中的服务")
+	}
+	return s.UpdateBinding(ctx, subject, id, req)
 }
 
 func (s Service) ProbeBinding(ctx context.Context, subject platformrbac.Subject, id string) (ServiceBindingView, error) {
@@ -272,32 +305,43 @@ func (s Service) ProbeBinding(ctx context.Context, subject platformrbac.Subject,
 	return s.bindingView(ctx, current)
 }
 
-func (s Service) Workspace(ctx context.Context, subject platformrbac.Subject, serviceID string) (Workspace, error) {
-	services, err := s.services.List(ctx)
+func (s Service) ProbeServiceBinding(ctx context.Context, subject platformrbac.Subject, serviceID string, id string) (ServiceBindingView, error) {
+	current, err := s.getBinding(ctx, id)
 	if err != nil {
-		return Workspace{}, err
+		return ServiceBindingView{}, err
 	}
-	services = s.filterReadableServices(subject, services)
+	if current.ServiceID != strings.TrimSpace(serviceID) {
+		return ServiceBindingView{}, apperr.InvalidRequest("指标服务绑定不属于路径中的服务")
+	}
+	return s.ProbeBinding(ctx, subject, id)
+}
+
+func (s Service) Workspace(ctx context.Context, subject platformrbac.Subject, productID string, serviceID string) (Workspace, error) {
 	serviceID = strings.TrimSpace(serviceID)
 	if serviceID == "" {
-		for _, service := range services {
-			serviceID = service.ID
-			break
-		}
+		return Workspace{}, apperr.InvalidRequest("service_id 不能为空")
 	}
-	if serviceID != "" {
-		if _, err := s.services.Get(ctx, serviceID); err != nil {
-			return Workspace{}, normalizeNotFound(err, "服务不存在")
-		}
-		if !s.allowed(subject, serviceID, "metrics.query", "read") {
-			return Workspace{}, ErrPermissionDenied
-		}
+	service, err := s.services.Get(ctx, serviceID)
+	if err != nil {
+		return Workspace{}, normalizeNotFound(err, "服务不存在")
+	}
+	if service.ProductID == "" || service.ProductID != strings.TrimSpace(productID) {
+		return Workspace{}, apperr.InvalidRequest("服务不属于路径中的产品")
+	}
+	if !s.allowed(subject, serviceID, "metrics.query", "read") {
+		return Workspace{}, ErrPermissionDenied
 	}
 	endpoints := []obsendpoint.Endpoint{}
 	if s.endpoints != nil && s.allowed(subject, "", "metrics.endpoint", "read") {
 		endpoints, err = s.endpoints.List(ctx, obsendpoint.ListFilter{SignalType: obsendpoint.SignalTypeMetrics})
 		if err != nil {
 			return Workspace{}, err
+		}
+		for index := range endpoints {
+			endpoints[index], err = resolveMetricsEndpointForService(endpoints[index], service)
+			if err != nil {
+				return Workspace{}, err
+			}
 		}
 	}
 	var bindingView *ServiceBindingView
@@ -320,7 +364,7 @@ func (s Service) Workspace(ctx context.Context, subject platformrbac.Subject, se
 		}
 	}
 	return Workspace{
-		Services:        services,
+		Services:        []servicecatalog.Service{service},
 		ActiveServiceID: serviceID,
 		Binding:         bindingView,
 		Endpoints:       endpoints,
@@ -371,14 +415,42 @@ func (s Service) getBinding(ctx context.Context, id string) (ServiceBinding, err
 func (s Service) bindingView(ctx context.Context, binding ServiceBinding) (ServiceBindingView, error) {
 	view := ServiceBindingView{Binding: normalizeBinding(binding)}
 	if service, err := s.services.Get(ctx, binding.ServiceID); err == nil {
+		view.Binding.Tenant = tenantForService(service)
 		view.Service = &service
-	}
-	if s.endpoints != nil {
-		if endpoint, err := s.endpoints.Get(ctx, binding.EndpointID); err == nil {
-			view.Endpoint = &endpoint
+		if s.endpoints != nil {
+			if endpoint, err := s.endpoints.Get(ctx, binding.EndpointID); err == nil {
+				resolved, err := resolveMetricsEndpointForService(endpoint, service)
+				if err != nil {
+					return ServiceBindingView{}, err
+				}
+				view.Endpoint = &resolved
+			}
 		}
 	}
 	return view, nil
+}
+
+func tenantForService(service servicecatalog.Service) obsendpoint.EndpointTenant {
+	return obsendpoint.EndpointTenant{AccountID: service.AccountID, ProjectID: service.ProjectID}
+}
+
+func resolveMetricsEndpointForService(endpoint obsendpoint.Endpoint, service servicecatalog.Service) (obsendpoint.Endpoint, error) {
+	if endpoint.Kind != obsendpoint.KindVictoriaMetrics {
+		return endpoint, nil
+	}
+	endpoint.Tenant = tenantForService(service)
+	urls := []*string{&endpoint.URLs.RemoteWriteURL, &endpoint.URLs.QueryURL, &endpoint.URLs.UIURL}
+	for _, value := range urls {
+		if strings.TrimSpace(*value) == "" {
+			continue
+		}
+		resolved, err := resolveVictoriaMetricsTenantURL(*value, service.AccountID, service.ProjectID)
+		if err != nil {
+			return obsendpoint.Endpoint{}, err
+		}
+		*value = resolved
+	}
+	return endpoint, nil
 }
 
 func (s Service) metricsEndpoint(ctx context.Context, endpointID string) (obsendpoint.Endpoint, error) {
@@ -490,6 +562,13 @@ func validateLabelMatch(labels map[string]string) error {
 	return nil
 }
 
+func validateServiceLabelMatch(labels map[string]string, serviceName string) error {
+	if strings.TrimSpace(labels["service.name"]) != strings.TrimSpace(serviceName) {
+		return apperr.InvalidRequest("label_match.service.name 必须与当前服务名称一致")
+	}
+	return nil
+}
+
 func allowedLabelMatchKey(key string) bool {
 	switch key {
 	case "service.name", "namespace", "cluster", "job", "app.kubernetes.io/name", "k8s.namespace.name", "k8s.cluster.id":
@@ -568,13 +647,6 @@ func copyLabels(labels map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
-}
-
-func firstTenant(primary obsendpoint.EndpointTenant, fallback obsendpoint.EndpointTenant) obsendpoint.EndpointTenant {
-	if primary.AccountID != "" || primary.ProjectID != "" {
-		return primary
-	}
-	return fallback
 }
 
 func firstNonEmpty(values ...string) string {

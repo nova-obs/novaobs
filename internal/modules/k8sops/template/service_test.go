@@ -41,7 +41,7 @@ func TestBaseTemplateCoversStartorchTemplateTypes(t *testing.T) {
 			require.Equal(t, normalizeTemplateType(kind), result.Type)
 			require.Contains(t, result.YAMLContent, "kind: "+result.Type)
 			require.NotEmpty(t, result.Variables)
-			require.Equal(t, "novaobs-base", result.Source)
+			require.Equal(t, "novaapm-base", result.Source)
 		})
 	}
 }

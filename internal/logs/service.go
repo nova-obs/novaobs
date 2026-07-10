@@ -5,22 +5,23 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	k8sopsresource "novaobs/internal/modules/k8sops/resource"
-	obsruntime "novaobs/internal/observability/runtime"
-	platformimages "novaobs/internal/platform/images"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	k8sopsresource "novaapm/internal/modules/k8sops/resource"
+	obsruntime "novaapm/internal/observability/runtime"
+	platformimages "novaapm/internal/platform/images"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -29,12 +30,26 @@ import (
 
 var ErrPermissionDenied = errors.New("permission_denied")
 
+const (
+	defaultK8sCollectorNamespace = "novaapm-system"
+	legacyK8sCollectorNamespace  = "novaobs-system"
+)
+
+func normalizeK8sCollectorNamespace(namespace string) string {
+	value := strings.TrimSpace(namespace)
+	if value == "" || value == legacyK8sCollectorNamespace {
+		return defaultK8sCollectorNamespace
+	}
+	return value
+}
+
 type K8sClusterService interface {
 	List(ctx context.Context, filter k8sopscluster.ListFilter) ([]k8sopscluster.Cluster, error)
 	Get(ctx context.Context, id string) (k8sopscluster.Cluster, error)
 }
 
 type K8sResourceService interface {
+	List(ctx context.Context, filter k8sopsresource.ListFilter) ([]k8sopsresource.ResourceSummary, error)
 	ListRuntimeGroups(ctx context.Context, query k8sopsresource.RuntimeGroupsQuery) (k8sopsresource.RuntimeGroupsResponse, error)
 }
 
@@ -154,7 +169,7 @@ func NewService(
 }
 
 func (s Service) GetClusterConfig(ctx context.Context, clusterID string, agentNamespace string) (LogCollectorClusterConfig, error) {
-	agentNamespace = firstNonEmpty(strings.TrimSpace(agentNamespace), "novaobs-system")
+	agentNamespace = normalizeK8sCollectorNamespace(agentNamespace)
 	var cfg LogCollectorClusterConfig
 	err := s.clusterConfigs.FindByCluster(ctx, strings.TrimSpace(clusterID), agentNamespace, &cfg)
 	if err != nil {
@@ -164,7 +179,7 @@ func (s Service) GetClusterConfig(ctx context.Context, clusterID string, agentNa
 }
 
 func (s Service) UpsertClusterConfig(ctx context.Context, clusterID string, agentNamespace string, processorPatch string) (LogCollectorClusterConfig, error) {
-	agentNamespace = firstNonEmpty(strings.TrimSpace(agentNamespace), "novaobs-system")
+	agentNamespace = normalizeK8sCollectorNamespace(agentNamespace)
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
 		return LogCollectorClusterConfig{}, apperr.InvalidRequest("cluster_id 不能为空")
@@ -181,10 +196,20 @@ func (s Service) UpsertClusterConfig(ctx context.Context, clusterID string, agen
 	return cfg, nil
 }
 
-func (s Service) Workspace(ctx context.Context) (Workspace, error) {
-	services, err := s.services.List(ctx)
+func (s Service) Workspace(ctx context.Context, subject platformrbac.Subject, productID string, serviceID string) (Workspace, error) {
+	serviceID = strings.TrimSpace(serviceID)
+	if serviceID == "" {
+		return Workspace{}, apperr.InvalidRequest("service_id 不能为空")
+	}
+	service, err := s.services.Get(ctx, serviceID)
 	if err != nil {
-		return Workspace{}, err
+		return Workspace{}, normalizeNotFound(err, "服务不存在")
+	}
+	if service.ProductID == "" || service.ProductID != strings.TrimSpace(productID) {
+		return Workspace{}, apperr.InvalidRequest("服务不属于路径中的产品")
+	}
+	if !s.allowed(subject, serviceID, "logs.query", "read") {
+		return Workspace{}, ErrPermissionDenied
 	}
 	groups, err := s.collectorGroups.ListGroups(ctx)
 	if err != nil {
@@ -198,7 +223,21 @@ func (s Service) Workspace(ctx context.Context) (Workspace, error) {
 	if err != nil {
 		return Workspace{}, err
 	}
-	targets, err := s.listTargetViews(ctx, "")
+	serviceRoutes := make([]LogRouteView, 0, len(routes))
+	for _, route := range routes {
+		if route.Route.ServiceID != serviceID {
+			continue
+		}
+		if route.Endpoint != nil {
+			projected := endpointForService(*route.Endpoint, service)
+			route.Endpoint = &projected
+		}
+		serviceRoutes = append(serviceRoutes, route)
+	}
+	for index := range endpoints {
+		endpoints[index] = endpointForService(endpoints[index], service)
+	}
+	targets, err := s.listTargetViews(ctx, serviceID)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -210,17 +249,25 @@ func (s Service) Workspace(ctx context.Context) (Workspace, error) {
 		}
 	}
 	return Workspace{
-		Services:        serviceSummaries(services),
+		Services:        serviceSummaries([]servicecatalog.Service{service}),
 		CollectorGroups: agentGroupSummaries(groups),
 		Clusters:        clusterSummaries(clusters),
 		Endpoints:       endpoints,
-		Routes:          routes,
+		Routes:          serviceRoutes,
 		Targets:         targets,
 	}, nil
 }
 
+func endpointForService(endpoint LogEndpoint, service servicecatalog.Service) LogEndpoint {
+	if endpoint.SinkType == EndpointSinkVL {
+		endpoint.AccountID = service.AccountID
+		endpoint.ProjectID = service.ProjectID
+	}
+	return endpoint
+}
+
 func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogEndpoint, error) {
-	endpoint = normalizeEndpoint(endpoint)
+	endpoint = normalizeStoredEndpoint(endpoint)
 	if err := validateEndpoint(endpoint); err != nil {
 		return LogEndpoint{}, err
 	}
@@ -266,7 +313,7 @@ func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndp
 	if err := s.endpoints.FindByID(ctx, id, &existing); err != nil {
 		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
-	endpoint = normalizeEndpoint(endpoint)
+	endpoint = normalizeStoredEndpoint(endpoint)
 	endpoint.ID = id
 	if err := validateEndpoint(endpoint); err != nil {
 		return LogEndpoint{}, err
@@ -325,7 +372,7 @@ func (s Service) ListEndpoints(ctx context.Context) ([]LogEndpoint, error) {
 		return nil, err
 	}
 	for index := range endpoints {
-		endpoints[index] = normalizeEndpoint(endpoints[index])
+		endpoints[index] = normalizeStoredEndpoint(endpoints[index])
 	}
 	filtered := endpoints[:0]
 	for _, endpoint := range endpoints {
@@ -392,11 +439,17 @@ func (s Service) CreateTarget(ctx context.Context, subject platformrbac.Subject,
 	if err := ValidateLogTargetBaseFilter(req.BaseFilter); err != nil {
 		return LogTargetView{}, err
 	}
+	if err := validateOptionalVictoriaLogsTenant(req.AccountID, req.ProjectID); err != nil {
+		return LogTargetView{}, err
+	}
 	service, err := s.services.Get(ctx, req.ServiceID)
 	if err != nil {
 		return LogTargetView{}, normalizeNotFound(err, "服务不存在")
 	}
 	if !s.allowedTarget(subject, service.ID, "manage") {
+		return LogTargetView{}, ErrPermissionDenied
+	}
+	if req.AccountID != "" && !s.allowedExternalTenantOverride(subject) {
 		return LogTargetView{}, ErrPermissionDenied
 	}
 	endpoint, err := s.getEndpoint(ctx, req.EndpointID)
@@ -418,6 +471,8 @@ func (s Service) CreateTarget(ctx context.Context, subject platformrbac.Subject,
 		EndpointID: endpoint.ID,
 		SourceKind: req.SourceKind,
 		BaseFilter: req.BaseFilter,
+		AccountID:  req.AccountID,
+		ProjectID:  req.ProjectID,
 		Status:     LogTargetStatusPendingVerification,
 		CreatedBy:  actor,
 		UpdatedBy:  actor,
@@ -446,6 +501,7 @@ func (s Service) UpdateTarget(ctx context.Context, subject platformrbac.Subject,
 	}
 	req = normalizeUpdateTargetRequest(req)
 	updated := current
+	configurationChanged := false
 	if req.Name != "" {
 		updated.Name = req.Name
 	}
@@ -457,19 +513,46 @@ func (s Service) UpdateTarget(ctx context.Context, subject platformrbac.Subject,
 		if err := validateTargetEndpoint(endpoint); err != nil {
 			return LogTargetView{}, err
 		}
+		configurationChanged = configurationChanged || updated.EndpointID != endpoint.ID
 		updated.EndpointID = endpoint.ID
 	}
 	if req.BaseFilter != "" {
 		if err := ValidateLogTargetBaseFilter(req.BaseFilter); err != nil {
 			return LogTargetView{}, err
 		}
+		configurationChanged = configurationChanged || updated.BaseFilter != req.BaseFilter
 		updated.BaseFilter = req.BaseFilter
 	}
+	if req.AccountID != nil || req.ProjectID != nil {
+		if req.AccountID == nil || req.ProjectID == nil {
+			return LogTargetView{}, apperr.InvalidRequest("VictoriaLogs AccountID 和 ProjectID 必须同时填写")
+		}
+		if err := validateOptionalVictoriaLogsTenant(*req.AccountID, *req.ProjectID); err != nil {
+			return LogTargetView{}, err
+		}
+		if *req.AccountID != "" && (*req.AccountID != current.AccountID || *req.ProjectID != current.ProjectID) && !s.allowedExternalTenantOverride(subject) {
+			return LogTargetView{}, ErrPermissionDenied
+		}
+		configurationChanged = configurationChanged || updated.AccountID != *req.AccountID || updated.ProjectID != *req.ProjectID
+		updated.AccountID = *req.AccountID
+		updated.ProjectID = *req.ProjectID
+	}
 	if req.Status != "" {
-		if req.Status != LogTargetStatusPendingVerification && req.Status != LogTargetStatusVerified && req.Status != LogTargetStatusDisabled {
-			return LogTargetView{}, apperr.InvalidRequest("日志目标状态只支持 pending_verification、verified 或 disabled")
+		if req.Status == LogTargetStatusVerified {
+			return LogTargetView{}, apperr.InvalidRequest("verified 状态只能通过探测产生")
+		}
+		if req.Status != LogTargetStatusPendingVerification && req.Status != LogTargetStatusDisabled {
+			return LogTargetView{}, apperr.InvalidRequest("日志目标状态只支持 pending_verification 或 disabled")
 		}
 		updated.Status = req.Status
+	}
+	if configurationChanged {
+		if updated.Status != LogTargetStatusDisabled {
+			updated.Status = LogTargetStatusPendingVerification
+		}
+		updated.LastProbeStatus = ""
+		updated.LastProbeMessage = ""
+		updated.LastProbeAt = nil
 	}
 	if err := s.ensureUniqueExternalTarget(ctx, current.ID, updated.ServiceID, updated.EndpointID, updated.BaseFilter); err != nil {
 		return LogTargetView{}, err
@@ -501,6 +584,9 @@ func (s Service) ProbeTarget(ctx context.Context, subject platformrbac.Subject, 
 		return LogTargetView{}, err
 	}
 	if err := ValidateLogTargetBaseFilter(target.BaseFilter); err != nil {
+		return LogTargetView{}, err
+	}
+	if err := validateOptionalVictoriaLogsTenant(target.AccountID, target.ProjectID); err != nil {
 		return LogTargetView{}, err
 	}
 	now := time.Now().UTC()
@@ -559,6 +645,7 @@ func (s Service) ListK8sWorkloads(ctx context.Context, clusterID string, namespa
 }
 
 func (s Service) SyncK8sNamespaceServices(ctx context.Context, req SyncK8sNamespaceRequest) (SyncK8sNamespaceResult, error) {
+	req.ProductID = strings.TrimSpace(req.ProductID)
 	req.ClusterID = strings.TrimSpace(req.ClusterID)
 	req.Namespace = strings.TrimSpace(req.Namespace)
 	req.Environment = strings.TrimSpace(req.Environment)
@@ -566,6 +653,9 @@ func (s Service) SyncK8sNamespaceServices(ctx context.Context, req SyncK8sNamesp
 	req.WorkloadKind = strings.TrimSpace(req.WorkloadKind)
 	if req.Environment == "" {
 		req.Environment = "prod"
+	}
+	if req.ProductID == "" {
+		return SyncK8sNamespaceResult{}, apperr.InvalidRequest("请选择服务所属产品")
 	}
 	workloads, err := s.ListK8sWorkloads(ctx, req.ClusterID, req.Namespace)
 	if err != nil {
@@ -606,11 +696,12 @@ func (s Service) SyncK8sNamespaceServices(ctx context.Context, req SyncK8sNamesp
 
 func (s Service) findOrCreateK8sService(ctx context.Context, services []servicecatalog.Service, req SyncK8sNamespaceRequest, workload Workload) (servicecatalog.Service, bool, error) {
 	for _, service := range services {
-		if service.Name == workload.Name && service.Environment == req.Environment && service.Cluster == req.ClusterID && service.Namespace == req.Namespace {
+		if service.ProductID == req.ProductID && service.Name == workload.Name {
 			return service, false, nil
 		}
 	}
 	service, err := s.services.Create(ctx, servicecatalog.Service{
+		ProductID:    req.ProductID,
 		Name:         workload.Name,
 		DisplayName:  workload.Name,
 		Environment:  req.Environment,
@@ -679,7 +770,7 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 		return LogRoutePreview{}, err
 	}
 	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
-		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+		ServiceName: service.Name,
 		Environment: service.Environment,
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
@@ -695,11 +786,16 @@ func (s Service) PreviewRoute(ctx context.Context, req UpsertRouteRequest) (LogR
 	}
 	warnings := previewWarnings(effectiveSource, endpoint)
 	blocked, reason := s.publishBlock(ctx, effectiveSource)
+	serviceConfigRef := configFileRefForRoute(rendered.ConfigFileRefs, route.ID)
 	return LogRoutePreview{
 		Source:                 effectiveSource,
 		Endpoint:               endpoint,
 		AgentYAML:              rendered.ManifestYAML,
 		CollectorYAML:          rendered.CollectorYAML,
+		CollectorConfigFiles:   copyConfigFiles(rendered.CollectorConfigFiles),
+		ServiceConfigPath:      serviceConfigRef.Path,
+		ServiceConfigMapName:   serviceConfigRef.ConfigMapName,
+		ServiceConfigYAML:      rendered.CollectorConfigFiles[serviceConfigRef.Path],
 		CollectorConfigHash:    rendered.CollectorConfigHash,
 		DeploymentManifestHash: rendered.DeploymentManifestHash,
 		Mode:                   previewMode(source),
@@ -731,12 +827,19 @@ func (s Service) RouteCollectorConfig(ctx context.Context, routeID string) (LogR
 	if manifest.DeploymentManifestHash != "" {
 		deploymentHash = manifest.DeploymentManifestHash
 	}
+	configFiles := copyConfigFiles(config.ConfigFiles)
+	serviceRef := configFileRefForRoute(config.ConfigFileRefs, route.ID)
+	serviceYAML := configFiles[serviceRef.Path]
 	return LogRouteCollectorConfig{
 		RouteID:                route.ID,
 		CollectorConfigHash:    config.CollectorConfigHash,
 		DeploymentManifestHash: deploymentHash,
 		SourceType:             source.SourceType,
 		CollectorYAML:          config.CollectorYAML,
+		CollectorConfigFiles:   configFiles,
+		ServiceConfigPath:      serviceRef.Path,
+		ServiceConfigMapName:   serviceRef.ConfigMapName,
+		ServiceConfigYAML:      serviceYAML,
 	}, nil
 }
 
@@ -751,6 +854,8 @@ func (s Service) persistRenderedArtifacts(ctx context.Context, source LogSource,
 		ClusterID:           source.ClusterID,
 		AgentNamespace:      source.AgentNamespace,
 		CollectorYAML:       rendered.CollectorYAML,
+		ConfigFiles:         copyConfigFiles(rendered.CollectorConfigFiles),
+		ConfigFileRefs:      copyConfigFileRefs(rendered.ConfigFileRefs),
 		RouteIDs:            copyStringSlice(rendered.RouteIDs),
 		CreatedAt:           now,
 	}
@@ -782,7 +887,7 @@ func (s Service) CreateRoute(ctx context.Context, req UpsertRouteRequest) (LogRo
 		return LogRouteView{}, err
 	}
 	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
-		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+		ServiceName: service.Name,
 		Environment: service.Environment,
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
@@ -855,7 +960,7 @@ func (s Service) UpdateRoute(ctx context.Context, routeID string, req UpsertRout
 		return LogRouteView{}, err
 	}
 	rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
-		ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+		ServiceName: service.Name,
 		Environment: service.Environment,
 		Source:      effectiveSource,
 		Endpoint:    endpoint,
@@ -950,7 +1055,7 @@ func (s Service) PublishRoute(ctx context.Context, subject platformrbac.Subject,
 	}
 	if source.SourceType == SourceTypeVMFile {
 		rendered, err := s.renderRouteConfigWithHashes(ctx, renderInput{
-			ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+			ServiceName: service.Name,
 			Environment: service.Environment,
 			Source:      source,
 			Endpoint:    endpoint,
@@ -999,9 +1104,13 @@ func (s Service) publishVM(ctx context.Context, route LogRoute, source LogSource
 
 func (s Service) PublishK8sCollectorRuntime(ctx context.Context, subject platformrbac.Subject, req K8sCollectorRuntimePublishRequest) (K8sCollectorRuntimePublishResult, error) {
 	clusterID := strings.TrimSpace(req.ClusterID)
-	agentNamespace := firstNonEmpty(req.Namespace, "novaobs-system")
+	agentNamespace := normalizeK8sCollectorNamespace(req.Namespace)
+	taskType := strings.TrimSpace(req.TaskType)
 	if clusterID == "" {
 		return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest("cluster_id 不能为空")
+	}
+	if taskType != "base" && taskType != "incremental" {
+		return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest("task_type 必须为 base 或 incremental")
 	}
 	if s.k8sDeployments == nil {
 		return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest("K8s 部署服务不可用")
@@ -1019,15 +1128,44 @@ func (s Service) PublishK8sCollectorRuntime(ctx context.Context, subject platfor
 	if err := validateGeneratedK8sCollectorConfig(rendered.CollectorYAML); err != nil {
 		return K8sCollectorRuntimePublishResult{}, err
 	}
+	runtimeStatus, err := s.CheckK8sCollectorRuntimeStatus(ctx, K8sCollectorRuntimeStatusRequest{
+		ClusterID: clusterID,
+		Namespace: agentNamespace,
+	})
+	if err != nil {
+		return K8sCollectorRuntimePublishResult{}, err
+	}
+	manifestYAML := rendered.ManifestYAML
+	changedConfigMaps := []string{}
+	switch taskType {
+	case "base":
+		if runtimeStatus.Ready {
+			return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest("logs_collector 基础组件已就绪，请使用增量发布")
+		}
+		if runtimeStatus.Status != "missing_resources" {
+			return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest(runtimeStatus.Message)
+		}
+	case "incremental":
+		if !runtimeStatus.Ready {
+			return K8sCollectorRuntimePublishResult{}, apperr.InvalidRequest(runtimeStatus.Message)
+		}
+		changed := s.changedK8sRuntimeConfigMapNames(ctx, rendered, runtimeStatus.Runtime)
+		if len(req.RouteIDs) > 0 {
+			changed = filterConfigMapsByRouteIDs(changed, rendered.ConfigFileRefs, req.RouteIDs)
+		}
+		changedConfigMaps = sortedStringSet(changed)
+		manifestYAML = renderK8sRuntimeServiceConfigManifest(rendered.ManifestYAML, changed)
+	}
 	now := time.Now().UTC()
 	source := LogSource{SourceType: SourceTypeK8sStdout, ClusterID: clusterID, AgentNamespace: agentNamespace}
 	if err := s.persistRenderedArtifacts(ctx, source, rendered, now); err != nil {
 		return K8sCollectorRuntimePublishResult{}, err
 	}
 	runtime := s.logsCollectorRuntime(ctx, clusterID, agentNamespace, rendered, now)
+	runtimeBaseline := runtimeStatus.Runtime
 	operation := k8sopsdeployment.OperationRequest{
 		ClusterID:      clusterID,
-		YAMLContent:    rendered.ManifestYAML,
+		YAMLContent:    manifestYAML,
 		ForceConflicts: true,
 	}
 	var deployed k8sopsdeployment.OperationResult
@@ -1040,6 +1178,11 @@ func (s Service) PublishK8sCollectorRuntime(ctx context.Context, subject platfor
 		runtime.Status = obsruntime.StatusPreviewed
 		runtime.LastPreviewID = deployed.PreviewID
 		runtime.LastAuditID = deployed.AuditID
+		if runtimeBaseline != nil && runtimeBaseline.LastPublishedAt != nil && strings.TrimSpace(runtimeBaseline.CollectorConfigHash) != "" {
+			runtime.CollectorConfigHash = runtimeBaseline.CollectorConfigHash
+			runtime.ManifestHash = runtimeBaseline.ManifestHash
+			runtime.LastPublishedAt = runtimeBaseline.LastPublishedAt
+		}
 		runtime.Resources = runtimeResourceRefs(deployed.Resources)
 		if err := s.runtimes.Upsert(ctx, runtime.ID, runtime); err != nil {
 			return K8sCollectorRuntimePublishResult{}, err
@@ -1069,10 +1212,13 @@ func (s Service) PublishK8sCollectorRuntime(ctx context.Context, subject platfor
 	}
 	return K8sCollectorRuntimePublishResult{
 		Runtime:              runtime,
-		ManifestYAML:         rendered.ManifestYAML,
+		TaskType:             taskType,
+		ManifestYAML:         manifestYAML,
 		CollectorYAML:        rendered.CollectorYAML,
+		CollectorConfigFiles: copyConfigFiles(rendered.CollectorConfigFiles),
 		CollectorConfigHash:  rendered.CollectorConfigHash,
 		ManifestHash:         rendered.DeploymentManifestHash,
+		ChangedConfigMaps:    changedConfigMaps,
 		Status:               deployed.Status,
 		Message:              deployed.Message,
 		RequiresConfirmation: requiresConfirmation,
@@ -1121,26 +1267,234 @@ func (s Service) logsCollectorRuntime(ctx context.Context, clusterID string, age
 	return runtime
 }
 
+func (s Service) CheckK8sCollectorRuntimeStatus(ctx context.Context, req K8sCollectorRuntimeStatusRequest) (K8sCollectorRuntimeStatus, error) {
+	clusterID := strings.TrimSpace(req.ClusterID)
+	agentNamespace := normalizeK8sCollectorNamespace(req.Namespace)
+	if clusterID == "" {
+		return K8sCollectorRuntimeStatus{}, apperr.InvalidRequest("cluster_id 不能为空")
+	}
+	status := K8sCollectorRuntimeStatus{
+		ClusterID: clusterID,
+		Namespace: agentNamespace,
+		Ready:     false,
+		Status:    "checking",
+		Resources: logsCollectorRuntimeRequiredResources(clusterID, agentNamespace),
+		Message:   "正在确认 logs_collector 集群资源状态",
+		Runtime:   s.findLogsCollectorRuntime(ctx, clusterID, agentNamespace),
+	}
+	if s.k8sResources == nil {
+		status.Status = "unavailable"
+		status.Message = "无法读取 logs_collector 集群资源状态，请检查 K8s 资源读取服务"
+		return status, nil
+	}
+	resources, err := s.checkLogsCollectorRuntimeResources(ctx, clusterID, agentNamespace)
+	status.Resources = resources
+	if err != nil {
+		status.Status = "unavailable"
+		status.Message = "无法读取 logs_collector 集群资源状态，请检查集群凭据和 K8s 资源读取权限"
+		return status, nil
+	}
+	status.MissingResources = missingRuntimeResources(resources)
+	if len(status.MissingResources) > 0 {
+		status.Status = "missing_resources"
+		status.Message = fmt.Sprintf("logs_collector 基础组件缺失：%s。请到 K8s / 观测接入重新部署。", formatRuntimeResources(status.MissingResources))
+		return status, nil
+	}
+	status.Ready = true
+	status.Status = "ready"
+	status.Message = "集群 logs_collector 基础组件已就绪，可发布服务采集配置"
+	return status, nil
+}
+
+func (s Service) findLogsCollectorRuntime(ctx context.Context, clusterID string, agentNamespace string) *obsruntime.Runtime {
+	if s.runtimes == nil {
+		return nil
+	}
+	var runtime obsruntime.Runtime
+	if err := s.runtimes.FindByID(ctx, logsCollectorRuntimeID(clusterID, agentNamespace), &runtime); err != nil {
+		return nil
+	}
+	if runtime.Kind != obsruntime.KindLogsCollector {
+		return nil
+	}
+	return &runtime
+}
+
+func logsCollectorRuntimeRequiredResources(clusterID string, agentNamespace string) []K8sCollectorRuntimeResourceStatus {
+	namespace := normalizeK8sCollectorNamespace(agentNamespace)
+	return []K8sCollectorRuntimeResourceStatus{
+		{ClusterID: clusterID, APIVersion: "v1", Kind: "Namespace", Name: namespace, Required: true},
+		{ClusterID: clusterID, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: k8sLogsAgentName, Required: true},
+		{ClusterID: clusterID, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRoleBinding", Name: k8sLogsAgentName, Required: true},
+		{ClusterID: clusterID, APIVersion: "v1", Kind: "ServiceAccount", Namespace: namespace, Name: k8sLogsAgentName, Required: true},
+		{ClusterID: clusterID, APIVersion: "v1", Kind: "ConfigMap", Namespace: namespace, Name: k8sBaseConfigMapName(k8sLogsAgentName), Required: true},
+		{ClusterID: clusterID, APIVersion: "v1", Kind: "Service", Namespace: namespace, Name: k8sLogsAgentName, Required: true},
+		{ClusterID: clusterID, APIVersion: "apps/v1", Kind: "DaemonSet", Namespace: namespace, Name: k8sLogsAgentName, Required: true},
+	}
+}
+
+func (s Service) checkLogsCollectorRuntimeResources(ctx context.Context, clusterID string, agentNamespace string) ([]K8sCollectorRuntimeResourceStatus, error) {
+	resources := logsCollectorRuntimeRequiredResources(clusterID, agentNamespace)
+	for i := range resources {
+		exists, err := s.logsCollectorRuntimeResourceExists(ctx, resources[i], agentNamespace)
+		if err != nil {
+			return resources, err
+		}
+		resources[i].Exists = exists
+	}
+	return resources, nil
+}
+
+func (s Service) logsCollectorRuntimeResourceExists(ctx context.Context, expected K8sCollectorRuntimeResourceStatus, readNamespace string) (bool, error) {
+	items, err := s.k8sResources.List(ctx, k8sopsresource.ListFilter{
+		ClusterID:  expected.ClusterID,
+		Namespace:  normalizeK8sCollectorNamespace(firstNonEmpty(readNamespace, expected.Namespace)),
+		APIVersion: expected.APIVersion,
+		Kind:       expected.Kind,
+		Query:      expected.Name,
+		PageSize:   200,
+	})
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		if runtimeResourceMatches(item.Identity, expected) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func runtimeResourceMatches(identity k8sopsresource.Identity, expected K8sCollectorRuntimeResourceStatus) bool {
+	if identity.ClusterID != expected.ClusterID || identity.APIVersion != expected.APIVersion || identity.Kind != expected.Kind || identity.Name != expected.Name {
+		return false
+	}
+	if expected.Namespace != "" && identity.Namespace != expected.Namespace {
+		return false
+	}
+	return true
+}
+
+func missingRuntimeResources(resources []K8sCollectorRuntimeResourceStatus) []K8sCollectorRuntimeResourceStatus {
+	missing := make([]K8sCollectorRuntimeResourceStatus, 0)
+	for _, resource := range resources {
+		if resource.Required && !resource.Exists {
+			missing = append(missing, resource)
+		}
+	}
+	return missing
+}
+
+func formatRuntimeResources(resources []K8sCollectorRuntimeResourceStatus) string {
+	labels := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		if resource.Namespace == "" {
+			labels = append(labels, resource.Kind+"/"+resource.Name)
+			continue
+		}
+		labels = append(labels, resource.Kind+"/"+resource.Namespace+"/"+resource.Name)
+	}
+	return strings.Join(labels, "、")
+}
+
+func (s Service) changedK8sRuntimeConfigMapNames(ctx context.Context, rendered renderedRouteConfig, runtime *obsruntime.Runtime) map[string]struct{} {
+	allConfigMaps := configMapNamesForRefs(rendered.ConfigFileRefs)
+	if runtime == nil || runtime.LastPublishedAt == nil || strings.TrimSpace(runtime.CollectorConfigHash) == "" || s.configVersions == nil {
+		return allConfigMaps
+	}
+	var previous LogCollectorConfigVersion
+	if err := s.configVersions.FindByHash(ctx, runtime.CollectorConfigHash, &previous); err != nil {
+		return allConfigMaps
+	}
+	if len(previous.ConfigFiles) == 0 {
+		return allConfigMaps
+	}
+	changed := map[string]struct{}{}
+	for path, content := range rendered.CollectorConfigFiles {
+		if previous.ConfigFiles[path] == content {
+			continue
+		}
+		name := configMapNameForPath(rendered.ConfigFileRefs, path)
+		if name != "" {
+			changed[name] = struct{}{}
+		}
+	}
+	return changed
+}
+
+func filterConfigMapsByRouteIDs(changed map[string]struct{}, refs []LogCollectorConfigFile, routeIDs []string) map[string]struct{} {
+	allowed := map[string]struct{}{}
+	routeSet := map[string]struct{}{}
+	for _, id := range routeIDs {
+		routeSet[strings.TrimSpace(id)] = struct{}{}
+	}
+	for _, ref := range refs {
+		if ref.RouteID == "" {
+			continue
+		}
+		if _, ok := routeSet[ref.RouteID]; !ok {
+			continue
+		}
+		name := strings.TrimSpace(ref.ConfigMapName)
+		if name == "" {
+			continue
+		}
+		if _, ok := changed[name]; ok {
+			allowed[name] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+func configMapNamesForRefs(refs []LogCollectorConfigFile) map[string]struct{} {
+	names := map[string]struct{}{}
+	for _, ref := range refs {
+		name := strings.TrimSpace(ref.ConfigMapName)
+		if name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+func configMapNameForPath(refs []LogCollectorConfigFile, path string) string {
+	path = strings.TrimSpace(path)
+	for _, ref := range refs {
+		if strings.TrimSpace(ref.Path) == path {
+			return strings.TrimSpace(ref.ConfigMapName)
+		}
+	}
+	return ""
+}
+
+func sortedStringSet(items map[string]struct{}) []string {
+	out := make([]string, 0, len(items))
+	for item := range items {
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s Service) ensureK8sObservabilityRuntimeReady(ctx context.Context, source LogSource) error {
 	if source.SourceType != SourceTypeK8sStdout {
 		return nil
 	}
-	if s.runtimes == nil {
-		return apperr.InvalidRequest("观测运行时存储不可用")
+	status, err := s.CheckK8sCollectorRuntimeStatus(ctx, K8sCollectorRuntimeStatusRequest{
+		ClusterID: source.ClusterID,
+		Namespace: source.AgentNamespace,
+	})
+	if err != nil {
+		return err
 	}
-	id := logsCollectorRuntimeID(source.ClusterID, source.AgentNamespace)
-	var runtime obsruntime.Runtime
-	if err := s.runtimes.FindByID(ctx, id, &runtime); err != nil {
-		return apperr.InvalidRequest("目标集群尚未启用 logs_collector 观测接入，请先在 K8s 观测接入部署平台运行时")
-	}
-	if runtime.Kind != obsruntime.KindLogsCollector || runtime.Status != obsruntime.StatusReady {
-		return apperr.InvalidRequest("目标集群 logs_collector 观测接入未就绪，请先在 K8s 观测接入完成部署")
+	if !status.Ready {
+		return apperr.InvalidRequest(status.Message)
 	}
 	return nil
 }
 
 func logsCollectorRuntimeID(clusterID string, agentNamespace string) string {
-	return "logs-collector:" + strings.TrimSpace(clusterID) + ":" + firstNonEmpty(agentNamespace, "novaobs-system")
+	return "logs-collector:" + strings.TrimSpace(clusterID) + ":" + normalizeK8sCollectorNamespace(agentNamespace)
 }
 
 func (s Service) renderK8sCollectorRuntimeBundle(ctx context.Context, clusterID string, agentNamespace string) (renderedRouteConfig, error) {
@@ -1182,7 +1536,7 @@ func (s Service) k8sCollectorRuntimeInputs(ctx context.Context, clusterID string
 		if view.Source == nil || view.Endpoint == nil || view.Source.SourceType == SourceTypeVMFile {
 			continue
 		}
-		if view.Source.ClusterID != clusterID || firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != agentNamespace {
+		if view.Source.ClusterID != clusterID || normalizeK8sCollectorNamespace(view.Source.AgentNamespace) != normalizeK8sCollectorNamespace(agentNamespace) {
 			continue
 		}
 		service, err := s.services.Get(ctx, view.Route.ServiceID)
@@ -1190,7 +1544,7 @@ func (s Service) k8sCollectorRuntimeInputs(ctx context.Context, clusterID string
 			return nil, normalizeNotFound(err, "服务不存在")
 		}
 		inputs = append(inputs, renderInput{
-			ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+			ServiceName: service.Name,
 			Environment: service.Environment,
 			Source:      *view.Source,
 			Endpoint:    *view.Endpoint,
@@ -1233,6 +1587,7 @@ func (s Service) routeDraft(ctx context.Context, req UpsertRouteRequest, ensureA
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
 	}
+	endpoint = endpointForService(endpoint, service)
 	if req.SourceType == SourceTypeVMFile {
 		if err := validateCollectorYAML(req.VM.CollectorYAML, endpoint); err != nil {
 			return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, err
@@ -1316,7 +1671,7 @@ func derivedAgentGroup(source LogSource, service servicecatalog.Service) collect
 			MaxServices:     0,
 		}
 	}
-	agentNamespace := firstNonEmpty(source.AgentNamespace, "novaobs-system")
+	agentNamespace := normalizeK8sCollectorNamespace(source.AgentNamespace)
 	return collectormanagement.CollectorGroup{
 		Name:            "logs-k8s-" + safeSegment(source.ClusterID) + "-" + safeSegment(agentNamespace),
 		DisplayName:     "K8s Logs / " + source.ClusterID + " / " + agentNamespace,
@@ -1388,7 +1743,7 @@ func (s Service) routeParts(ctx context.Context, routeID string) (LogRoute, LogS
 	if err != nil {
 		return LogRoute{}, LogSource{}, LogEndpoint{}, servicecatalog.Service{}, normalizeNotFound(err, "服务不存在")
 	}
-	return route, routeEffectiveSource(route, source), endpoint, service, nil
+	return route, routeEffectiveSource(route, source), endpointForService(endpoint, service), service, nil
 }
 
 func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error) {
@@ -1396,7 +1751,7 @@ func (s Service) getEndpoint(ctx context.Context, id string) (LogEndpoint, error
 	if err := s.endpoints.FindByID(ctx, strings.TrimSpace(id), &endpoint); err != nil {
 		return LogEndpoint{}, normalizeNotFound(err, "日志下游端点不存在")
 	}
-	endpoint = normalizeEndpoint(endpoint)
+	endpoint = normalizeStoredEndpoint(endpoint)
 	if !endpointSupportsLogsSignal(endpoint.SignalTypes) {
 		return LogEndpoint{}, apperr.InvalidRequest("日志路由只能选择支持 logs 的观测端点")
 	}
@@ -1514,11 +1869,18 @@ func (s Service) listTargetViews(ctx context.Context, serviceID string) ([]LogTa
 
 func (s Service) targetView(ctx context.Context, target LogTarget) (LogTargetView, error) {
 	view := LogTargetView{Target: normalizeTarget(target)}
+	var resolvedService servicecatalog.Service
 	if service, err := s.services.Get(ctx, target.ServiceID); err == nil {
+		resolvedService = service
 		summary := serviceSummary(service)
 		view.Service = &summary
 	}
 	if endpoint, err := s.getEndpoint(ctx, target.EndpointID); err == nil {
+		endpoint = endpointForService(endpoint, resolvedService)
+		if target.AccountID != "" && target.ProjectID != "" {
+			endpoint.AccountID = target.AccountID
+			endpoint.ProjectID = target.ProjectID
+		}
 		view.Endpoint = &endpoint
 	}
 	return view, nil
@@ -1545,6 +1907,36 @@ func (s Service) ensureUniqueExternalTarget(ctx context.Context, currentID strin
 }
 
 func (s Service) allowedTarget(subject platformrbac.Subject, serviceID string, action string) bool {
+	return s.allowed(subject, serviceID, "logs.target", action)
+}
+
+func (s Service) allowedExternalTenantOverride(subject platformrbac.Subject) bool {
+	if subject.ID == "" || subject.Type == "" || s.authorizer == nil {
+		return false
+	}
+	return s.authorizer.Authorize(subject, platformrbac.Request{
+		Resource: "logs.external-tenant",
+		Action:   "manage",
+		Scope:    platformrbac.Scope{Global: true},
+	}).Allowed
+}
+
+func (s Service) AuthorizeServiceRoute(subject platformrbac.Subject, serviceID string, action string) error {
+	if !s.allowed(subject, strings.TrimSpace(serviceID), "logs.route", action) {
+		return ErrPermissionDenied
+	}
+	return nil
+}
+
+func (s Service) AuthorizeRoute(ctx context.Context, subject platformrbac.Subject, routeID string, action string) error {
+	route, err := s.getRoute(ctx, routeID)
+	if err != nil {
+		return err
+	}
+	return s.AuthorizeServiceRoute(subject, route.ServiceID, action)
+}
+
+func (s Service) allowed(subject platformrbac.Subject, serviceID string, resource string, action string) bool {
 	if subject.ID == "" || subject.Type == "" {
 		return false
 	}
@@ -1552,7 +1944,7 @@ func (s Service) allowedTarget(subject platformrbac.Subject, serviceID string, a
 		return false
 	}
 	decision := s.authorizer.Authorize(subject, platformrbac.Request{
-		Resource: "logs.target",
+		Resource: resource,
 		Action:   action,
 		Scope:    platformrbac.Scope{ServiceID: serviceID},
 	})
@@ -1561,11 +1953,21 @@ func (s Service) allowedTarget(subject platformrbac.Subject, serviceID string, a
 
 func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderInput) (renderedRouteConfig, error) {
 	if input.Source.SourceType == SourceTypeVMFile {
-		yaml, hash := renderAgentConfig(input)
+		yaml, _ := renderAgentConfig(input)
+		filePath := vmConfigFilePath(input.Route.ID)
+		configFiles := map[string]string{filePath: yaml}
 		return renderedRouteConfig{
-			ManifestYAML:        yaml,
-			CollectorYAML:       yaml,
-			CollectorConfigHash: hash,
+			ManifestYAML:         yaml,
+			CollectorYAML:        yaml,
+			CollectorConfigFiles: configFiles,
+			ConfigFileRefs: []LogCollectorConfigFile{{
+				Path:          filePath,
+				ConfigMapName: "",
+				Role:          "vm",
+				RouteID:       input.Route.ID,
+				ServiceID:     input.Route.ServiceID,
+			}},
+			CollectorConfigHash: hashConfigFiles(configFiles),
 			RouteIDs:            []string{input.Route.ID},
 		}, nil
 	}
@@ -1576,7 +1978,7 @@ func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderIn
 	processorPatch := ""
 	if s.clusterConfigs != nil {
 		var clusterCfg LogCollectorClusterConfig
-		if err := s.clusterConfigs.FindByCluster(ctx, input.Source.ClusterID, firstNonEmpty(input.Source.AgentNamespace, "novaobs-system"), &clusterCfg); err == nil {
+		if err := s.clusterConfigs.FindByCluster(ctx, input.Source.ClusterID, normalizeK8sCollectorNamespace(input.Source.AgentNamespace), &clusterCfg); err == nil {
 			processorPatch = clusterCfg.ProcessorPatch
 		}
 	}
@@ -1622,7 +2024,7 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 			continue
 		}
 		if view.Source.ClusterID != current.Source.ClusterID ||
-			firstNonEmpty(view.Source.AgentNamespace, "novaobs-system") != firstNonEmpty(current.Source.AgentNamespace, "novaobs-system") {
+			normalizeK8sCollectorNamespace(view.Source.AgentNamespace) != normalizeK8sCollectorNamespace(current.Source.AgentNamespace) {
 			continue
 		}
 		service, err := s.services.Get(ctx, view.Route.ServiceID)
@@ -1630,7 +2032,7 @@ func (s Service) k8sBundleInputs(ctx context.Context, current renderInput) ([]re
 			return nil, normalizeNotFound(err, "服务不存在")
 		}
 		inputs = append(inputs, renderInput{
-			ServiceName: firstNonEmpty(service.DisplayName, service.Name),
+			ServiceName: service.Name,
 			Environment: service.Environment,
 			Source:      *view.Source,
 			Endpoint:    *view.Endpoint,
@@ -1702,7 +2104,7 @@ func sameK8sCollectorDomain(left LogSource, right LogSource) bool {
 	return left.SourceType == SourceTypeK8sStdout &&
 		right.SourceType == SourceTypeK8sStdout &&
 		left.ClusterID == right.ClusterID &&
-		firstNonEmpty(left.AgentNamespace, "novaobs-system") == firstNonEmpty(right.AgentNamespace, "novaobs-system")
+		normalizeK8sCollectorNamespace(left.AgentNamespace) == normalizeK8sCollectorNamespace(right.AgentNamespace)
 }
 
 func (s Service) publishBlock(ctx context.Context, source LogSource) (bool, string) {
@@ -1729,7 +2131,7 @@ func sourceFromRequest(req UpsertRouteRequest) LogSource {
 		source.CustomCollectorYAML = req.VM.CollectorYAML
 		return source
 	}
-	agentNamespace := firstNonEmpty(req.K8s.AgentNamespace, "novaobs-system")
+	agentNamespace := normalizeK8sCollectorNamespace(req.K8s.AgentNamespace)
 	source.ID = k8sCollectorDomainSourceID(req.K8s.ClusterID, agentNamespace)
 	source.ClusterID = req.K8s.ClusterID
 	source.AgentNamespace = agentNamespace
@@ -1767,6 +2169,10 @@ func routeEffectiveSource(route LogRoute, source LogSource) LogSource {
 func k8sCollectorDomainSourceID(clusterID string, agentNamespace string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(clusterID) + "\x00" + strings.TrimSpace(agentNamespace)))
 	return "k8s-collector-domain-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func vmConfigFilePath(routeID string) string {
+	return "vm/" + safeSegment(firstNonEmpty(routeID, "route")) + ".yaml"
 }
 
 func normalizeRouteRequest(req UpsertRouteRequest) UpsertRouteRequest {
@@ -1833,6 +2239,8 @@ func normalizeCreateTargetRequest(req CreateLogTargetRequest) CreateLogTargetReq
 		req.SourceKind = LogTargetSourceExternalVLogs
 	}
 	req.BaseFilter = strings.TrimSpace(req.BaseFilter)
+	req.AccountID = strings.TrimSpace(req.AccountID)
+	req.ProjectID = strings.TrimSpace(req.ProjectID)
 	return req
 }
 
@@ -1840,6 +2248,8 @@ func normalizeUpdateTargetRequest(req UpdateLogTargetRequest) UpdateLogTargetReq
 	req.Name = strings.TrimSpace(req.Name)
 	req.EndpointID = strings.TrimSpace(req.EndpointID)
 	req.BaseFilter = strings.TrimSpace(req.BaseFilter)
+	req.AccountID = trimOptionalString(req.AccountID)
+	req.ProjectID = trimOptionalString(req.ProjectID)
 	req.Status = strings.TrimSpace(req.Status)
 	return req
 }
@@ -1854,6 +2264,8 @@ func normalizeTarget(target LogTarget) LogTarget {
 	}
 	target.LogRouteID = strings.TrimSpace(target.LogRouteID)
 	target.BaseFilter = strings.TrimSpace(target.BaseFilter)
+	target.AccountID = strings.TrimSpace(target.AccountID)
+	target.ProjectID = strings.TrimSpace(target.ProjectID)
 	target.Status = strings.TrimSpace(target.Status)
 	if target.Status == "" {
 		target.Status = LogTargetStatusPendingVerification
@@ -1861,6 +2273,32 @@ func normalizeTarget(target LogTarget) LogTarget {
 	target.LastProbeStatus = strings.TrimSpace(target.LastProbeStatus)
 	target.LastProbeMessage = strings.TrimSpace(target.LastProbeMessage)
 	return target
+}
+
+func trimOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
+}
+
+func validateOptionalVictoriaLogsTenant(accountID string, projectID string) error {
+	if (accountID == "") != (projectID == "") {
+		return apperr.InvalidRequest("VictoriaLogs AccountID 和 ProjectID 必须同时填写")
+	}
+	for _, item := range []struct {
+		name  string
+		value string
+	}{{"AccountID", accountID}, {"ProjectID", projectID}} {
+		if item.value == "" {
+			continue
+		}
+		if _, err := strconv.ParseUint(item.value, 10, 32); err != nil {
+			return apperr.InvalidRequest("VictoriaLogs " + item.name + " 必须是 uint32")
+		}
+	}
+	return nil
 }
 
 func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
@@ -1875,7 +2313,6 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	endpoint.VMUIURL = strings.TrimSpace(endpoint.VMUIURL)
 	endpoint.AccountID = strings.TrimSpace(endpoint.AccountID)
 	endpoint.ProjectID = strings.TrimSpace(endpoint.ProjectID)
-	endpoint.SecretRef = strings.TrimSpace(endpoint.SecretRef)
 	endpoint.ScopeType = strings.TrimSpace(endpoint.ScopeType)
 	endpoint.ClusterID = strings.TrimSpace(endpoint.ClusterID)
 	endpoint.Status = strings.TrimSpace(endpoint.Status)
@@ -1889,10 +2326,14 @@ func normalizeEndpoint(endpoint LogEndpoint) LogEndpoint {
 	if endpoint.SinkType == "" && endpointSupportsLogsSignal(endpoint.SignalTypes) {
 		endpoint.SinkType = EndpointSinkVL
 	}
-	if endpoint.SinkType != EndpointSinkVL {
-		endpoint.AccountID = ""
-		endpoint.ProjectID = ""
-	}
+	return endpoint
+}
+
+func normalizeStoredEndpoint(endpoint LogEndpoint) LogEndpoint {
+	endpoint = normalizeEndpoint(endpoint)
+	// 租户由服务所属产品派生，日志端点只保存物理连接信息。
+	endpoint.AccountID = ""
+	endpoint.ProjectID = ""
 	return endpoint
 }
 
@@ -2004,9 +2445,6 @@ func validateEndpoint(endpoint LogEndpoint) error {
 				return err
 			}
 		}
-		if err := validateVictoriaLogsTenant(endpoint.AccountID, endpoint.ProjectID); err != nil {
-			return err
-		}
 	case EndpointSinkES:
 		if err := validateHTTPURL(endpoint.WriteURL, "ES 下游端点写入地址"); err != nil {
 			return err
@@ -2029,25 +2467,6 @@ func validateEndpoint(endpoint LogEndpoint) error {
 	case EndpointSinkOTel:
 		if err := validateHTTPURL(endpoint.WriteURL, "OTel 下游端点写入地址"); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func validateVictoriaLogsTenant(accountID string, projectID string) error {
-	if (accountID == "") != (projectID == "") {
-		return apperr.InvalidRequest("VictoriaLogs AccountID 和 ProjectID 必须同时填写")
-	}
-	for _, item := range []struct {
-		name  string
-		value string
-	}{{"AccountID", accountID}, {"ProjectID", projectID}} {
-		name, value := item.name, item.value
-		if value == "" {
-			continue
-		}
-		if _, err := strconv.ParseUint(value, 10, 32); err != nil {
-			return apperr.InvalidRequest("VictoriaLogs " + name + " 必须是 uint32")
 		}
 	}
 	return nil
@@ -2166,6 +2585,47 @@ func copyStringMap(input map[string]string) map[string]string {
 	return out
 }
 
+func copyConfigFiles(input map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func copyConfigFileRefs(input []LogCollectorConfigFile) []LogCollectorConfigFile {
+	out := make([]LogCollectorConfigFile, 0, len(input))
+	for _, item := range input {
+		item.Path = strings.TrimSpace(item.Path)
+		item.ConfigMapName = strings.TrimSpace(item.ConfigMapName)
+		item.Role = strings.TrimSpace(item.Role)
+		item.RouteID = strings.TrimSpace(item.RouteID)
+		item.ServiceID = strings.TrimSpace(item.ServiceID)
+		if item.Path != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func configFileRefForRoute(refs []LogCollectorConfigFile, routeID string) LogCollectorConfigFile {
+	routeID = strings.TrimSpace(routeID)
+	for _, ref := range refs {
+		if ref.Role == "service" && ref.RouteID == routeID {
+			return ref
+		}
+	}
+	for _, ref := range refs {
+		if ref.RouteID == routeID {
+			return ref
+		}
+	}
+	return LogCollectorConfigFile{}
+}
+
 func copyStringSlice(input []string) []string {
 	out := make([]string, 0, len(input))
 	for _, value := range input {
@@ -2191,9 +2651,6 @@ func previewWarnings(source LogSource, endpoint LogEndpoint) []string {
 			warnings = append(warnings, "正则解析规则会在 OTel Collector transform processor 中按 workload 条件执行，请先通过预览确认字段映射")
 			break
 		}
-	}
-	if endpoint.SecretRef == "" {
-		warnings = append(warnings, "日志下游端点未配置 secret_ref，当前预览不会持久化明文凭据")
 	}
 	return warnings
 }
@@ -2384,7 +2841,7 @@ func validateCollectorYAML(raw string, endpoint LogEndpoint) error {
 		return err
 	}
 	if containsSecretLikeKey(root) {
-		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等敏感字段，请使用 secret_ref")
+		return apperr.InvalidRequest("collector_yaml 不能直接包含 token、password、secret 或 authorization 等凭据字段")
 	}
 	return nil
 }
@@ -2611,6 +3068,9 @@ func mappingValue(node *yaml.Node, path ...string) *yaml.Node {
 func serviceSummary(item servicecatalog.Service) ServiceSummary {
 	return ServiceSummary{
 		ID:           item.ID,
+		ProductID:    item.ProductID,
+		AccountID:    item.AccountID,
+		ProjectID:    item.ProjectID,
 		Name:         item.Name,
 		DisplayName:  item.DisplayName,
 		Environment:  item.Environment,

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/internal/logs"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/internal/logs"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -180,8 +180,7 @@ func mapLogEndpoint(item logs.LogEndpoint) Endpoint {
 			AccountID: strings.TrimSpace(item.AccountID),
 			ProjectID: strings.TrimSpace(item.ProjectID),
 		},
-		SecretRef: strings.TrimSpace(item.SecretRef),
-		Status:    status,
+		Status: status,
 		Health: EndpointHealth{
 			Status: HealthStatusUnknown,
 		},

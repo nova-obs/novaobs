@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/collectorconfig"
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/opamp"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/collectorconfig"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/opamp"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

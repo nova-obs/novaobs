@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"novaobs/internal/platform/authctx"
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	"novaapm/internal/platform/rbac"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

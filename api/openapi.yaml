@@ -17,6 +17,39 @@ paths:
       responses:
         "200":
           description: 返回服务、Pipeline、日志和告警摘要
+  /products:
+    get:
+      summary: 产品列表
+      responses:
+        "200":
+          description: 返回产品及其唯一 ProjectID
+    post:
+      summary: 创建产品并由平台随机生成 ProjectID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                display_name: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: 产品已创建；accountId 固定为 0，projectId 由平台生成
+  /products/{productId}:
+    get:
+      summary: 产品详情
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 返回产品详情 }
+        "404": { description: 产品不存在 }
   /services:
     get:
       summary: 服务目录列表
@@ -39,12 +72,18 @@ paths:
           in: query
           schema:
             type: string
-            enum: [manual, cmdb]
+            enum: [manual, cmdb, k8s]
       responses:
         "200":
           description: 返回服务目录
+  /products/{productId}/services:
     post:
       summary: 创建服务
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -65,12 +104,12 @@ paths:
                   type: string
                 source:
                   type: string
-                  enum: [manual, cmdb]
+                  enum: [manual, cmdb, k8s]
       responses:
         "201":
-          description: 服务已创建
+          description: 服务已创建；租户固定派生为产品的 0:ProjectID
         "409":
-          description: 相同服务身份或 CMDB 服务 ID 已存在
+          description: 同一产品下 service.name 或 CMDB 服务 ID 已存在
   /services/{id}:
     get:
       summary: 服务详情
@@ -925,12 +964,6 @@ components:
           type: string
         vmui_url:
           type: string
-        account_id:
-          type: string
-        project_id:
-          type: string
-        secret_ref:
-          type: string
         scope_type:
           type: string
           enum: [global, k8s_cluster, vm]
@@ -948,11 +981,11 @@ components:
           description: vmalert Runtime 的部署集群 ID；端点为 k8s_cluster 且为空时默认使用端点绑定集群，global/vm 端点必须显式填写
         namespace:
           type: string
-          default: novaobs-system
-          description: 固定平台 namespace；非 novaobs-system 会被拒绝
+          default: novaapm-system
+          description: 固定平台 namespace；非 novaapm-system 会被拒绝
         alert_ingest_url:
           type: string
-          description: NovaObs Alert Ingest 地址；为空时使用平台默认配置
+          description: NovaAPM Alert Ingest 地址；为空时使用平台默认配置
         preview_id:
           type: string
         confirmation_token:
@@ -966,7 +999,7 @@ components:
           description: 日志采集运行时部署的 K8s 集群 ID
         namespace:
           type: string
-          default: novaobs-system
+          default: novaapm-system
           description: 平台采集器 namespace
         preview_id:
           type: string

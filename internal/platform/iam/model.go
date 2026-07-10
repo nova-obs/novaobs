@@ -3,7 +3,7 @@ package iam
 import (
 	"time"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 const (

@@ -1,4 +1,4 @@
-module novaobs
+module novaapm
 
 go 1.26.1
 

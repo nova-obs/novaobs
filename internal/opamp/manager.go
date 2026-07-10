@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/collectorconfig"
+	"novaapm/internal/collectorconfig"
 
 	opampproto "github.com/open-telemetry/opamp-go/protobufs"
 	opampserver "github.com/open-telemetry/opamp-go/server"
@@ -481,10 +481,10 @@ func applyAgentDescriptionState(state *AgentState, groups ...[]AgentAttribute) {
 			*target = value
 		}
 	}
-	applyAttr(&state.ClusterID, "novaobs.cluster.id", "k8s.cluster.name", "k8s.cluster.id")
-	applyAttr(&state.CollectorGroupID, "novaobs.collector.group_id", "collector_group_id")
-	applyAttr(&state.Namespace, "k8s.namespace.name", "novaobs.agent.namespace")
-	applyAttr(&state.AgentNamespace, "novaobs.agent.namespace", "k8s.namespace.name")
+	applyAttr(&state.ClusterID, "novaapm.cluster.id", "k8s.cluster.name", "k8s.cluster.id")
+	applyAttr(&state.CollectorGroupID, "novaapm.collector.group_id", "collector_group_id")
+	applyAttr(&state.Namespace, "k8s.namespace.name", "novaapm.agent.namespace")
+	applyAttr(&state.AgentNamespace, "novaapm.agent.namespace", "k8s.namespace.name")
 	applyAttr(&state.Hostname, "host.name")
 	applyAttr(&state.PodUID, "k8s.pod.uid")
 	applyAttr(&state.PodName, "k8s.pod.name")

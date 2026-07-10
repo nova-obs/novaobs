@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -150,14 +150,14 @@ clusters:
     server: https://127.0.0.1:6443
     insecure-skip-tls-verify: true
 users:
-- name: novaobs
+- name: novaapm
   user:
     token: test-token
 contexts:
 - name: prod
   context:
     cluster: prod
-    user: novaobs
+    user: novaapm
 current-context: prod
 `)
 }
