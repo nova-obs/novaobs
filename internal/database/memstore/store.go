@@ -37,6 +37,7 @@ type Store struct {
 	lgccs map[string]interface{}
 	orts  map[string]interface{}
 	msbs  map[string]interface{}
+	mrts  map[string]interface{}
 	ars   map[string]interface{}
 	arus  map[string]interface{}
 	aris  map[string]interface{}
@@ -83,6 +84,7 @@ func NewStore() *Store {
 		lgccs: map[string]interface{}{},
 		orts:  map[string]interface{}{},
 		msbs:  map[string]interface{}{},
+		mrts:  map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		arus:  map[string]interface{}{},
 		aris:  map[string]interface{}{},
@@ -153,6 +155,7 @@ func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
 func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
 	return &metricsServiceBindingStore{s}
 }
+func (s *Store) MetricsRoutes() database.MetricsRouteStore       { return &metricsRouteStore{s} }
 func (s *Store) Alerting() database.AlertingStore                { return &alertingStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore         { return &rbacBindingStore{s} }
@@ -1059,6 +1062,84 @@ func metricsBindingIndex(value interface{}) (string, string, error) {
 func isActiveMetricsBinding(status string) bool {
 	status = strings.TrimSpace(status)
 	return status == "" || status == "active"
+}
+
+type metricsRouteStore struct{ s *Store }
+
+func (st *metricsRouteStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(value)
+	if id == "" {
+		id = newID()
+	}
+	st.s.mrts[id] = value
+	return nil
+}
+
+func (st *metricsRouteStore) FindAll(_ context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.mrts, results)
+}
+
+func (st *metricsRouteStore) FindByService(_ context.Context, serviceID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.mrts {
+		if extractServiceID(value) == serviceID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *metricsRouteStore) FindRuntimeGroup(_ context.Context, clusterID string, productID string, endpointID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for key, value := range st.s.mrts {
+		var route struct {
+			ClusterID  string `json:"cluster_id"`
+			ProductID  string `json:"product_id"`
+			EndpointID string `json:"endpoint_id"`
+		}
+		if copyValue(value, &route) == nil && route.ClusterID == clusterID && route.ProductID == productID && route.EndpointID == endpointID {
+			filtered[key] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *metricsRouteStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.mrts[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *metricsRouteStore) Update(_ context.Context, id string, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.mrts[id]; !ok {
+		return errNotFound
+	}
+	st.s.mrts[id] = value
+	return nil
+}
+
+func (st *metricsRouteStore) Delete(_ context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.mrts[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.mrts, id)
+	return nil
 }
 
 // ---------- Alerting ----------

@@ -172,9 +172,10 @@ func mapLogEndpoint(item logs.LogEndpoint) Endpoint {
 			ClusterID: strings.TrimSpace(item.ClusterID),
 		},
 		URLs: EndpointURLs{
-			WriteURL: strings.TrimSpace(item.WriteURL),
-			QueryURL: strings.TrimSpace(item.QueryURL),
-			UIURL:    strings.TrimSpace(item.VMUIURL),
+			WriteURL:       strings.TrimSpace(item.WriteURL),
+			RemoteWriteURL: strings.TrimSpace(item.WriteURL),
+			QueryURL:       strings.TrimSpace(item.QueryURL),
+			UIURL:          strings.TrimSpace(item.VMUIURL),
 		},
 		Tenant: EndpointTenant{
 			AccountID: strings.TrimSpace(item.AccountID),

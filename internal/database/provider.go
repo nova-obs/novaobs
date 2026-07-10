@@ -35,6 +35,7 @@ type Store interface {
 	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
 	ObservabilityRuntimes() ObservabilityRuntimeStore
 	MetricsServiceBindings() MetricsServiceBindingStore
+	MetricsRoutes() MetricsRouteStore
 	Alerting() AlertingStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
@@ -207,6 +208,16 @@ type MetricsServiceBindingStore interface {
 	FindByService(ctx context.Context, serviceID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
 	Update(ctx context.Context, id string, binding interface{}) error
+}
+
+type MetricsRouteStore interface {
+	Insert(ctx context.Context, route interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByService(ctx context.Context, serviceID string, results interface{}) error
+	FindRuntimeGroup(ctx context.Context, clusterID string, productID string, endpointID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, route interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type AlertingStore interface {

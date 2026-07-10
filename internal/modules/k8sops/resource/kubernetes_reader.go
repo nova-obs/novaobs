@@ -68,10 +68,10 @@ func NewKubernetesReader(clients ClientsetProvider, dependencies ...any) Kuberne
 
 func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]ResourceSummary, error) {
 	filter.Namespace = strings.TrimSpace(filter.Namespace)
-	if filter.Namespace == "" {
+	if filter.Namespace == "" && !clusterScopedListKind(filter.Kind) {
 		return nil, ErrNamespaceRequired
 	}
-	if !r.allowed(ctx, filter.ClusterID, filter.Namespace) {
+	if !r.allowedForKind(ctx, filter.ClusterID, filter.Namespace, filter.Kind) {
 		return nil, ErrReadPermissionDenied
 	}
 	client, err := r.clients.Clientset(ctx, filter.ClusterID)
@@ -100,7 +100,7 @@ func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]Resour
 }
 
 func (r KubernetesReader) GetDetail(ctx context.Context, query DetailQuery) (ResourceDetail, error) {
-	if !r.allowed(ctx, query.Identity.ClusterID, query.Identity.Namespace) {
+	if !r.allowedForKind(ctx, query.Identity.ClusterID, query.Identity.Namespace, query.Identity.Kind) {
 		return ResourceDetail{}, ErrReadPermissionDenied
 	}
 	object, identity, err := r.getObject(ctx, query.Identity)
@@ -121,7 +121,7 @@ func (r KubernetesReader) GetDetail(ctx context.Context, query DetailQuery) (Res
 }
 
 func (r KubernetesReader) GetYAML(ctx context.Context, query DetailQuery) (ResourceYAML, error) {
-	if !r.allowed(ctx, query.Identity.ClusterID, query.Identity.Namespace) {
+	if !r.allowedForKind(ctx, query.Identity.ClusterID, query.Identity.Namespace, query.Identity.Kind) {
 		return ResourceYAML{}, ErrReadPermissionDenied
 	}
 	object, identity, err := r.getObject(ctx, query.Identity)
@@ -172,6 +172,23 @@ func (r KubernetesReader) allowed(ctx context.Context, clusterID string, namespa
 		Scope:    platformrbac.Scope{ClusterID: strings.TrimSpace(clusterID), Namespace: strings.TrimSpace(namespace)},
 	})
 	return decision.Allowed
+}
+
+func (r KubernetesReader) allowedForKind(ctx context.Context, clusterID string, namespace string, kind string) bool {
+	resource := "k8s.resource"
+	scope := platformrbac.Scope{ClusterID: strings.TrimSpace(clusterID), Namespace: strings.TrimSpace(namespace)}
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace":
+		resource = "k8s.namespace"
+		scope.Namespace = ""
+	case "role", "rolebinding", "clusterrole", "clusterrolebinding":
+		resource = "k8s.rbac"
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(kind)), "cluster") {
+			scope.Namespace = ""
+		}
+	}
+	subject, _ := authctx.SubjectFrom(ctx)
+	return r.authorizer.Authorize(subject, platformrbac.Request{Resource: resource, Action: "read", Scope: scope}).Allowed
 }
 
 func podLogOptions(container string) *corev1.PodLogOptions {
@@ -256,8 +273,37 @@ func (r KubernetesReader) listKind(ctx context.Context, client kubernetes.Interf
 			items = append(items, configMapSummary(filter.ClusterID, item))
 		}
 		return items, nil
+	case "namespace":
+		result, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, "v1", "Namespace", &result.Items[index]))
+		}
+		return items, nil
+	case "clusterrole":
+		result, err := client.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, "rbac.authorization.k8s.io/v1", "ClusterRole", &result.Items[index]))
+		}
+		return items, nil
 	default:
 		return r.listDynamicKind(ctx, filter, kind)
+	}
+}
+
+func clusterScopedListKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace", "clusterrole":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -529,6 +575,15 @@ func configMapSummary(clusterID string, item corev1.ConfigMap) ResourceSummary {
 		Status:    "active",
 		Labels:    copyLabels(item.Labels),
 		UpdatedAt: item.CreationTimestamp.Time,
+	}
+}
+
+func metadataSummary(clusterID string, apiVersion string, kind string, item metav1.Object) ResourceSummary {
+	return ResourceSummary{
+		Identity:  Identity{ClusterID: clusterID, Namespace: item.GetNamespace(), APIVersion: apiVersion, Kind: kind, Name: item.GetName(), UID: string(item.GetUID())},
+		Status:    "active",
+		Labels:    copyLabels(item.GetLabels()),
+		UpdatedAt: item.GetCreationTimestamp().Time,
 	}
 }
 

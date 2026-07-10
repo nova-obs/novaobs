@@ -67,12 +67,17 @@ func syncLogsK8sServicesHandler(service logs.Service) gin.HandlerFunc {
 
 func createLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
 		var body logEndpointRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
 			return
 		}
-		endpoint, err := service.CreateEndpoint(ctx.Request.Context(), body.endpoint())
+		endpoint, err := service.CreateEndpointForSubject(ctx.Request.Context(), subject, body.endpoint())
 		if err != nil {
 			writeLogsError(ctx, err)
 			return
@@ -83,7 +88,12 @@ func createLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 
 func listLogsEndpointsHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		endpoints, err := service.ListEndpoints(ctx.Request.Context())
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		endpoints, err := service.ListEndpointsForSubject(ctx.Request.Context(), subject)
 		if err != nil {
 			writeLogsError(ctx, err)
 			return
@@ -94,12 +104,17 @@ func listLogsEndpointsHandler(service logs.Service) gin.HandlerFunc {
 
 func updateLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
 		var body logEndpointRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
 			return
 		}
-		endpoint, err := service.UpdateEndpoint(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")), body.endpoint())
+		endpoint, err := service.UpdateEndpointForSubject(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body.endpoint())
 		if err != nil {
 			writeLogsError(ctx, err)
 			return

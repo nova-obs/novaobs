@@ -3,15 +3,17 @@ package obsruntime
 import "time"
 
 const (
-	KindLogsCollector  = "logs_collector"
-	KindLogsVmalert    = "logs_vmalert"
-	KindMetricsVmalert = "metrics_vmalert"
+	KindLogsCollector    = "logs_collector"
+	KindMetricsCollector = "metrics_collector"
+	KindLogsVmalert      = "logs_vmalert"
+	KindMetricsVmalert   = "metrics_vmalert"
 
 	SignalLogs    = "logs"
 	SignalMetrics = "metrics"
 
 	StatusPendingPublish = "pending_publish"
 	StatusPreviewed      = "previewed"
+	StatusDeployed       = "deployed"
 	StatusReady          = "ready"
 	StatusFailed         = "failed"
 )
@@ -22,8 +24,10 @@ type Runtime struct {
 	SignalType          string        `json:"signal_type" bson:"signal_type"`
 	ClusterID           string        `json:"cluster_id" bson:"cluster_id"`
 	Namespace           string        `json:"namespace" bson:"namespace"`
+	ProductID           string        `json:"product_id,omitempty" bson:"product_id,omitempty"`
 	EndpointID          string        `json:"endpoint_id,omitempty" bson:"endpoint_id,omitempty"`
 	CollectorConfigHash string        `json:"collector_config_hash,omitempty" bson:"collector_config_hash,omitempty"`
+	DesiredConfigHash   string        `json:"desired_config_hash,omitempty" bson:"desired_config_hash,omitempty"`
 	ArtifactHash        string        `json:"artifact_hash,omitempty" bson:"artifact_hash,omitempty"`
 	ManifestHash        string        `json:"manifest_hash,omitempty" bson:"manifest_hash,omitempty"`
 	Status              string        `json:"status" bson:"status"`

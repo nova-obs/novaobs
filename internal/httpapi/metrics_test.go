@@ -99,6 +99,29 @@ func TestMetricsAPIRejectsMissingEndpoint(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"code":"not_found"`)
 }
 
+func TestMetricsAPICreatesUpdatesAndPreviewsManagedScrapeRoute(t *testing.T) {
+	env := newMetricsHTTPTestEnv(t)
+	routesPath := "/api/v1/products/" + env.service.ProductID + "/services/" + env.service.ID + "/metrics/routes"
+	body := `{"name":"orders metrics","endpoint_id":"vm-prod","cluster_id":"prod-1","namespace":"orders","k8s_service_name":"orders-api","port":"metrics","scheme":"http","metrics_path":"/metrics","scrape_interval":"30s","scrape_timeout":"10s"}`
+
+	created := performJSON(t, env.router, http.MethodPost, routesPath, body)
+	routeID := nestedString(t, created, "data", "route", "id")
+	require.NotEmpty(t, routeID)
+	require.Equal(t, metrics.RoutePublishStatusPending, nestedString(t, created, "data", "route", "last_publish_status"))
+	require.Contains(t, nestedString(t, created, "data", "runtime_id"), "metrics-collector:")
+
+	listed := performJSON(t, env.router, http.MethodGet, routesPath, "")
+	require.Len(t, nestedValue(t, listed, "data").([]any), 1)
+
+	updated := performJSON(t, env.router, http.MethodPatch, routesPath+"/"+routeID, `{"scrape_interval":"45s"}`)
+	require.Equal(t, "45s", nestedString(t, updated, "data", "route", "scrape_interval"))
+
+	preview := performJSON(t, env.router, http.MethodPost, "/api/v1/observability/runtimes/metrics-collector/publish", `{"route_id":"`+routeID+`","namespace":"novaapm-system"}`)
+	require.Equal(t, "previewed", nestedString(t, preview, "data", "status"))
+	require.Contains(t, nestedString(t, preview, "data", "manifest_yaml"), "kind: Deployment")
+	require.NotContains(t, nestedString(t, preview, "data", "manifest_yaml"), "kind: DaemonSet")
+}
+
 func TestMetricsAlertRuleAPITestAndCreateForceMetricsSignal(t *testing.T) {
 	env := newMetricsHTTPTestEnv(t)
 	binding := performJSON(t, env.router, http.MethodPost, "/api/v1/products/"+env.service.ProductID+"/services/"+env.service.ID+"/metrics/bindings", `{"endpoint_id":"vm-prod","tenant":{"account_id":"1001","project_id":"2001"},"label_match":{"service.name":"orders-api"},"base_promql":"service:requests:rate5m{service=\"orders-api\"}"}`)
@@ -165,10 +188,13 @@ func newMetricsHTTPTestEnv(t *testing.T) metricsHTTPTestEnv {
 	rbacRepo := platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings())
 	rbacService := platformrbac.NewService(rbacRepo, platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject()))
 	metricsService := metrics.NewService(metrics.Dependencies{
-		Bindings:   store.MetricsServiceBindings(),
-		Endpoints:  obsendpoint.NewLogEndpointFacade(store.LogEndpoints()),
-		Services:   serviceRepo,
-		Authorizer: rbacService,
+		Bindings:       store.MetricsServiceBindings(),
+		Routes:         store.MetricsRoutes(),
+		Runtimes:       store.ObservabilityRuntimes(),
+		Endpoints:      obsendpoint.NewLogEndpointFacade(store.LogEndpoints()),
+		Services:       serviceRepo,
+		K8sDeployments: testRuntimeDeploymentService{},
+		Authorizer:     rbacService,
 	})
 	endpointService := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacService))
 	alertRepository := alerting.NewStoreRepository(store.Alerting())

@@ -64,9 +64,11 @@ type ListFilter struct {
 }
 
 type DeleteDependencies struct {
-	LogRouteRefs   int
-	AgentRefs      int
-	OnboardingRefs int
+	LogRouteRefs      int
+	MetricRouteRefs   int
+	MetricBindingRefs int
+	AgentRefs         int
+	OnboardingRefs    int
 }
 
 type UpdateRequest struct {

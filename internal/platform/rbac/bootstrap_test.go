@@ -34,6 +34,13 @@ func TestEnsurePlatformDefaultsAllowsExternalLogTenantOverride(t *testing.T) {
 		Scope:    Scope{Global: true},
 	})
 	require.True(t, decision.Allowed)
+	for _, req := range []Request{
+		{Resource: "observability.endpoint", Action: "manage", Scope: Scope{Global: true}},
+		{Resource: "metrics.endpoint", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "platform.image", Action: "manage", Scope: Scope{Global: true}},
+	} {
+		require.True(t, NewService(repo).Authorize(subject, req).Allowed, "%s:%s", req.Resource, req.Action)
+	}
 }
 
 func TestDevK8sOpsScopeDoesNotSeedDemoClusterNamespace(t *testing.T) {

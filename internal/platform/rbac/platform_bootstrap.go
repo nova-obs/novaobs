@@ -12,6 +12,11 @@ func EnsurePlatformDefaults(repo Repository, subject Subject) error {
 		Description: "NovaAPM 平台用户、角色、授权和全局管理默认角色",
 		Permissions: []Permission{
 			{Resource: "logs.external-tenant", Action: "manage", ScopeMode: "global"},
+			{Resource: "observability.endpoint", Action: "read", ScopeMode: "global"},
+			{Resource: "observability.endpoint", Action: "manage", ScopeMode: "global"},
+			{Resource: "metrics.endpoint", Action: "read", ScopeMode: "global"},
+			{Resource: "platform.image", Action: "read", ScopeMode: "global"},
+			{Resource: "platform.image", Action: "manage", ScopeMode: "global"},
 			{Resource: "platform.iam", Action: "read", ScopeMode: "global"},
 			{Resource: "platform.iam", Action: "manage", ScopeMode: "global"},
 			{Resource: "platform.subject", Action: "read", ScopeMode: "global"},

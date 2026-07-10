@@ -47,26 +47,25 @@ type ServiceBindingView struct {
 }
 
 type CreateServiceBindingRequest struct {
-	ServiceID  string                     `json:"service_id"`
-	EndpointID string                     `json:"endpoint_id"`
-	Tenant     obsendpoint.EndpointTenant `json:"tenant"`
-	LabelMatch map[string]string          `json:"label_match"`
-	BasePromQL string                     `json:"base_promql"`
-	Status     string                     `json:"status"`
+	ServiceID  string            `json:"service_id"`
+	EndpointID string            `json:"endpoint_id"`
+	LabelMatch map[string]string `json:"label_match"`
+	BasePromQL string            `json:"base_promql"`
+	Status     string            `json:"status"`
 }
 
 type UpdateServiceBindingRequest struct {
-	EndpointID string                     `json:"endpoint_id"`
-	Tenant     obsendpoint.EndpointTenant `json:"tenant"`
-	LabelMatch map[string]string          `json:"label_match"`
-	BasePromQL *string                    `json:"base_promql"`
-	Status     string                     `json:"status"`
+	EndpointID string            `json:"endpoint_id"`
+	LabelMatch map[string]string `json:"label_match"`
+	BasePromQL *string           `json:"base_promql"`
+	Status     string            `json:"status"`
 }
 
 type Workspace struct {
 	Services        []servicecatalog.Service `json:"services"`
 	ActiveServiceID string                   `json:"active_service_id"`
 	Binding         *ServiceBindingView      `json:"binding,omitempty"`
+	Routes          []MetricRouteView        `json:"routes"`
 	Endpoints       []obsendpoint.Endpoint   `json:"endpoints"`
 	CollectorGroups []any                    `json:"collector_groups"`
 	AlertRules      []any                    `json:"alert_rules"`

@@ -179,13 +179,20 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
 	api.GET("/observability/runtimes/logs-collector/status", getLogsCollectorRuntimeStatusHandler(deps.LogsService))
 	api.POST("/observability/runtimes/logs-collector/publish", publishLogsCollectorRuntimeHandler(deps.LogsService))
+	api.GET("/observability/runtimes/metrics-collector/status", getMetricsCollectorRuntimeStatusHandler(deps.MetricsService))
+	api.POST("/observability/runtimes/metrics-collector/publish", publishMetricsCollectorRuntimeHandler(deps.MetricsService))
 	api.GET("/metrics/endpoints", listMetricsEndpointsHandler(deps.MetricsService))
+	api.GET("/metrics/routes", listMetricRoutesHandler(deps.MetricsService))
 	api.POST("/metrics/endpoints/:id/vmalert-runtime/publish", publishMetricsEndpointVmalertRuntimeHandler(deps.MetricsRuntimeService))
 	api.GET("/products/:productId/services/:id/metrics/workspace", getMetricsWorkspaceHandler(deps.MetricsService))
 	api.GET("/products/:productId/services/:id/metrics/bindings", listMetricsServiceBindingsHandler(deps.MetricsService))
 	api.POST("/products/:productId/services/:id/metrics/bindings", createMetricsServiceBindingHandler(deps.MetricsService))
 	api.PATCH("/products/:productId/services/:id/metrics/bindings/:bindingId", updateMetricsServiceBindingHandler(deps.MetricsService))
 	api.POST("/products/:productId/services/:id/metrics/bindings/:bindingId/probe", probeMetricsServiceBindingHandler(deps.MetricsService))
+	api.GET("/products/:productId/services/:id/metrics/routes", listMetricRoutesHandler(deps.MetricsService))
+	api.POST("/products/:productId/services/:id/metrics/routes", createMetricRouteHandler(deps.MetricsService))
+	api.GET("/products/:productId/services/:id/metrics/routes/:routeId", getMetricRouteHandler(deps.MetricsService))
+	api.PATCH("/products/:productId/services/:id/metrics/routes/:routeId", updateMetricRouteHandler(deps.MetricsService))
 	api.GET("/metrics/alert-rules", listMetricsAlertRulesHandler(deps.AlertService))
 	api.POST("/metrics/alert-rules/test", testMetricsAlertRuleHandler(deps.AlertService))
 	api.POST("/metrics/alert-rules", createMetricsAlertRuleHandler(deps.AlertService))
@@ -684,6 +691,16 @@ func serviceDeleteDependencies(ctx context.Context, serviceID string, collectorS
 			return deps, err
 		}
 		deps.LogRouteRefs = len(routes)
+		var metricRoutes []metrics.MetricRoute
+		if err := store.MetricsRoutes().FindByService(ctx, serviceID, &metricRoutes); err != nil {
+			return deps, err
+		}
+		deps.MetricRouteRefs = len(metricRoutes)
+		var metricBindings []metrics.ServiceBinding
+		if err := store.MetricsServiceBindings().FindByService(ctx, serviceID, &metricBindings); err != nil {
+			return deps, err
+		}
+		deps.MetricBindingRefs = len(metricBindings)
 		var onboardingState onboarding.ServiceOnboarding
 		if err := store.Onboardings().FindByService(ctx, serviceID, &onboardingState); err == nil {
 			deps.OnboardingRefs = 1

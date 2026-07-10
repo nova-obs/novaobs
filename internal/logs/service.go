@@ -18,6 +18,7 @@ import (
 	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
 	k8sopsresource "novaapm/internal/modules/k8sops/resource"
 	obsruntime "novaapm/internal/observability/runtime"
+	platformaudit "novaapm/internal/platform/audit"
 	platformimages "novaapm/internal/platform/images"
 	platformrbac "novaapm/internal/platform/rbac"
 	"novaapm/internal/servicecatalog"
@@ -66,6 +67,10 @@ type Authorizer interface {
 	Authorize(subject platformrbac.Subject, req platformrbac.Request) platformrbac.Decision
 }
 
+type EndpointAuditor interface {
+	Record(ctx context.Context, event platformaudit.Event) (platformaudit.Event, error)
+}
+
 type Service struct {
 	endpoints        database.LogEndpointStore
 	sources          database.LogSourceStore
@@ -83,6 +88,7 @@ type Service struct {
 	k8sDeployments   K8sDeploymentService
 	imageTemplates   ImageTemplateValueService
 	authorizer       Authorizer
+	endpointAuditor  EndpointAuditor
 	deployment       agentDeploymentOptions
 }
 
@@ -121,6 +127,12 @@ func WithAuthorizer(authorizer Authorizer) ServiceOption {
 		if authorizer != nil {
 			s.authorizer = authorizer
 		}
+	}
+}
+
+func WithEndpointAuditor(auditor EndpointAuditor) ServiceOption {
+	return func(s *Service) {
+		s.endpointAuditor = auditor
 	}
 }
 
@@ -266,6 +278,55 @@ func endpointForService(endpoint LogEndpoint, service servicecatalog.Service) Lo
 	return endpoint
 }
 
+func (s Service) ListEndpointsForSubject(ctx context.Context, subject platformrbac.Subject) ([]LogEndpoint, error) {
+	if !s.allowedGlobal(subject, "observability.endpoint", "read") {
+		return nil, ErrPermissionDenied
+	}
+	return s.ListEndpoints(ctx)
+}
+
+func (s Service) CreateEndpointForSubject(ctx context.Context, subject platformrbac.Subject, endpoint LogEndpoint) (LogEndpoint, error) {
+	if !s.allowedGlobal(subject, "observability.endpoint", "manage") {
+		return LogEndpoint{}, ErrPermissionDenied
+	}
+	created, err := s.CreateEndpoint(ctx, endpoint)
+	if err != nil {
+		return LogEndpoint{}, err
+	}
+	if err := s.recordEndpointAudit(ctx, subject, "create", created); err != nil {
+		return LogEndpoint{}, err
+	}
+	return created, nil
+}
+
+func (s Service) UpdateEndpointForSubject(ctx context.Context, subject platformrbac.Subject, id string, endpoint LogEndpoint) (LogEndpoint, error) {
+	if !s.allowedGlobal(subject, "observability.endpoint", "manage") {
+		return LogEndpoint{}, ErrPermissionDenied
+	}
+	updated, err := s.UpdateEndpoint(ctx, id, endpoint)
+	if err != nil {
+		return LogEndpoint{}, err
+	}
+	if err := s.recordEndpointAudit(ctx, subject, "update", updated); err != nil {
+		return LogEndpoint{}, err
+	}
+	return updated, nil
+}
+
+func (s Service) recordEndpointAudit(ctx context.Context, subject platformrbac.Subject, action string, endpoint LogEndpoint) error {
+	if s.endpointAuditor == nil {
+		return nil
+	}
+	_, err := s.endpointAuditor.Record(ctx, platformaudit.Event{
+		Actor:    platformaudit.Actor{ID: subject.ID, Name: subject.DisplayName},
+		Resource: platformaudit.Resource{Type: "observability_endpoint", Name: endpoint.ID},
+		Action:   action, Scope: endpoint.ScopeType,
+		RequestSummary: map[string]any{"kind": endpoint.Kind, "signal_types": append([]string{}, endpoint.SignalTypes...), "cluster_id": endpoint.ClusterID, "status": endpoint.Status},
+		Result:         "success",
+	})
+	return err
+}
+
 func (s Service) CreateEndpoint(ctx context.Context, endpoint LogEndpoint) (LogEndpoint, error) {
 	endpoint = normalizeStoredEndpoint(endpoint)
 	if err := validateEndpoint(endpoint); err != nil {
@@ -315,6 +376,10 @@ func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndp
 	}
 	endpoint = normalizeStoredEndpoint(endpoint)
 	endpoint.ID = id
+	existing = normalizeStoredEndpoint(existing)
+	if endpoint.Kind != existing.Kind || !sameStringSet(endpoint.SignalTypes, existing.SignalTypes) {
+		return LogEndpoint{}, apperr.InvalidRequest("观测端点创建后不能变更 kind 或 signal_types")
+	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return LogEndpoint{}, err
 	}
@@ -348,6 +413,24 @@ func (s Service) UpdateEndpoint(ctx context.Context, id string, endpoint LogEndp
 		return LogEndpoint{}, err
 	}
 	return endpoint, nil
+}
+
+func sameStringSet(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]int, len(left))
+	for _, item := range left {
+		seen[strings.TrimSpace(item)]++
+	}
+	for _, item := range right {
+		key := strings.TrimSpace(item)
+		if seen[key] == 0 {
+			return false
+		}
+		seen[key]--
+	}
+	return true
 }
 
 func (s Service) ensureEndpointClusterRegistered(ctx context.Context, endpoint LogEndpoint) error {
@@ -1949,6 +2032,17 @@ func (s Service) allowed(subject platformrbac.Subject, serviceID string, resourc
 		Scope:    platformrbac.Scope{ServiceID: serviceID},
 	})
 	return decision.Allowed
+}
+
+func (s Service) allowedGlobal(subject platformrbac.Subject, resource string, action string) bool {
+	if subject.ID == "" || subject.Type == "" || s.authorizer == nil {
+		return false
+	}
+	return s.authorizer.Authorize(subject, platformrbac.Request{
+		Resource: resource,
+		Action:   action,
+		Scope:    platformrbac.Scope{Global: true},
+	}).Allowed
 }
 
 func (s Service) renderRouteConfigWithHashes(ctx context.Context, input renderInput) (renderedRouteConfig, error) {

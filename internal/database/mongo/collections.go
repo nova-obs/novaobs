@@ -735,6 +735,77 @@ func (s *metricsServiceBindingStore) Update(ctx context.Context, id string, bind
 	return nil
 }
 
+type metricsRouteStore struct{ col *mongo.Collection }
+
+func (s *metricsRouteStore) Insert(ctx context.Context, route interface{}) error {
+	_, err := s.col.InsertOne(ctx, route)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
+func (s *metricsRouteStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *metricsRouteStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *metricsRouteStore) FindRuntimeGroup(ctx context.Context, clusterID string, productID string, endpointID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"cluster_id": clusterID, "product_id": productID, "endpoint_id": endpointID}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *metricsRouteStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *metricsRouteStore) Update(ctx context.Context, id string, route interface{}) error {
+	oid, _ := objectID(id)
+	setDoc, err := toBSONMap(route)
+	if err != nil {
+		return err
+	}
+	delete(setDoc, "_id")
+	result, err := s.col.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": setDoc})
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+func (s *metricsRouteStore) Delete(ctx context.Context, id string) error {
+	oid, _ := objectID(id)
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": oid})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 // ---------- Alerting Repository ----------
 
 type alertingStore struct {

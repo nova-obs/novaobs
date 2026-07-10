@@ -146,6 +146,12 @@ func (r Repository) Delete(ctx context.Context, id string, deps DeleteDependenci
 	if deps.LogRouteRefs > 0 {
 		return Service{}, apperr.Conflict("服务仍有关联日志路由，不能删除")
 	}
+	if deps.MetricRouteRefs > 0 {
+		return Service{}, apperr.Conflict("服务仍有关联指标采集路由，不能删除")
+	}
+	if deps.MetricBindingRefs > 0 {
+		return Service{}, apperr.Conflict("服务仍有关联指标查询绑定，不能删除")
+	}
 	if deps.AgentRefs > 0 {
 		return Service{}, apperr.Conflict("服务仍有关联采集 Agent，不能删除")
 	}

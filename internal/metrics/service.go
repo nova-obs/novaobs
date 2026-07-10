@@ -31,18 +31,28 @@ type EndpointReader interface {
 }
 
 type Dependencies struct {
-	Bindings   database.MetricsServiceBindingStore
-	Endpoints  EndpointReader
-	Services   servicecatalog.Repository
-	Authorizer Authorizer
+	Bindings       database.MetricsServiceBindingStore
+	Routes         database.MetricsRouteStore
+	Runtimes       database.ObservabilityRuntimeStore
+	Endpoints      EndpointReader
+	Services       servicecatalog.Repository
+	K8sResources   K8sResourceService
+	K8sDeployments K8sDeploymentService
+	ImageTemplates ImageTemplateValueService
+	Authorizer     Authorizer
 }
 
 type Service struct {
-	bindings   database.MetricsServiceBindingStore
-	endpoints  EndpointReader
-	services   servicecatalog.Repository
-	authorizer Authorizer
-	now        func() time.Time
+	bindings       database.MetricsServiceBindingStore
+	routes         database.MetricsRouteStore
+	runtimes       database.ObservabilityRuntimeStore
+	endpoints      EndpointReader
+	services       servicecatalog.Repository
+	k8sResources   K8sResourceService
+	k8sDeployments K8sDeploymentService
+	imageTemplates ImageTemplateValueService
+	authorizer     Authorizer
+	now            func() time.Time
 }
 
 type denyAuthorizer struct{}
@@ -57,11 +67,16 @@ func NewService(deps Dependencies) Service {
 		authorizer = denyAuthorizer{}
 	}
 	return Service{
-		bindings:   deps.Bindings,
-		endpoints:  deps.Endpoints,
-		services:   deps.Services,
-		authorizer: authorizer,
-		now:        time.Now,
+		bindings:       deps.Bindings,
+		routes:         deps.Routes,
+		runtimes:       deps.Runtimes,
+		endpoints:      deps.Endpoints,
+		services:       deps.Services,
+		k8sResources:   deps.K8sResources,
+		k8sDeployments: deps.K8sDeployments,
+		imageTemplates: deps.ImageTemplates,
+		authorizer:     authorizer,
+		now:            time.Now,
 	}
 }
 
@@ -363,10 +378,18 @@ func (s Service) Workspace(ctx context.Context, subject platformrbac.Subject, pr
 			}
 		}
 	}
+	routeViews := []MetricRouteView{}
+	if s.routes != nil && s.allowed(subject, serviceID, "metrics.route", "read") {
+		routeViews, err = s.ListRoutes(ctx, subject, serviceID, "")
+		if err != nil {
+			return Workspace{}, err
+		}
+	}
 	return Workspace{
 		Services:        []servicecatalog.Service{service},
 		ActiveServiceID: serviceID,
 		Binding:         bindingView,
+		Routes:          routeViews,
 		Endpoints:       endpoints,
 		CollectorGroups: []any{},
 		AlertRules:      []any{},
@@ -439,7 +462,7 @@ func resolveMetricsEndpointForService(endpoint obsendpoint.Endpoint, service ser
 		return endpoint, nil
 	}
 	endpoint.Tenant = tenantForService(service)
-	urls := []*string{&endpoint.URLs.RemoteWriteURL, &endpoint.URLs.QueryURL, &endpoint.URLs.UIURL}
+	urls := []*string{&endpoint.URLs.WriteURL, &endpoint.URLs.RemoteWriteURL, &endpoint.URLs.QueryURL, &endpoint.URLs.UIURL}
 	for _, value := range urls {
 		if strings.TrimSpace(*value) == "" {
 			continue
@@ -499,8 +522,6 @@ func (s Service) allowed(subject platformrbac.Subject, serviceID string, resourc
 func normalizeCreateRequest(req CreateServiceBindingRequest) CreateServiceBindingRequest {
 	req.ServiceID = strings.TrimSpace(req.ServiceID)
 	req.EndpointID = strings.TrimSpace(req.EndpointID)
-	req.Tenant.AccountID = strings.TrimSpace(req.Tenant.AccountID)
-	req.Tenant.ProjectID = strings.TrimSpace(req.Tenant.ProjectID)
 	req.LabelMatch = normalizeLabels(req.LabelMatch)
 	req.BasePromQL = strings.TrimSpace(req.BasePromQL)
 	req.Status = strings.TrimSpace(req.Status)
@@ -509,8 +530,6 @@ func normalizeCreateRequest(req CreateServiceBindingRequest) CreateServiceBindin
 
 func normalizeUpdateRequest(req UpdateServiceBindingRequest) UpdateServiceBindingRequest {
 	req.EndpointID = strings.TrimSpace(req.EndpointID)
-	req.Tenant.AccountID = strings.TrimSpace(req.Tenant.AccountID)
-	req.Tenant.ProjectID = strings.TrimSpace(req.Tenant.ProjectID)
 	if req.LabelMatch != nil {
 		req.LabelMatch = normalizeLabels(req.LabelMatch)
 	}

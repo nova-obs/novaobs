@@ -125,7 +125,11 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	)
 	auditSvc := audit.NewService(audit.NewStoreRepository(store.AuditEvents()))
 	secretSvc := secret.NewService(secret.NewStoreRepository(store.Secrets()), secret.NewAESGCMEncryptor([]byte(cfg.Secret.Key)))
-	imageSvc := platformimages.NewService(platformimages.NewStoreRepository(store.PlatformImages()))
+	imageSvc := platformimages.NewService(
+		platformimages.NewStoreRepository(store.PlatformImages()),
+		platformimages.WithAuthorizer(rbacSvc),
+		platformimages.WithAuditor(auditSvc),
+	)
 	clusterCredentialSvc := cluster.NewCredentialService(secretSvc, rbacSvc, auditSvc)
 	k8sClientProvider := kubeclient.NewProvider(clusterCredentialSvc)
 	k8sOpsModule := k8sops.NewModuleWithSecurity(
@@ -162,13 +166,19 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		logs.WithLogTargets(store.LogTargets()),
 		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(rbacSvc),
+		logs.WithEndpointAuditor(auditSvc),
 	)
 	endpointSvc := obsendpoint.NewLogEndpointFacade(store.LogEndpoints(), obsendpoint.WithAuthorizer(rbacSvc))
 	metricsSvc := metrics.NewService(metrics.Dependencies{
-		Bindings:   store.MetricsServiceBindings(),
-		Endpoints:  endpointSvc,
-		Services:   svcRepo,
-		Authorizer: rbacSvc,
+		Bindings:       store.MetricsServiceBindings(),
+		Routes:         store.MetricsRoutes(),
+		Runtimes:       store.ObservabilityRuntimes(),
+		Endpoints:      endpointSvc,
+		Services:       svcRepo,
+		K8sResources:   k8sOpsModule.Resource,
+		K8sDeployments: k8sOpsModule.Deploy,
+		ImageTemplates: imageSvc,
+		Authorizer:     rbacSvc,
 	})
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:             store.LogEndpoints(),

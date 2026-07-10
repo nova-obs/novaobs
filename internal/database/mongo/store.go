@@ -39,6 +39,7 @@ type Store struct {
 	lgccCol *mongo.Collection
 	ortCol  *mongo.Collection
 	msbCol  *mongo.Collection
+	mrtCol  *mongo.Collection
 	arCol   *mongo.Collection
 	aruCol  *mongo.Collection
 	ariCol  *mongo.Collection
@@ -96,6 +97,7 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgccCol: db.Collection("log_collector_cluster_configs"),
 		ortCol:  db.Collection("observability_runtimes"),
 		msbCol:  db.Collection("metrics_service_bindings"),
+		mrtCol:  db.Collection("metrics_routes"),
 		arCol:   db.Collection("alert_rules"),
 		aruCol:  db.Collection("alert_rule_updates"),
 		ariCol:  db.Collection("alert_instances"),
@@ -197,8 +199,21 @@ func (s *Store) ensureMetricsIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("metrics_binding_endpoint_status"),
 		},
 	})
+	if err != nil {
+		return err
+	}
+	_, err = s.mrtCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "product_id", Value: 1}, {Key: "endpoint_id", Value: 1}, {Key: "cluster_id", Value: 1}, {Key: "namespace", Value: 1}, {Key: "k8s_service_name", Value: 1}, {Key: "port", Value: 1}, {Key: "metrics_path", Value: 1}},
+			Options: options.Index().SetName("uniq_active_metrics_route_target").SetUnique(true).SetPartialFilterExpression(bson.M{"status": metricRouteActiveStatus}),
+		},
+		{Keys: bson.D{{Key: "service_id", Value: 1}, {Key: "updated_at", Value: -1}}, Options: options.Index().SetName("metrics_route_service_updated")},
+		{Keys: bson.D{{Key: "cluster_id", Value: 1}, {Key: "product_id", Value: 1}, {Key: "endpoint_id", Value: 1}, {Key: "status", Value: 1}}, Options: options.Index().SetName("metrics_route_runtime_group")},
+	})
 	return err
 }
+
+const metricRouteActiveStatus = "active"
 
 func (s *Store) Close(ctx context.Context) error {
 	return s.client.Disconnect(ctx)
@@ -250,6 +265,7 @@ func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
 func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
 	return &metricsServiceBindingStore{s.msbCol}
 }
+func (s *Store) MetricsRoutes() database.MetricsRouteStore { return &metricsRouteStore{s.mrtCol} }
 func (s *Store) Alerting() database.AlertingStore {
 	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}
 }

@@ -225,6 +225,12 @@ func TestRepositoryRejectsDeletingServiceWithBlockingDependencies(t *testing.T) 
 
 	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{AgentRefs: 1})
 	require.ErrorContains(t, err, "采集 Agent")
+
+	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{MetricRouteRefs: 1})
+	require.ErrorContains(t, err, "指标采集路由")
+
+	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{MetricBindingRefs: 1})
+	require.ErrorContains(t, err, "指标查询绑定")
 }
 
 func TestRepositoryGetsService(t *testing.T) {

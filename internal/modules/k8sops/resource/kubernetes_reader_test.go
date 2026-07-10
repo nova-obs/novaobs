@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +60,32 @@ func TestKubernetesReaderListsDeploymentSummaries(t *testing.T) {
 	require.Equal(t, "healthy", items[0].Status)
 	require.Equal(t, "orders-api", items[0].Labels["app"])
 	require.Equal(t, createdAt, items[0].UpdatedAt)
+}
+
+func TestKubernetesReaderListsExplicitClusterScopedResourcesWithoutNamespace(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "novaapm-system", UID: "uid-namespace"}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "novaapm-vmagent", UID: "uid-role"}},
+	)
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client})
+
+	namespaces, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Namespace"})
+	require.NoError(t, err)
+	require.Len(t, namespaces, 1)
+	require.Equal(t, "novaapm-system", namespaces[0].Identity.Name)
+
+	roles, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "ClusterRole"})
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	require.Equal(t, "novaapm-vmagent", roles[0].Identity.Name)
+}
+
+func TestKubernetesReaderStillRequiresNamespaceForNamespacedLists(t *testing.T) {
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: fake.NewSimpleClientset()})
+
+	_, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Deployment"})
+
+	require.ErrorIs(t, err, ErrNamespaceRequired)
 }
 
 func TestKubernetesReaderListsAppsWorkloadSummaries(t *testing.T) {
