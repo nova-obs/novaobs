@@ -89,16 +89,17 @@ type RuleSpec struct {
 }
 
 type RuleScope struct {
-	ServiceID        string `json:"service_id" bson:"service_id"`
-	ServiceName      string `json:"service_name" bson:"service_name"`
-	LogRouteID       string `json:"log_route_id" bson:"log_route_id"`
-	LogTargetID      string `json:"log_target_id" bson:"log_target_id"`
-	MetricsBindingID string `json:"metrics_binding_id,omitempty" bson:"metrics_binding_id,omitempty"`
-	EndpointID       string `json:"endpoint_id" bson:"endpoint_id"`
-	AccountID        string `json:"account_id" bson:"account_id"`
-	ProjectID        string `json:"project_id" bson:"project_id"`
-	BaseFilter       string `json:"base_filter,omitempty" bson:"base_filter,omitempty"`
-	BasePromQL       string `json:"base_promql,omitempty" bson:"base_promql,omitempty"`
+	ServiceID       string            `json:"service_id" bson:"service_id"`
+	ServiceName     string            `json:"service_name" bson:"service_name"`
+	EnvironmentID   string            `json:"environment_id,omitempty" bson:"environment_id,omitempty"`
+	EnvironmentName string            `json:"environment_name,omitempty" bson:"environment_name,omitempty"`
+	ScopeLabels     map[string]string `json:"scope_labels,omitempty" bson:"scope_labels,omitempty"`
+	LogRouteID      string            `json:"log_route_id" bson:"log_route_id"`
+	LogTargetID     string            `json:"log_target_id" bson:"log_target_id"`
+	EndpointID      string            `json:"endpoint_id" bson:"endpoint_id"`
+	AccountID       string            `json:"account_id" bson:"account_id"`
+	ProjectID       string            `json:"project_id" bson:"project_id"`
+	BaseFilter      string            `json:"base_filter,omitempty" bson:"base_filter,omitempty"`
 }
 
 type QuerySpec struct {
@@ -219,14 +220,22 @@ func (s RuleSpec) Normalize() RuleSpec {
 	s.Description = strings.TrimSpace(s.Description)
 	s.Scope.ServiceID = strings.TrimSpace(s.Scope.ServiceID)
 	s.Scope.ServiceName = strings.TrimSpace(s.Scope.ServiceName)
+	s.Scope.EnvironmentID = strings.TrimSpace(s.Scope.EnvironmentID)
+	s.Scope.EnvironmentName = strings.TrimSpace(s.Scope.EnvironmentName)
+	s.Scope.ScopeLabels = cloneStringMap(s.Scope.ScopeLabels)
+	for key, value := range s.Scope.ScopeLabels {
+		trimmedKey, trimmedValue := strings.TrimSpace(key), strings.TrimSpace(value)
+		delete(s.Scope.ScopeLabels, key)
+		if trimmedKey != "" {
+			s.Scope.ScopeLabels[trimmedKey] = trimmedValue
+		}
+	}
 	s.Scope.LogRouteID = strings.TrimSpace(s.Scope.LogRouteID)
 	s.Scope.LogTargetID = strings.TrimSpace(s.Scope.LogTargetID)
-	s.Scope.MetricsBindingID = strings.TrimSpace(s.Scope.MetricsBindingID)
 	s.Scope.EndpointID = strings.TrimSpace(s.Scope.EndpointID)
 	s.Scope.AccountID = strings.TrimSpace(s.Scope.AccountID)
 	s.Scope.ProjectID = strings.TrimSpace(s.Scope.ProjectID)
 	s.Scope.BaseFilter = strings.TrimSpace(s.Scope.BaseFilter)
-	s.Scope.BasePromQL = strings.TrimSpace(s.Scope.BasePromQL)
 	s.Query.Mode = strings.ToLower(strings.TrimSpace(s.Query.Mode))
 	s.Query.Expression = strings.TrimSpace(s.Query.Expression)
 	if s.Trigger.Mode == "" {
@@ -374,11 +383,16 @@ func validateScopeForSignal(s RuleSpec) error {
 			return invalidSpec("scope", "VictoriaLogs AccountID 和 ProjectID 不能为空")
 		}
 	case SignalTypeMetrics:
-		if s.Scope.ServiceID == "" || s.Scope.ServiceName == "" || s.Scope.EndpointID == "" || s.Scope.MetricsBindingID == "" || s.Scope.BasePromQL == "" {
-			return invalidSpec("scope", "服务、指标绑定、指标端点和 base_promql 不能为空")
+		if s.Scope.EnvironmentID == "" || s.Scope.EnvironmentName == "" || s.Scope.EndpointID == "" {
+			return invalidSpec("scope", "环境和指标写入目标不能为空")
 		}
-		if s.Scope.LogRouteID != "" || s.Scope.LogTargetID != "" || s.Scope.BaseFilter != "" {
-			return invalidSpec("scope", "指标告警不能绑定日志路由或日志目标")
+		if s.Scope.ServiceID != "" || s.Scope.ServiceName != "" || s.Scope.LogRouteID != "" || s.Scope.LogTargetID != "" || s.Scope.BaseFilter != "" {
+			return invalidSpec("scope", "指标告警只能绑定环境，不能绑定服务或日志采集对象")
+		}
+		for key, value := range s.Scope.ScopeLabels {
+			if !validMetricScopeLabel(key, value) {
+				return invalidSpec("scope.scope_labels", "指标作用域标签必须是合法的低基数标签")
+			}
 		}
 	default:
 		return invalidSpec("signal_type", "告警信号类型无效")
@@ -504,6 +518,14 @@ type validationError struct {
 
 func invalidSpec(field string, message string) error {
 	return validationError{Field: field, Message: message}
+}
+
+func validMetricScopeLabel(key string, value string) bool {
+	allowed := map[string]struct{}{
+		"cluster": {}, "namespace": {}, "region": {}, "team": {}, "component": {},
+	}
+	_, ok := allowed[key]
+	return ok && value != "" && len(value) <= 64
 }
 
 func (e validationError) Error() string { return e.Field + ": " + e.Message }

@@ -14,7 +14,7 @@ type Scope struct {
 	Namespace     string   `json:"namespace,omitempty" bson:"namespace,omitempty"`
 	Namespaces    []string `json:"namespaces,omitempty" bson:"namespaces,omitempty"`
 	AllNamespaces bool     `json:"all_namespaces,omitempty" bson:"all_namespaces,omitempty"`
-	Environment   string   `json:"environment,omitempty" bson:"environment,omitempty"`
+	EnvironmentID string   `json:"environment_id,omitempty" bson:"environment_id,omitempty"`
 	ServiceID     string   `json:"service_id,omitempty" bson:"service_id,omitempty"`
 }
 

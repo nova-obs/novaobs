@@ -337,6 +337,89 @@ func getLogsRouteCollectorConfigHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func getVMInstallationHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		artifact, err := service.VMInstallation(ctx.Request.Context(), subject, routeID)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, artifact, gin.H{})
+	}
+}
+
+func listVMLogAgentEndpointsHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "read") {
+			return
+		}
+		items, err := service.ListVMEndpoints(ctx.Request.Context(), routeID)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, items, gin.H{"total": len(items)})
+	}
+}
+
+func createVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		var body logs.UpsertVMEndpointRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeLogsError(ctx, apperr.InvalidRequest("VM 节点请求无效"))
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		item, err := service.CreateVMEndpoint(ctx.Request.Context(), subject, routeID, body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.Created(ctx, item)
+	}
+}
+
+func deleteVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		if err := service.DeleteVMEndpoint(ctx.Request.Context(), subject, routeID, strings.TrimSpace(ctx.Param("endpointId"))); err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		ctx.Status(http.StatusNoContent)
+	}
+}
+
+func probeVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		item, err := service.ProbeVMEndpoint(ctx.Request.Context(), subject, routeID, strings.TrimSpace(ctx.Param("endpointId")))
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, item, gin.H{})
+	}
+}
+
 func probeLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if !authorizeLogsRoute(ctx, service, strings.TrimSpace(ctx.Param("id")), "manage") {

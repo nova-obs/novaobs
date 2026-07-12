@@ -26,6 +26,7 @@ import (
 	"novaapm/internal/opamp"
 	"novaapm/internal/platform/audit"
 	platformauth "novaapm/internal/platform/auth"
+	platformenvironment "novaapm/internal/platform/environment"
 	"novaapm/internal/platform/iam"
 	platformrbac "novaapm/internal/platform/rbac"
 	"novaapm/internal/servicecatalog"
@@ -173,29 +174,31 @@ func newTestRouter(t *testing.T) testEnv {
 	gin.SetMode(gin.TestMode)
 	store := memstore.NewStore()
 	ctx := context.Background()
+	require.NoError(t, store.Environments().Insert(ctx, platformenvironment.Environment{ID: "production", Name: "生产环境", Stage: platformenvironment.StageProduction, Status: platformenvironment.StatusActive}))
+	require.NoError(t, store.Environments().Insert(ctx, platformenvironment.Environment{ID: "prod", Name: "生产环境别名", Stage: platformenvironment.StageProduction, Status: platformenvironment.StatusActive}))
 	productRepo := servicecatalog.NewProductRepository(store.Products())
 	product, err := productRepo.Create(ctx, servicecatalog.Product{Name: "commerce", DisplayName: "交易产品"})
 	require.NoError(t, err)
-	svcRepo := servicecatalog.NewRepository(store.Services(), store.Products())
+	svcRepo := servicecatalog.NewRepository(store.Services(), store.Environments(), store.Products())
 	svc, err := svcRepo.Create(ctx, servicecatalog.Service{
-		ProductID:   product.ID,
-		Name:        "orders-api",
-		DisplayName: "订单服务",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Namespace:   "orders",
-		OwnerTeam:   "orders-team",
-		AlertRoute:  "orders-alerts",
-		Status:      "active",
+		ProductID:     product.ID,
+		Name:          "orders-api",
+		DisplayName:   "订单服务",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Namespace:     "orders",
+		OwnerTeam:     "orders-team",
+		AlertRoute:    "orders-alerts",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances(), collectormanagement.WithConfigVersionStore(store.CollectorConfigVersions()))
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "logs-gateway",
-		Mode:        "shared_gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Status:      "active",
+		Name:          "logs-gateway",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 	configSvc := collectorconfig.NewService(
@@ -238,6 +241,7 @@ func newTestRouter(t *testing.T) testEnv {
 		k8sModule.Resource,
 		k8sModule.Deploy,
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithVMLogAgentEndpoints(store.VMLogAgentEndpoints()),
 		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(rbacSvc),
 	)
@@ -245,7 +249,7 @@ func newTestRouter(t *testing.T) testEnv {
 		Endpoints:      store.LogEndpoints(),
 		Runtimes:       store.ObservabilityRuntimes(),
 		Repository:     alertRepository,
-		ScopeResolver:  alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products()),
+		ScopeResolver:  alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsIntegrations(), store.Environments(), store.Products()),
 		K8sDeployments: testRuntimeDeploymentService{},
 	})
 	metricsRuntimeSvc := alerting.NewMetricsRuntimeService(alerting.MetricsRuntimeDependencies{
@@ -423,10 +427,10 @@ func TestRouterReturnsServiceObservabilityGraph(t *testing.T) {
 	ctx := context.Background()
 	targetRepo := servicecatalog.NewTargetRepository(env.store.ServiceTargets())
 	_, err := targetRepo.Create(ctx, servicecatalog.ObservedTarget{
-		ServiceID:   env.service.ID,
-		TargetType:  "host_process",
-		Environment: "production",
-		DisplayName: "orders-api on vm-01",
+		ServiceID:     env.service.ID,
+		TargetType:    "host_process",
+		EnvironmentID: "production",
+		DisplayName:   "orders-api on vm-01",
 		IdentityAttributes: map[string]string{
 			"host.name":               "vm-01",
 			"process.executable.name": "orders-api",
@@ -476,7 +480,7 @@ func TestRouterReturnsServiceObservabilityGraph(t *testing.T) {
 func TestRouterCreatesServiceTarget(t *testing.T) {
 	env := newTestRouter(t)
 
-	body := `{"target_type":"physical_or_network_device","environment":"production","display_name":"edge-fw-01","identity_attributes":{"device.name":"edge-fw-01","net.host.ip":"10.0.0.8"},"match_rules":{"syslog.hostname":"edge-fw-01"}}`
+	body := `{"target_type":"physical_or_network_device","environment_id":"production","display_name":"edge-fw-01","identity_attributes":{"device.name":"edge-fw-01","net.host.ip":"10.0.0.8"},"match_rules":{"syslog.hostname":"edge-fw-01"}}`
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/services/"+env.service.ID+"/targets", bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -520,12 +524,12 @@ func TestRouterRejectsCollectorGroupActivationWithoutConfig(t *testing.T) {
 	env := newTestRouter(t)
 	draft := "draft"
 	err := env.store.CollectorGroups().Update(context.Background(), env.group.ID, collectormanagement.CollectorGroup{
-		ID:          env.group.ID,
-		Name:        env.group.Name,
-		Mode:        env.group.Mode,
-		Environment: env.group.Environment,
-		Cluster:     env.group.Cluster,
-		Status:      draft,
+		ID:            env.group.ID,
+		Name:          env.group.Name,
+		Mode:          env.group.Mode,
+		EnvironmentID: env.group.EnvironmentID,
+		Cluster:       env.group.Cluster,
+		Status:        draft,
 	})
 	require.NoError(t, err)
 	env.manager.RegisterInstanceGroup("collector-a", env.group.ID)
@@ -601,7 +605,7 @@ func TestRouterCreatesResources(t *testing.T) {
 		path string
 		body string
 	}{
-		{path: "/api/v1/products/" + env.product.ID + "/services", body: `{"name":"inventory-api","environment":"prod","owner_team":"inventory-team","alert_route":"inventory-prod"}`},
+		{path: "/api/v1/products/" + env.product.ID + "/services", body: `{"name":"inventory-api","environment_id":"prod","owner_team":"inventory-team","alert_route":"inventory-prod"}`},
 		{path: "/api/v1/alerts/rules", body: `{"spec":{"name":"inventory-error-count","scope":{"service_id":"service-inventory","service_name":"inventory-api","log_route_id":"route-inventory","endpoint_id":"vl-prod","account_id":"1","project_id":"1"},"query":{"mode":"contains","expression":"level=error"},"trigger":{"mode":"window","aggregation":"count","operator":"gte","threshold":1,"window":"1m","evaluation_interval":"30s"},"grouping":{"max_instances":100},"notification":{"policy_id":"inventory-oncall","severity":"critical","owner_team":"inventory-team"}}}`},
 	} {
 		recorder := httptest.NewRecorder()
@@ -627,14 +631,14 @@ func TestRouterCreatesProductThenDerivesServiceTenant(t *testing.T) {
 	require.NotEqual(t, "", projectID)
 	require.NotEqual(t, "0", projectID)
 
-	serviceResponse := performJSON(t, env.router, http.MethodPost, "/api/v1/products/"+productID+"/services", `{"name":"payment-api","environment":"prod","account_id":"9527","project_id":"9528"}`)
+	serviceResponse := performJSON(t, env.router, http.MethodPost, "/api/v1/products/"+productID+"/services", `{"name":"payment-api","environment_id":"prod","account_id":"9527","project_id":"9528"}`)
 	serviceData := serviceResponse["data"].(map[string]any)
 	require.Equal(t, productID, serviceData["product_id"])
 	require.Equal(t, "0", serviceData["account_id"])
 	require.Equal(t, projectID, serviceData["project_id"])
 }
 
-func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
+func TestRouterCreatesVMLogRouteAndProvidesManualInstallation(t *testing.T) {
 	env := newTestRouter(t)
 
 	routeBody := createVMLogRouteRequestBody(t, env)
@@ -655,21 +659,42 @@ func TestRouterCreatesAndPublishesVMLogRoute(t *testing.T) {
 		Data logs.LogRouteView `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(routeRecorder.Body.Bytes(), &routeEnvelope))
+	require.Equal(t, "awaiting_nodes", routeEnvelope.Data.Route.Status)
+	require.Empty(t, routeEnvelope.Data.Route.AgentGroupID)
 
 	probeRecorder := httptest.NewRecorder()
 	probeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/probe", nil)
 	env.router.ServeHTTP(probeRecorder, probeRequest)
-	require.Equal(t, http.StatusOK, probeRecorder.Code)
-	require.Contains(t, probeRecorder.Body.String(), `"status":"ready"`)
+	require.Equal(t, http.StatusBadRequest, probeRecorder.Code)
+	require.Contains(t, probeRecorder.Body.String(), "请逐节点校验 VM 地址")
 
 	publishRecorder := httptest.NewRecorder()
 	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/publish", bytes.NewBufferString(`{}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
-	require.Equal(t, http.StatusOK, publishRecorder.Code)
-	require.Contains(t, publishRecorder.Body.String(), `"status":"ready_for_agent_sync"`)
-	require.NotContains(t, publishRecorder.Body.String(), `"rendered_yaml"`)
-	require.NotContains(t, publishRecorder.Body.String(), `"plan"`)
+	require.Equal(t, http.StatusBadRequest, publishRecorder.Code)
+	require.Contains(t, publishRecorder.Body.String(), "没有平台发布语义")
+
+	installationRecorder := httptest.NewRecorder()
+	installationRequest := httptest.NewRequest(http.MethodGet, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/vm-installation", nil)
+	env.router.ServeHTTP(installationRecorder, installationRequest)
+	require.Equal(t, http.StatusOK, installationRecorder.Code)
+	require.Contains(t, installationRecorder.Body.String(), `"collector_config_hash":"`+routeEnvelope.Data.Route.CollectorConfigHash+`"`)
+	require.NotContains(t, installationRecorder.Body.String(), "OTELCOL_PACKAGE_URL")
+	require.Contains(t, installationRecorder.Body.String(), "平台批准版本的 otelcol-contrib")
+
+	nodeRecorder := httptest.NewRecorder()
+	nodeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/vm-agent-endpoints", bytes.NewBufferString(`{"name":"billing-01","address":"10.0.0.8:13133"}`))
+	nodeRequest.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(nodeRecorder, nodeRequest)
+	require.Equal(t, http.StatusCreated, nodeRecorder.Code)
+	require.Contains(t, nodeRecorder.Body.String(), `"status":"pending_probe"`)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/logs/routes/"+routeEnvelope.Data.Route.ID+"/vm-agent-endpoints", nil)
+	env.router.ServeHTTP(listRecorder, listRequest)
+	require.Equal(t, http.StatusOK, listRecorder.Code)
+	require.Contains(t, listRecorder.Body.String(), `"address":"10.0.0.8:13133"`)
 }
 
 func TestRouterGetsLogRouteCollectorConfigYAML(t *testing.T) {
@@ -753,7 +778,7 @@ func TestRouterPublishesEndpointVmalertRuntimePreview(t *testing.T) {
 	require.Contains(t, publishRecorder.Body.String(), "-notifier.url=http://novaapm-api:8080")
 }
 
-func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
+func TestRouterPublishesMetricsAlertRuntimeForVictoriaMetricsDestination(t *testing.T) {
 	env := newTestRouter(t)
 	require.NoError(t, env.store.LogEndpoints().Insert(context.Background(), logs.LogEndpoint{
 		ID:          "vm-prod",
@@ -767,7 +792,7 @@ func TestRouterPublishesMetricsEndpointVmalertRuntimePreview(t *testing.T) {
 	}))
 
 	publishRecorder := httptest.NewRecorder()
-	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/endpoints/vm-prod/vmalert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaapm-api:8080"}`))
+	publishRequest := httptest.NewRequest(http.MethodPost, "/api/v1/observability/endpoints/vm-prod/metrics-alert-runtime/publish", bytes.NewBufferString(`{"alert_ingest_url":"http://novaapm-api:8080"}`))
 	publishRequest.Header.Set("Content-Type", "application/json")
 	env.router.ServeHTTP(publishRecorder, publishRequest)
 
@@ -928,18 +953,18 @@ func createK8sLogRoute(t *testing.T, env testEnv) logs.LogRouteView {
 
 func createVMService(t *testing.T, env testEnv) servicecatalog.Service {
 	t.Helper()
-	repo := servicecatalog.NewRepository(env.store.Services(), env.store.Products())
+	repo := servicecatalog.NewRepository(env.store.Services(), env.store.Environments(), env.store.Products())
 	service, err := repo.Create(context.Background(), servicecatalog.Service{
-		ProductID:    env.product.ID,
-		Name:         "billing-api",
-		DisplayName:  "billing-api",
-		Environment:  "production",
-		OwnerTeam:    "billing-team",
-		IdentityType: "host_process",
-		ServiceType:  "VM/物理机业务",
-		Status:       "active",
-		Source:       "manual",
-		SyncStatus:   "local",
+		ProductID:     env.product.ID,
+		Name:          "billing-api",
+		DisplayName:   "billing-api",
+		EnvironmentID: "production",
+		OwnerTeam:     "billing-team",
+		IdentityType:  "host_process",
+		ServiceType:   "VM/物理机业务",
+		Status:        "active",
+		Source:        "manual",
+		SyncStatus:    "local",
 	})
 	require.NoError(t, err)
 	return service

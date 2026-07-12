@@ -1,10 +1,38 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadOverridesNestedConfigFromEnvironment(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`server:
+  host: "127.0.0.1"
+  port: 8080
+  mode: "debug"
+database:
+  driver: "mongodb"
+  uri: ""
+secret:
+  key: ""
+`), 0o600))
+	t.Setenv("OBS_PLATFORM_SERVER_HOST", "0.0.0.0")
+	t.Setenv("OBS_PLATFORM_SERVER_MODE", "release")
+	t.Setenv("OBS_PLATFORM_DATABASE_URI", "mongodb://mongo:27017/novaapm")
+	t.Setenv("NOVAAPM_SECRET_KEY", "12345678901234567890123456789012")
+
+	cfg, err := Load(configPath)
+
+	require.NoError(t, err)
+	require.Equal(t, "0.0.0.0", cfg.Server.Host)
+	require.Equal(t, "release", cfg.Server.Mode)
+	require.Equal(t, "mongodb://mongo:27017/novaapm", cfg.Database.URI)
+	require.Equal(t, "12345678901234567890123456789012", cfg.Secret.Key)
+}
 
 func TestValidateRejectsUnsupportedDriver(t *testing.T) {
 	cfg := Config{

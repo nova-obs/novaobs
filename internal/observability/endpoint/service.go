@@ -68,7 +68,7 @@ func WithHTTPClient(client HTTPDoer) ServiceOption {
 	}
 }
 
-func NewLogEndpointFacade(logEndpoints database.LogEndpointStore, options ...ServiceOption) Service {
+func NewService(logEndpoints database.LogEndpointStore, options ...ServiceOption) Service {
 	service := Service{
 		logEndpoints: logEndpoints,
 		now:          time.Now,
@@ -461,19 +461,12 @@ func endpointHasAnyURL(endpoint Endpoint) bool {
 		strings.TrimSpace(endpoint.URLs.BaseURL) != ""
 }
 
-func (s Service) allowed(subject platformrbac.Subject, filter ListFilter, action string) bool {
+func (s Service) allowed(subject platformrbac.Subject, _ ListFilter, action string) bool {
 	if subject.ID == "" || subject.Type == "" || s.authorizer == nil {
 		return false
 	}
-	resource := "observability.endpoint"
-	switch strings.ToLower(strings.TrimSpace(filter.SignalType)) {
-	case SignalTypeMetrics:
-		resource = "metrics.endpoint"
-	case SignalTypeLogs:
-		resource = "logs.target"
-	}
 	decision := s.authorizer.Authorize(subject, platformrbac.Request{
-		Resource: resource,
+		Resource: "observability.endpoint",
 		Action:   action,
 		Scope:    platformrbac.Scope{},
 	})

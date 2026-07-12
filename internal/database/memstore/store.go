@@ -31,13 +31,16 @@ type Store struct {
 	lges  map[string]interface{}
 	lgss  map[string]interface{}
 	lgrs  map[string]interface{}
+	vmles map[string]interface{}
 	lgts  map[string]interface{}
 	lgcvs map[string]interface{}
 	lgdvs map[string]interface{}
 	lgccs map[string]interface{}
 	orts  map[string]interface{}
-	msbs  map[string]interface{}
-	mrts  map[string]interface{}
+	mins  map[string]interface{}
+	msas  map[string]interface{}
+	mhss  map[string]interface{}
+	mcrs  map[string]interface{}
 	ars   map[string]interface{}
 	arus  map[string]interface{}
 	aris  map[string]interface{}
@@ -53,6 +56,8 @@ type Store struct {
 	imgs  map[string]interface{}
 	secs  map[string]interface{}
 	aes   map[string]interface{}
+	envs  map[string]interface{}
+	erbs  map[string]interface{}
 	kcls  map[string]interface{}
 	knss  map[string]interface{}
 	kdis  map[string]interface{}
@@ -78,13 +83,16 @@ func NewStore() *Store {
 		lges:  map[string]interface{}{},
 		lgss:  map[string]interface{}{},
 		lgrs:  map[string]interface{}{},
+		vmles: map[string]interface{}{},
 		lgts:  map[string]interface{}{},
 		lgcvs: map[string]interface{}{},
 		lgdvs: map[string]interface{}{},
 		lgccs: map[string]interface{}{},
 		orts:  map[string]interface{}{},
-		msbs:  map[string]interface{}{},
-		mrts:  map[string]interface{}{},
+		mins:  map[string]interface{}{},
+		msas:  map[string]interface{}{},
+		mhss:  map[string]interface{}{},
+		mcrs:  map[string]interface{}{},
 		ars:   map[string]interface{}{},
 		arus:  map[string]interface{}{},
 		aris:  map[string]interface{}{},
@@ -100,6 +108,8 @@ func NewStore() *Store {
 		imgs:  map[string]interface{}{},
 		secs:  map[string]interface{}{},
 		aes:   map[string]interface{}{},
+		envs:  map[string]interface{}{},
+		erbs:  map[string]interface{}{},
 		kcls:  map[string]interface{}{},
 		knss:  map[string]interface{}{},
 		kdis:  map[string]interface{}{},
@@ -139,7 +149,10 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s} }
-func (s *Store) LogTargets() database.LogTargetStore                  { return &logTargetStore{s} }
+func (s *Store) VMLogAgentEndpoints() database.VMLogAgentEndpointStore {
+	return &vmLogAgentEndpointStore{s}
+}
+func (s *Store) LogTargets() database.LogTargetStore { return &logTargetStore{s} }
 func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
 	return &logCollectorConfigVersionStore{s}
 }
@@ -152,10 +165,18 @@ func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigS
 func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
 	return &observabilityRuntimeStore{s}
 }
-func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
-	return &metricsServiceBindingStore{s}
+func (s *Store) MetricsIntegrations() database.MetricsIntegrationStore {
+	return &metricsIntegrationStore{s}
 }
-func (s *Store) MetricsRoutes() database.MetricsRouteStore       { return &metricsRouteStore{s} }
+func (s *Store) MetricsSourceAccesses() database.MetricsSourceAccessStore {
+	return &metricsSourceAccessStore{s}
+}
+func (s *Store) MetricsHealthSnapshots() database.MetricsHealthSnapshotStore {
+	return &metricsHealthSnapshotStore{s}
+}
+func (s *Store) MetricsCollectorReleases() database.MetricsCollectorReleaseStore {
+	return &metricsCollectorReleaseStore{s}
+}
 func (s *Store) Alerting() database.AlertingStore                { return &alertingStore{s} }
 func (s *Store) RBACRoles() database.RBACRoleStore               { return &rbacRoleStore{s} }
 func (s *Store) RBACBindings() database.RBACBindingStore         { return &rbacBindingStore{s} }
@@ -169,8 +190,12 @@ func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
 func (s *Store) PlatformImages() database.PlatformImageStore { return &platformImageStore{s} }
 func (s *Store) Secrets() database.SecretStore               { return &secretStore{s} }
 func (s *Store) AuditEvents() database.AuditEventStore       { return &auditEventStore{s} }
-func (s *Store) K8sClusters() database.K8sClusterStore       { return &k8sClusterStore{s} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore   { return &k8sNamespaceStore{s} }
+func (s *Store) Environments() database.EnvironmentStore     { return &environmentStore{s} }
+func (s *Store) EnvironmentResourceBindings() database.EnvironmentResourceBindingStore {
+	return &environmentResourceBindingStore{s}
+}
+func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s}
 }
@@ -808,6 +833,78 @@ func (st *logRouteStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+type vmLogAgentEndpointStore struct{ s *Store }
+
+func (st *vmLogAgentEndpointStore) Insert(_ context.Context, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(v)
+	for _, existing := range st.s.vmles {
+		if extractStringField(existing, "RouteID") == extractStringField(v, "RouteID") &&
+			extractStringField(existing, "Address") == extractStringField(v, "Address") {
+			return database.ErrConflict
+		}
+	}
+	if _, exists := st.s.vmles[id]; exists {
+		return database.ErrConflict
+	}
+	st.s.vmles[id] = v
+	return nil
+}
+
+func (st *vmLogAgentEndpointStore) FindByRoute(_ context.Context, routeID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, value := range st.s.vmles {
+		if extractStringField(value, "RouteID") == routeID {
+			filtered[id] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *vmLogAgentEndpointStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.vmles[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *vmLogAgentEndpointStore) Update(_ context.Context, id string, v interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.vmles[id]; !ok {
+		return errNotFound
+	}
+	st.s.vmles[id] = v
+	return nil
+}
+
+func (st *vmLogAgentEndpointStore) Delete(_ context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.vmles[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.vmles, id)
+	return nil
+}
+
+func (st *vmLogAgentEndpointStore) DeleteByRoute(_ context.Context, routeID string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	for id, value := range st.s.vmles {
+		if extractStringField(value, "RouteID") == routeID {
+			delete(st.s.vmles, id)
+		}
+	}
+	return nil
+}
+
 type logTargetStore struct{ s *Store }
 
 func (st *logTargetStore) Insert(ctx context.Context, v interface{}) error {
@@ -968,177 +1065,205 @@ func (st *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterI
 	return copyAll(values, results)
 }
 
-type metricsServiceBindingStore struct{ s *Store }
+type metricsIntegrationStore struct{ s *Store }
 
-func (st *metricsServiceBindingStore) Insert(ctx context.Context, v interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	id := extractID(v)
-	if id == "" {
-		id = newID()
-	}
-	if err := st.ensureActiveBindingUnique(id, v); err != nil {
-		return err
-	}
-	st.s.msbs[id] = v
-	return nil
-}
+type metricsHealthSnapshotStore struct{ s *Store }
+type metricsCollectorReleaseStore struct{ s *Store }
 
-func (st *metricsServiceBindingStore) FindAll(ctx context.Context, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	return copyAll(st.s.msbs, results)
-}
-
-func (st *metricsServiceBindingStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for key, value := range st.s.msbs {
-		if extractServiceID(value) == serviceID {
-			filtered[key] = value
-		}
-	}
-	return copyAll(filtered, results)
-}
-
-func (st *metricsServiceBindingStore) FindByID(ctx context.Context, id string, result interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	value, ok := st.s.msbs[id]
-	if !ok {
-		return errNotFound
-	}
-	return copyValue(value, result)
-}
-
-func (st *metricsServiceBindingStore) Update(ctx context.Context, id string, v interface{}) error {
-	st.s.mu.Lock()
-	defer st.s.mu.Unlock()
-	if _, ok := st.s.msbs[id]; !ok {
-		return errNotFound
-	}
-	if err := st.ensureActiveBindingUnique(id, v); err != nil {
-		return err
-	}
-	st.s.msbs[id] = v
-	return nil
-}
-
-func (st *metricsServiceBindingStore) ensureActiveBindingUnique(currentID string, candidate interface{}) error {
-	serviceID, status, err := metricsBindingIndex(candidate)
-	if err != nil {
-		return err
-	}
-	if serviceID == "" || !isActiveMetricsBinding(status) {
-		return nil
-	}
-	for id, existing := range st.s.msbs {
-		if id == currentID {
-			continue
-		}
-		existingServiceID, existingStatus, err := metricsBindingIndex(existing)
-		if err != nil {
-			return err
-		}
-		if existingServiceID == serviceID && isActiveMetricsBinding(existingStatus) {
-			return database.ErrConflict
-		}
-	}
-	return nil
-}
-
-func metricsBindingIndex(value interface{}) (string, string, error) {
-	var index struct {
-		ServiceID string `json:"service_id"`
-		Status    string `json:"status"`
-	}
-	if err := copyValue(value, &index); err != nil {
-		return "", "", err
-	}
-	return strings.TrimSpace(index.ServiceID), strings.TrimSpace(index.Status), nil
-}
-
-func isActiveMetricsBinding(status string) bool {
-	status = strings.TrimSpace(status)
-	return status == "" || status == "active"
-}
-
-type metricsRouteStore struct{ s *Store }
-
-func (st *metricsRouteStore) Insert(_ context.Context, value interface{}) error {
+func (st *metricsCollectorReleaseStore) Insert(_ context.Context, value interface{}) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
 	id := extractID(value)
 	if id == "" {
-		id = newID()
+		return database.ErrConflict
 	}
-	st.s.mrts[id] = value
+	st.s.mcrs[id] = value
 	return nil
 }
 
-func (st *metricsRouteStore) FindAll(_ context.Context, results interface{}) error {
-	st.s.mu.RLock()
-	defer st.s.mu.RUnlock()
-	return copyAll(st.s.mrts, results)
+func (st *metricsCollectorReleaseStore) Update(_ context.Context, id string, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.mcrs[id]; !ok {
+		return errNotFound
+	}
+	st.s.mcrs[id] = value
+	return nil
 }
 
-func (st *metricsRouteStore) FindByService(_ context.Context, serviceID string, results interface{}) error {
+func (st *metricsCollectorReleaseStore) FindLatestBySourceAccess(_ context.Context, sourceAccessID string, result interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for key, value := range st.s.mrts {
-		if extractServiceID(value) == serviceID {
-			filtered[key] = value
+	var latest interface{}
+	var generation int64 = -1
+	for _, value := range st.s.mcrs {
+		var index struct {
+			SourceAccessID string `json:"source_access_id"`
+			Generation     int64  `json:"generation"`
+		}
+		if copyValue(value, &index) == nil && index.SourceAccessID == sourceAccessID && index.Generation > generation {
+			latest, generation = value, index.Generation
 		}
 	}
-	return copyAll(filtered, results)
+	if latest == nil {
+		return errNotFound
+	}
+	return copyValue(latest, result)
 }
 
-func (st *metricsRouteStore) FindRuntimeGroup(_ context.Context, clusterID string, productID string, endpointID string, results interface{}) error {
+func (st *metricsHealthSnapshotStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(value)
+	if id == "" {
+		return database.ErrConflict
+	}
+	st.s.mhss[id] = value
+	return nil
+}
+
+func (st *metricsHealthSnapshotStore) FindLatestByIntegration(_ context.Context, integrationID string, result interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
-	filtered := map[string]interface{}{}
-	for key, value := range st.s.mrts {
-		var route struct {
-			ClusterID  string `json:"cluster_id"`
-			ProductID  string `json:"product_id"`
-			EndpointID string `json:"endpoint_id"`
+	var latest interface{}
+	var latestAt time.Time
+	for _, value := range st.s.mhss {
+		var index struct {
+			IntegrationID string    `json:"integration_id"`
+			CreatedAt     time.Time `json:"created_at"`
 		}
-		if copyValue(value, &route) == nil && route.ClusterID == clusterID && route.ProductID == productID && route.EndpointID == endpointID {
-			filtered[key] = value
+		if copyValue(value, &index) == nil && index.IntegrationID == integrationID && (latest == nil || index.CreatedAt.After(latestAt)) {
+			latest, latestAt = value, index.CreatedAt
 		}
 	}
-	return copyAll(filtered, results)
+	if latest == nil {
+		return errNotFound
+	}
+	return copyValue(latest, result)
 }
 
-func (st *metricsRouteStore) FindByID(_ context.Context, id string, result interface{}) error {
+func (st *metricsIntegrationStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	environmentID := extractStringField(value, "EnvironmentID")
+	for _, current := range st.s.mins {
+		if extractStringField(current, "EnvironmentID") == environmentID {
+			return database.ErrConflict
+		}
+	}
+	id := extractID(value)
+	if id == "" {
+		return database.ErrConflict
+	}
+	st.s.mins[id] = value
+	return nil
+}
+
+func (st *metricsIntegrationStore) FindAll(_ context.Context, results interface{}) error {
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
-	value, ok := st.s.mrts[id]
+	return copyAll(st.s.mins, results)
+}
+
+func (st *metricsIntegrationStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.mins[id]
 	if !ok {
 		return errNotFound
 	}
 	return copyValue(value, result)
 }
 
-func (st *metricsRouteStore) Update(_ context.Context, id string, value interface{}) error {
+func (st *metricsIntegrationStore) FindByEnvironment(_ context.Context, environmentID string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	for _, value := range st.s.mins {
+		if extractStringField(value, "EnvironmentID") == environmentID {
+			return copyValue(value, result)
+		}
+	}
+	return errNotFound
+}
+
+func (st *metricsIntegrationStore) Update(_ context.Context, id string, value interface{}) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
-	if _, ok := st.s.mrts[id]; !ok {
+	if _, ok := st.s.mins[id]; !ok {
 		return errNotFound
 	}
-	st.s.mrts[id] = value
+	st.s.mins[id] = value
 	return nil
 }
 
-func (st *metricsRouteStore) Delete(_ context.Context, id string) error {
+func (st *metricsIntegrationStore) Delete(_ context.Context, id string) error {
 	st.s.mu.Lock()
 	defer st.s.mu.Unlock()
-	if _, ok := st.s.mrts[id]; !ok {
+	if _, ok := st.s.mins[id]; !ok {
 		return errNotFound
 	}
-	delete(st.s.mrts, id)
+	delete(st.s.mins, id)
+	return nil
+}
+
+type metricsSourceAccessStore struct{ s *Store }
+
+func (st *metricsSourceAccessStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	integrationID, bindingID, sourceKind := extractStringField(value, "IntegrationID"), extractStringField(value, "ResourceBindingID"), extractStringField(value, "SourceKind")
+	for _, current := range st.s.msas {
+		if extractStringField(current, "IntegrationID") == integrationID && extractStringField(current, "ResourceBindingID") == bindingID && extractStringField(current, "SourceKind") == sourceKind {
+			return database.ErrConflict
+		}
+	}
+	id := extractID(value)
+	if id == "" {
+		return database.ErrConflict
+	}
+	st.s.msas[id] = value
+	return nil
+}
+
+func (st *metricsSourceAccessStore) FindByIntegration(_ context.Context, integrationID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, value := range st.s.msas {
+		if extractStringField(value, "IntegrationID") == integrationID {
+			filtered[id] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *metricsSourceAccessStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.msas[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *metricsSourceAccessStore) Update(_ context.Context, id string, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.msas[id]; !ok {
+		return errNotFound
+	}
+	st.s.msas[id] = value
+	return nil
+}
+
+func (st *metricsSourceAccessStore) Delete(_ context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.msas[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.msas, id)
 	return nil
 }
 
@@ -1854,6 +1979,103 @@ func (st *auditEventStore) FindAll(ctx context.Context, results interface{}) err
 	st.s.mu.RLock()
 	defer st.s.mu.RUnlock()
 	return copyAll(st.s.aes, results)
+}
+
+// ---------- Environment Stores ----------
+
+type environmentStore struct{ s *Store }
+
+func (st *environmentStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	id := extractID(value)
+	if id == "" {
+		return database.ErrConflict
+	}
+	if _, exists := st.s.envs[id]; exists {
+		return database.ErrConflict
+	}
+	st.s.envs[id] = value
+	return nil
+}
+
+func (st *environmentStore) FindAll(_ context.Context, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	return copyAll(st.s.envs, results)
+}
+
+func (st *environmentStore) FindByID(_ context.Context, id string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	value, ok := st.s.envs[id]
+	if !ok {
+		return errNotFound
+	}
+	return copyValue(value, result)
+}
+
+func (st *environmentStore) Update(_ context.Context, id string, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.envs[id]; !ok {
+		return errNotFound
+	}
+	st.s.envs[id] = value
+	return nil
+}
+
+type environmentResourceBindingStore struct{ s *Store }
+
+func (st *environmentResourceBindingStore) Insert(_ context.Context, value interface{}) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	resourceKind := extractStringField(value, "ResourceKind")
+	resourceRef := extractStringField(value, "ResourceRef")
+	for _, current := range st.s.erbs {
+		if extractStringField(current, "ResourceKind") == resourceKind && extractStringField(current, "ResourceRef") == resourceRef {
+			return database.ErrConflict
+		}
+	}
+	id := extractID(value)
+	if id == "" {
+		return database.ErrConflict
+	}
+	st.s.erbs[id] = value
+	return nil
+}
+
+func (st *environmentResourceBindingStore) FindByEnvironment(_ context.Context, environmentID string, results interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	filtered := map[string]interface{}{}
+	for id, value := range st.s.erbs {
+		if extractStringField(value, "EnvironmentID") == environmentID {
+			filtered[id] = value
+		}
+	}
+	return copyAll(filtered, results)
+}
+
+func (st *environmentResourceBindingStore) FindByResource(_ context.Context, resourceKind string, resourceRef string, result interface{}) error {
+	st.s.mu.RLock()
+	defer st.s.mu.RUnlock()
+	for _, value := range st.s.erbs {
+		if extractStringField(value, "ResourceKind") == resourceKind && extractStringField(value, "ResourceRef") == resourceRef {
+			return copyValue(value, result)
+		}
+	}
+	return errNotFound
+}
+
+func (st *environmentResourceBindingStore) Delete(_ context.Context, id string) error {
+	st.s.mu.Lock()
+	defer st.s.mu.Unlock()
+	if _, ok := st.s.erbs[id]; !ok {
+		return errNotFound
+	}
+	delete(st.s.erbs, id)
+	return nil
 }
 
 // ---------- K8s Ops Stores ----------

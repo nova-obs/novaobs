@@ -31,6 +31,7 @@ import (
 	"novaapm/internal/opamp"
 	platformauth "novaapm/internal/platform/auth"
 	"novaapm/internal/platform/authctx"
+	platformenvironment "novaapm/internal/platform/environment"
 	"novaapm/internal/platform/iam"
 	platformimages "novaapm/internal/platform/images"
 	platformrbac "novaapm/internal/platform/rbac"
@@ -46,28 +47,29 @@ import (
 var bg = context.Background()
 
 type Dependencies struct {
-	Store                  database.Store
-	ProductRepo            servicecatalog.ProductRepository
-	ServiceRepo            servicecatalog.Repository
-	ServiceTargetRepo      servicecatalog.TargetRepository
-	CollectorConfigService collectorconfig.Service
-	CollectorService       collectormanagement.Service
-	OnboardingService      onboarding.Service
-	LogsService            logs.Service
-	ObservabilityEndpoints obsendpoint.Service
-	MetricsService         metrics.Service
-	AlertRuntimeService    alerting.LogRuntimeService
-	MetricsRuntimeService  alerting.MetricsRuntimeService
-	AlertService           alerting.Service
-	AlertEventIngestor     alerting.EventIngestor
-	AlertPolicyService     alerting.PolicyService
-	PlatformIAMService     iam.Service
-	PlatformImageService   platformimages.Service
-	K8sOpsModule           k8sops.Module
-	OpAMPManager           *opamp.Manager
-	CollectorTemplate      string
-	PlatformAuthService    *platformauth.Service
-	DefaultSubject         platformrbac.Subject
+	Store                      database.Store
+	ProductRepo                servicecatalog.ProductRepository
+	ServiceRepo                servicecatalog.Repository
+	ServiceTargetRepo          servicecatalog.TargetRepository
+	CollectorConfigService     collectorconfig.Service
+	CollectorService           collectormanagement.Service
+	OnboardingService          onboarding.Service
+	LogsService                logs.Service
+	ObservabilityEndpoints     obsendpoint.Service
+	MetricsIntegrationService  metrics.IntegrationService
+	AlertRuntimeService        alerting.LogRuntimeService
+	MetricsRuntimeService      alerting.MetricsRuntimeService
+	AlertService               alerting.Service
+	AlertEventIngestor         alerting.EventIngestor
+	AlertPolicyService         alerting.PolicyService
+	PlatformIAMService         iam.Service
+	PlatformEnvironmentService platformenvironment.Service
+	PlatformImageService       platformimages.Service
+	K8sOpsModule               k8sops.Module
+	OpAMPManager               *opamp.Manager
+	CollectorTemplate          string
+	PlatformAuthService        *platformauth.Service
+	DefaultSubject             platformrbac.Subject
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -172,6 +174,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
 	api.PATCH("/logs/routes/:id", updateLogsRouteHandler(deps.LogsService))
 	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
+	api.GET("/logs/routes/:id/vm-installation", getVMInstallationHandler(deps.LogsService))
+	api.GET("/logs/routes/:id/vm-agent-endpoints", listVMLogAgentEndpointsHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/vm-agent-endpoints", createVMLogAgentEndpointHandler(deps.LogsService))
+	api.DELETE("/logs/routes/:id/vm-agent-endpoints/:endpointId", deleteVMLogAgentEndpointHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/vm-agent-endpoints/:endpointId/probe", probeVMLogAgentEndpointHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.DELETE("/logs/routes/:id", deleteLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
@@ -181,23 +188,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
 	api.GET("/observability/runtimes/logs-collector/status", getLogsCollectorRuntimeStatusHandler(deps.LogsService))
 	api.POST("/observability/runtimes/logs-collector/publish", publishLogsCollectorRuntimeHandler(deps.LogsService))
-	api.GET("/observability/runtimes/metrics-collector/status", getMetricsCollectorRuntimeStatusHandler(deps.MetricsService))
-	api.POST("/observability/runtimes/metrics-collector/publish", publishMetricsCollectorRuntimeHandler(deps.MetricsService))
-	api.GET("/metrics/endpoints", listMetricsEndpointsHandler(deps.MetricsService))
-	api.GET("/metrics/routes", listMetricRoutesHandler(deps.MetricsService))
-	api.POST("/metrics/endpoints/:id/vmalert-runtime/publish", publishMetricsEndpointVmalertRuntimeHandler(deps.MetricsRuntimeService))
-	api.GET("/products/:productId/services/:id/metrics/workspace", getMetricsWorkspaceHandler(deps.MetricsService))
-	api.GET("/products/:productId/services/:id/metrics/bindings", listMetricsServiceBindingsHandler(deps.MetricsService))
-	api.POST("/products/:productId/services/:id/metrics/bindings", createMetricsServiceBindingHandler(deps.MetricsService))
-	api.PATCH("/products/:productId/services/:id/metrics/bindings/:bindingId", updateMetricsServiceBindingHandler(deps.MetricsService))
-	api.POST("/products/:productId/services/:id/metrics/bindings/:bindingId/probe", probeMetricsServiceBindingHandler(deps.MetricsService))
-	api.GET("/products/:productId/services/:id/metrics/routes", listMetricRoutesHandler(deps.MetricsService))
-	api.POST("/products/:productId/services/:id/metrics/routes", createMetricRouteHandler(deps.MetricsService))
-	api.GET("/products/:productId/services/:id/metrics/routes/:routeId", getMetricRouteHandler(deps.MetricsService))
-	api.PATCH("/products/:productId/services/:id/metrics/routes/:routeId", updateMetricRouteHandler(deps.MetricsService))
-	api.GET("/metrics/alert-rules", listMetricsAlertRulesHandler(deps.AlertService))
-	api.POST("/metrics/alert-rules/test", testMetricsAlertRuleHandler(deps.AlertService))
-	api.POST("/metrics/alert-rules", createMetricsAlertRuleHandler(deps.AlertService))
+	metrics.RegisterIntegrationRoutes(api, deps.MetricsIntegrationService)
+	api.POST("/observability/endpoints/:id/metrics-alert-runtime/publish", publishMetricsAlertRuntimeHandler(deps.MetricsRuntimeService))
 	api.GET("/alerts/rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alerts/rules/test", testAlertRuleHandler(deps.AlertService))
 	api.POST("/alerts/rules", createAlertRuleHandler(deps.AlertService))
@@ -234,6 +226,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/platform/effective-permissions", iam.EffectivePermissionsHandler(deps.PlatformIAMService))
 	api.GET("/platform/images", platformimages.ListHandler(deps.PlatformImageService))
 	api.PUT("/platform/images", platformimages.UpsertHandler(deps.PlatformImageService))
+	platformenvironment.RegisterRoutes(api, deps.PlatformEnvironmentService)
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
 	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))
@@ -373,10 +366,10 @@ func overviewHandler(deps Dependencies) gin.HandlerFunc {
 func listServicesHandler(repo servicecatalog.Repository) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		services, err := repo.List(bg, servicecatalog.ListFilter{
-			Query:       ctx.Query("q"),
-			Environment: ctx.Query("environment"),
-			Status:      ctx.Query("status"),
-			Source:      ctx.Query("source"),
+			Query:         ctx.Query("q"),
+			EnvironmentID: ctx.Query("environment_id"),
+			Status:        ctx.Query("status"),
+			Source:        ctx.Query("source"),
 		})
 		if err != nil {
 			writeError(ctx, err)
@@ -555,7 +548,7 @@ func listCollectorGroupsHandler(service collectormanagement.Service) gin.Handler
 	return func(ctx *gin.Context) {
 		groups, err := service.ListGroups(bg, collectormanagement.ListGroupFilter{
 			Query:           ctx.Query("q"),
-			Environment:     ctx.Query("environment"),
+			EnvironmentID:   ctx.Query("environment_id"),
 			Cluster:         ctx.Query("cluster"),
 			Namespace:       ctx.Query("namespace"),
 			Mode:            ctx.Query("mode"),
@@ -693,16 +686,6 @@ func serviceDeleteDependencies(ctx context.Context, serviceID string, collectorS
 			return deps, err
 		}
 		deps.LogRouteRefs = len(routes)
-		var metricRoutes []metrics.MetricRoute
-		if err := store.MetricsRoutes().FindByService(ctx, serviceID, &metricRoutes); err != nil {
-			return deps, err
-		}
-		deps.MetricRouteRefs = len(metricRoutes)
-		var metricBindings []metrics.ServiceBinding
-		if err := store.MetricsServiceBindings().FindByService(ctx, serviceID, &metricBindings); err != nil {
-			return deps, err
-		}
-		deps.MetricBindingRefs = len(metricBindings)
 		var onboardingState onboarding.ServiceOnboarding
 		if err := store.Onboardings().FindByService(ctx, serviceID, &onboardingState); err == nil {
 			deps.OnboardingRefs = 1

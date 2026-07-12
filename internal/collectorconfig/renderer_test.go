@@ -102,13 +102,13 @@ func TestPreviewParserRejectsInvalidRegex(t *testing.T) {
 
 func TestBuildEnrichmentPatchUsesOnlyRealServiceAttributes(t *testing.T) {
 	patch := BuildEnrichmentPatch(ServiceAttributes{
-		ID:          "svc-1",
-		Name:        "orders-api",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Namespace:   "orders",
-		OwnerTeam:   "",
-		AlertRoute:  "",
+		ID:            "svc-1",
+		Name:          "orders-api",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Namespace:     "orders",
+		OwnerTeam:     "",
+		AlertRoute:    "",
 	}, "group-1")
 
 	require.Contains(t, patch.PatchYAML, `set(attributes["service.name"], "orders-api")`)

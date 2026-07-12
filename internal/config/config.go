@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
@@ -34,7 +35,13 @@ func Load(path string) (Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetEnvPrefix("OBS_PLATFORM")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	for _, key := range []string{"server.host", "server.port", "server.mode", "database.driver", "database.uri"} {
+		if err := v.BindEnv(key); err != nil {
+			return Config{}, fmt.Errorf("绑定环境变量 %s 失败: %w", key, err)
+		}
+	}
 
 	var cfg Config
 	if err := v.ReadInConfig(); err != nil {

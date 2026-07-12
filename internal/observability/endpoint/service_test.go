@@ -15,7 +15,7 @@ import (
 
 var endpointTestSubject = platformrbac.Subject{ID: "endpoint-admin", Type: "user", DisplayName: "Endpoint Admin"}
 
-func TestLogEndpointFacadeMapsVictoriaLogsEndpointToLogsSignal(t *testing.T) {
+func TestUnifiedEndpointServiceMapsVictoriaLogsEndpointToLogsSignal(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
@@ -28,7 +28,7 @@ func TestLogEndpointFacadeMapsVictoriaLogsEndpointToLogsSignal(t *testing.T) {
 		Status:   "active",
 	}))
 
-	service := NewLogEndpointFacade(store.LogEndpoints())
+	service := NewService(store.LogEndpoints())
 
 	all, err := service.List(ctx, ListFilter{})
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestLogEndpointFacadeMapsVictoriaLogsEndpointToLogsSignal(t *testing.T) {
 	require.Empty(t, metricsEndpoints)
 }
 
-func TestLogEndpointFacadeListsMetricsEndpointStoredDuringCompatibilityPhase(t *testing.T) {
+func TestUnifiedEndpointServiceListsVictoriaMetricsWriteDestination(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
@@ -56,7 +56,7 @@ func TestLogEndpointFacadeListsMetricsEndpointStoredDuringCompatibilityPhase(t *
 		Status:      "active",
 	}))
 
-	service := NewLogEndpointFacade(store.LogEndpoints())
+	service := NewService(store.LogEndpoints())
 
 	endpoints, err := service.List(ctx, ListFilter{SignalType: "metrics", Kind: "victoriametrics"})
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestLogEndpointFacadeListsMetricsEndpointStoredDuringCompatibilityPhase(t *
 	require.Equal(t, []string{"metrics"}, endpoints[0].SignalTypes)
 }
 
-func TestLogEndpointFacadeTestReturnsConfigurationResultForNonMetricsEndpoint(t *testing.T) {
+func TestUnifiedEndpointServiceReturnsConfigurationResultForVictoriaLogs(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
 	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
@@ -76,7 +76,7 @@ func TestLogEndpointFacadeTestReturnsConfigurationResultForNonMetricsEndpoint(t 
 		QueryURL:    "http://victorialogs:9428/select/logsql/query",
 		Status:      "active",
 	}))
-	service := NewLogEndpointFacade(store.LogEndpoints())
+	service := NewService(store.LogEndpoints())
 
 	result, err := service.Test(ctx, "vl-prod")
 
@@ -86,10 +86,10 @@ func TestLogEndpointFacadeTestReturnsConfigurationResultForNonMetricsEndpoint(t 
 	require.False(t, result.CheckedAt.IsZero())
 }
 
-func TestLogEndpointFacadeCreatesAndUpdatesVictoriaMetricsEndpoint(t *testing.T) {
+func TestUnifiedEndpointServiceCreatesAndUpdatesVictoriaMetricsDestination(t *testing.T) {
 	ctx := context.Background()
 	store := memstore.NewStore()
-	service := NewLogEndpointFacade(store.LogEndpoints(), WithAuthorizer(allowEndpointAuthorizer{}))
+	service := NewService(store.LogEndpoints(), WithAuthorizer(allowEndpointAuthorizer{}))
 
 	created, err := service.CreateForSubject(ctx, endpointTestSubject, Endpoint{
 		Name:        "vm-prod",
@@ -123,8 +123,8 @@ func TestLogEndpointFacadeCreatesAndUpdatesVictoriaMetricsEndpoint(t *testing.T)
 	require.Equal(t, created.ID, listed[0].ID)
 }
 
-func TestLogEndpointFacadeRejectsVictoriaMetricsURLWithoutTenantPlaceholder(t *testing.T) {
-	service := NewLogEndpointFacade(memstore.NewStore().LogEndpoints(), WithAuthorizer(allowEndpointAuthorizer{}))
+func TestUnifiedEndpointServiceRejectsVictoriaMetricsURLWithoutTenantPlaceholder(t *testing.T) {
+	service := NewService(memstore.NewStore().LogEndpoints(), WithAuthorizer(allowEndpointAuthorizer{}))
 
 	_, err := service.CreateForSubject(context.Background(), endpointTestSubject, Endpoint{
 		Name:        "vm-single",
@@ -143,7 +143,7 @@ func TestLogEndpointFacadeRejectsVictoriaMetricsURLWithoutTenantPlaceholder(t *t
 	require.Contains(t, err.Error(), "/insert/0/prometheus")
 }
 
-func TestLogEndpointFacadeProbesVictoriaMetricsAndPersistsHealth(t *testing.T) {
+func TestUnifiedEndpointServiceProbesVictoriaMetricsAndPersistsHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		require.Equal(t, "/select/0/prometheus/api/v1/query", request.URL.Path)
 		require.Equal(t, "vector(1)", request.URL.Query().Get("query"))
@@ -153,7 +153,7 @@ func TestLogEndpointFacadeProbesVictoriaMetricsAndPersistsHealth(t *testing.T) {
 	defer server.Close()
 
 	store := memstore.NewStore()
-	service := NewLogEndpointFacade(
+	service := NewService(
 		store.LogEndpoints(),
 		WithAuthorizer(allowEndpointAuthorizer{}),
 		WithHTTPClient(server.Client()),
@@ -183,8 +183,8 @@ func TestLogEndpointFacadeProbesVictoriaMetricsAndPersistsHealth(t *testing.T) {
 	require.False(t, persisted.Health.CheckedAt.IsZero())
 }
 
-func TestLogEndpointFacadeRequiresUnifiedManagePermissionForMutation(t *testing.T) {
-	service := NewLogEndpointFacade(memstore.NewStore().LogEndpoints(), WithAuthorizer(readOnlyEndpointAuthorizer{}))
+func TestUnifiedEndpointServiceRequiresManagePermissionForMutation(t *testing.T) {
+	service := NewService(memstore.NewStore().LogEndpoints(), WithAuthorizer(readOnlyEndpointAuthorizer{}))
 	_, err := service.CreateForSubject(context.Background(), endpointTestSubject, Endpoint{
 		Name:        "vm-denied",
 		Kind:        KindVictoriaMetrics,

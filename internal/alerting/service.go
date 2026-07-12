@@ -443,7 +443,7 @@ func (s Service) allowed(subject platformrbac.Subject, scope RuleScope, action s
 	decision := s.authorizer.Authorize(subject, platformrbac.Request{
 		Resource: "alerts.rule",
 		Action:   action,
-		Scope:    platformrbac.Scope{ServiceID: scope.ServiceID},
+		Scope:    platformrbac.Scope{ServiceID: scope.ServiceID, EnvironmentID: scope.EnvironmentID},
 	})
 	return decision.Allowed
 }
@@ -458,15 +458,15 @@ func newAuditEvent(id string, actor Actor, ruleID string, spec RuleSpec, action 
 		Actor:    audit.Actor{ID: actor.ID, Name: actor.Name},
 		Resource: audit.Resource{Type: "alerts.rule", Name: ruleID},
 		Action:   action,
-		Scope:    spec.Scope.ServiceID,
+		Scope:    firstNonEmpty(spec.Scope.EnvironmentID, spec.Scope.ServiceID),
 		RequestSummary: map[string]any{
-			"signal_type":        spec.SignalType,
-			"service_id":         spec.Scope.ServiceID,
-			"log_route_id":       spec.Scope.LogRouteID,
-			"log_target_id":      spec.Scope.LogTargetID,
-			"metrics_binding_id": spec.Scope.MetricsBindingID,
-			"endpoint_id":        spec.Scope.EndpointID,
-			"rule_name":          spec.Name,
+			"signal_type":    spec.SignalType,
+			"service_id":     spec.Scope.ServiceID,
+			"log_route_id":   spec.Scope.LogRouteID,
+			"log_target_id":  spec.Scope.LogTargetID,
+			"environment_id": spec.Scope.EnvironmentID,
+			"endpoint_id":    spec.Scope.EndpointID,
+			"rule_name":      spec.Name,
 		},
 		Result:    "accepted",
 		CreatedAt: now,

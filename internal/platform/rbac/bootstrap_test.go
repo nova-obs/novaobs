@@ -36,8 +36,12 @@ func TestEnsurePlatformDefaultsAllowsExternalLogTenantOverride(t *testing.T) {
 	require.True(t, decision.Allowed)
 	for _, req := range []Request{
 		{Resource: "observability.endpoint", Action: "manage", Scope: Scope{Global: true}},
-		{Resource: "metrics.endpoint", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "metrics.integration", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "metrics.integration", Action: "manage", Scope: Scope{EnvironmentID: "env-prod"}},
+		{Resource: "metrics.deployment", Action: "manage", Scope: Scope{EnvironmentID: "env-prod"}},
 		{Resource: "platform.image", Action: "manage", Scope: Scope{Global: true}},
+		{Resource: "platform.environment", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "platform.environment", Action: "manage", Scope: Scope{Global: true}},
 	} {
 		require.True(t, NewService(repo).Authorize(subject, req).Allowed, "%s:%s", req.Resource, req.Action)
 	}

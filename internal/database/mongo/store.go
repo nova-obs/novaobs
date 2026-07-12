@@ -33,13 +33,16 @@ type Store struct {
 	lgeCol  *mongo.Collection
 	lgsCol  *mongo.Collection
 	lgrCol  *mongo.Collection
+	vmleCol *mongo.Collection
 	lgtCol  *mongo.Collection
 	lgcvCol *mongo.Collection
 	lgdvCol *mongo.Collection
 	lgccCol *mongo.Collection
 	ortCol  *mongo.Collection
-	msbCol  *mongo.Collection
-	mrtCol  *mongo.Collection
+	minCol  *mongo.Collection
+	msaCol  *mongo.Collection
+	mhsCol  *mongo.Collection
+	mcrCol  *mongo.Collection
 	arCol   *mongo.Collection
 	aruCol  *mongo.Collection
 	ariCol  *mongo.Collection
@@ -55,6 +58,8 @@ type Store struct {
 	imgCol  *mongo.Collection
 	secCol  *mongo.Collection
 	aeCol   *mongo.Collection
+	envCol  *mongo.Collection
+	erbCol  *mongo.Collection
 	kclCol  *mongo.Collection
 	knsCol  *mongo.Collection
 	kdiCol  *mongo.Collection
@@ -91,13 +96,16 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		lgeCol:  db.Collection("log_endpoints"),
 		lgsCol:  db.Collection("log_sources"),
 		lgrCol:  db.Collection("log_routes"),
+		vmleCol: db.Collection("vm_log_agent_endpoints"),
 		lgtCol:  db.Collection("log_targets"),
 		lgcvCol: db.Collection("log_collector_config_versions"),
 		lgdvCol: db.Collection("log_deployment_manifest_versions"),
 		lgccCol: db.Collection("log_collector_cluster_configs"),
 		ortCol:  db.Collection("observability_runtimes"),
-		msbCol:  db.Collection("metrics_service_bindings"),
-		mrtCol:  db.Collection("metrics_routes"),
+		minCol:  db.Collection("metrics_integrations"),
+		msaCol:  db.Collection("metrics_source_accesses"),
+		mhsCol:  db.Collection("metrics_health_snapshots"),
+		mcrCol:  db.Collection("metrics_collector_releases"),
 		arCol:   db.Collection("alert_rules"),
 		aruCol:  db.Collection("alert_rule_updates"),
 		ariCol:  db.Collection("alert_instances"),
@@ -113,6 +121,8 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		imgCol:  db.Collection("platform_images"),
 		secCol:  db.Collection("secrets"),
 		aeCol:   db.Collection("audit_events"),
+		envCol:  db.Collection("environments"),
+		erbCol:  db.Collection("environment_resource_bindings"),
 		kclCol:  db.Collection("k8s_clusters"),
 		knsCol:  db.Collection("k8s_namespaces"),
 		kdiCol:  db.Collection("k8s_deployment_inventory"),
@@ -130,7 +140,35 @@ func NewStore(ctx context.Context, uri string) (*Store, error) {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("初始化指标索引失败: %w", err)
 	}
+	if err := store.ensureEnvironmentIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("初始化环境索引失败: %w", err)
+	}
+	if err := store.ensureLogsIndexes(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, fmt.Errorf("初始化日志索引失败: %w", err)
+	}
 	return store, nil
+}
+
+func (s *Store) ensureLogsIndexes(ctx context.Context) error {
+	_, err := s.vmleCol.Indexes().CreateOne(ctx, vmLogAgentEndpointIndexModel())
+	return err
+}
+
+func vmLogAgentEndpointIndexModel() mongo.IndexModel {
+	return mongo.IndexModel{
+		Keys:    bson.D{{Key: "route_id", Value: 1}, {Key: "address", Value: 1}},
+		Options: options.Index().SetName("uniq_vm_log_route_address").SetUnique(true),
+	}
+}
+
+func (s *Store) ensureEnvironmentIndexes(ctx context.Context) error {
+	_, err := s.erbCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "resource_kind", Value: 1}, {Key: "resource_ref", Value: 1}},
+		Options: options.Index().SetName("uniq_environment_resource").SetUnique(true),
+	})
+	return err
 }
 
 func (s *Store) ensureCatalogIndexes(ctx context.Context) error {
@@ -186,34 +224,24 @@ func (s *Store) ensureAlertingIndexes(ctx context.Context) error {
 }
 
 func (s *Store) ensureMetricsIndexes(ctx context.Context) error {
-	_, err := s.msbCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{
-			Keys: bson.D{{Key: "service_id", Value: 1}},
-			Options: options.Index().
-				SetName("uniq_active_metrics_binding").
-				SetUnique(true).
-				SetPartialFilterExpression(bson.M{"status": "active"}),
-		},
-		{
-			Keys:    bson.D{{Key: "endpoint_id", Value: 1}, {Key: "status", Value: 1}},
-			Options: options.Index().SetName("metrics_binding_endpoint_status"),
-		},
-	})
+	_, err := s.minCol.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "environment_id", Value: 1}}, Options: options.Index().SetName("uniq_metrics_environment_integration").SetUnique(true)})
 	if err != nil {
 		return err
 	}
-	_, err = s.mrtCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{
-			Keys:    bson.D{{Key: "product_id", Value: 1}, {Key: "endpoint_id", Value: 1}, {Key: "cluster_id", Value: 1}, {Key: "namespace", Value: 1}, {Key: "k8s_service_name", Value: 1}, {Key: "port", Value: 1}, {Key: "metrics_path", Value: 1}},
-			Options: options.Index().SetName("uniq_active_metrics_route_target").SetUnique(true).SetPartialFilterExpression(bson.M{"status": metricRouteActiveStatus}),
-		},
-		{Keys: bson.D{{Key: "service_id", Value: 1}, {Key: "updated_at", Value: -1}}, Options: options.Index().SetName("metrics_route_service_updated")},
-		{Keys: bson.D{{Key: "cluster_id", Value: 1}, {Key: "product_id", Value: 1}, {Key: "endpoint_id", Value: 1}, {Key: "status", Value: 1}}, Options: options.Index().SetName("metrics_route_runtime_group")},
+	_, err = s.msaCol.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "integration_id", Value: 1}, {Key: "resource_binding_id", Value: 1}, {Key: "source_kind", Value: 1}}, Options: options.Index().SetName("uniq_metrics_source_access").SetUnique(true)})
+	if err != nil {
+		return err
+	}
+	_, err = s.mhsCol.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "integration_id", Value: 1}, {Key: "created_at", Value: -1}}, Options: options.Index().SetName("metrics_health_latest")})
+	if err != nil {
+		return err
+	}
+	_, err = s.mcrCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "source_access_id", Value: 1}, {Key: "generation", Value: 1}}, Options: options.Index().SetName("uniq_metrics_collector_generation").SetUnique(true)},
+		{Keys: bson.D{{Key: "source_access_id", Value: 1}, {Key: "created_at", Value: -1}}, Options: options.Index().SetName("metrics_collector_latest")},
 	})
 	return err
 }
-
-const metricRouteActiveStatus = "active"
 
 func (s *Store) Close(ctx context.Context) error {
 	return s.client.Disconnect(ctx)
@@ -249,7 +277,10 @@ func (s *Store) Onboardings() database.OnboardingStore                { return &
 func (s *Store) LogEndpoints() database.LogEndpointStore              { return &logEndpointStore{s.lgeCol} }
 func (s *Store) LogSources() database.LogSourceStore                  { return &logSourceStore{s.lgsCol} }
 func (s *Store) LogRoutes() database.LogRouteStore                    { return &logRouteStore{s.lgrCol} }
-func (s *Store) LogTargets() database.LogTargetStore                  { return &logTargetStore{s.lgtCol} }
+func (s *Store) VMLogAgentEndpoints() database.VMLogAgentEndpointStore {
+	return &vmLogAgentEndpointStore{s.vmleCol}
+}
+func (s *Store) LogTargets() database.LogTargetStore { return &logTargetStore{s.lgtCol} }
 func (s *Store) LogCollectorConfigVersions() database.LogCollectorConfigVersionStore {
 	return &logCollectorConfigVersionStore{s.lgcvCol}
 }
@@ -262,10 +293,18 @@ func (s *Store) LogCollectorClusterConfigs() database.LogCollectorClusterConfigS
 func (s *Store) ObservabilityRuntimes() database.ObservabilityRuntimeStore {
 	return &observabilityRuntimeStore{s.ortCol}
 }
-func (s *Store) MetricsServiceBindings() database.MetricsServiceBindingStore {
-	return &metricsServiceBindingStore{s.msbCol}
+func (s *Store) MetricsIntegrations() database.MetricsIntegrationStore {
+	return &metricsIntegrationStore{s.minCol}
 }
-func (s *Store) MetricsRoutes() database.MetricsRouteStore { return &metricsRouteStore{s.mrtCol} }
+func (s *Store) MetricsSourceAccesses() database.MetricsSourceAccessStore {
+	return &metricsSourceAccessStore{s.msaCol}
+}
+func (s *Store) MetricsHealthSnapshots() database.MetricsHealthSnapshotStore {
+	return &metricsHealthSnapshotStore{s.mhsCol}
+}
+func (s *Store) MetricsCollectorReleases() database.MetricsCollectorReleaseStore {
+	return &metricsCollectorReleaseStore{s.mcrCol}
+}
 func (s *Store) Alerting() database.AlertingStore {
 	return &alertingStore{client: s.client, rules: s.arCol, updates: s.aruCol, instances: s.ariCol, events: s.areCol, policies: s.arpCol, audits: s.aeCol}
 }
@@ -283,8 +322,12 @@ func (s *Store) IAMServiceAccounts() database.IAMServiceAccountStore {
 func (s *Store) PlatformImages() database.PlatformImageStore { return &platformImageStore{s.imgCol} }
 func (s *Store) Secrets() database.SecretStore               { return &secretStore{s.secCol} }
 func (s *Store) AuditEvents() database.AuditEventStore       { return &auditEventStore{s.aeCol} }
-func (s *Store) K8sClusters() database.K8sClusterStore       { return &k8sClusterStore{s.kclCol} }
-func (s *Store) K8sNamespaces() database.K8sNamespaceStore   { return &k8sNamespaceStore{s.knsCol} }
+func (s *Store) Environments() database.EnvironmentStore     { return &environmentStore{s.envCol} }
+func (s *Store) EnvironmentResourceBindings() database.EnvironmentResourceBindingStore {
+	return &environmentResourceBindingStore{s.erbCol}
+}
+func (s *Store) K8sClusters() database.K8sClusterStore     { return &k8sClusterStore{s.kclCol} }
+func (s *Store) K8sNamespaces() database.K8sNamespaceStore { return &k8sNamespaceStore{s.knsCol} }
 func (s *Store) K8sDeploymentInventory() database.K8sDeploymentInventoryStore {
 	return &k8sDeploymentInventoryStore{s.kdiCol}
 }

@@ -911,7 +911,7 @@ func normalizeSubjectType(value string) string {
 }
 
 func bindingID(subjectType string, subjectIDValue string, roleID string, scope platformrbac.Scope) string {
-	raw := fmt.Sprintf("%s|%s|%s|%t|%s|%s|%s|%s", subjectType, subjectIDValue, roleID, scope.Global, scope.ClusterID, scope.Namespace, scope.Environment, scope.ServiceID)
+	raw := fmt.Sprintf("%s|%s|%s|%t|%s|%s|%s|%s", subjectType, subjectIDValue, roleID, scope.Global, scope.ClusterID, scope.Namespace, scope.EnvironmentID, scope.ServiceID)
 	sum := sha256.Sum256([]byte(raw))
 	return "binding-platform-" + hex.EncodeToString(sum[:])[:16]
 }

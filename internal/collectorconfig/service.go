@@ -306,7 +306,7 @@ func serviceAttributes(service servicecatalog.Service) ServiceAttributes {
 		BusinessID:    service.BusinessID,
 		ApplicationID: service.ApplicationID,
 		IdentityType:  service.IdentityType,
-		Environment:   service.Environment,
+		EnvironmentID: service.EnvironmentID,
 		Cluster:       service.Cluster,
 		Namespace:     service.Namespace,
 		OwnerTeam:     service.OwnerTeam,

@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: novaapm-backend
+  namespace: novaapm-system
+  labels:
+    app.kubernetes.io/name: novaapm-backend
+    app.kubernetes.io/part-of: novaapm
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: novaapm-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: novaapm-backend
+        app.kubernetes.io/part-of: novaapm
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: hub-test.service.ucloud.cn/logsplatfrom/novaapm-backend:0.1.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OBS_PLATFORM_DATABASE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: mongodb-uri
+            - name: NOVAAPM_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: encryption-key
+            - name: NOVAAPM_ALERT_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: alert-ingest-token
+            - name: NOVAAPM_LOGS_AGENT_OPAMP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: novaapm-backend-config
+                  key: logs-agent-opamp-endpoint
+            - name: NOVAAPM_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: bootstrap-admin-username
+                  optional: true
+            - name: NOVAAPM_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: bootstrap-admin-password
+                  optional: true
+            - name: NOVAAPM_BOOTSTRAP_ADMIN_DISPLAY_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: novaapm-backend-secrets
+                  key: bootstrap-admin-display-name
+                  optional: true
+            - name: NOVAAPM_KUBECTL_PATH
+              value: /usr/local/bin/kubectl
+            - name: NOVAAPM_KUBECTL_TEMP_DIR
+              value: /tmp/novaapm
+            - name: HOME
+              value: /tmp/novaapm
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: temp
+              mountPath: /tmp/novaapm
+      volumes:
+        - name: config
+          configMap:
+            name: novaapm-backend-config
+        - name: temp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+      terminationGracePeriodSeconds: 30

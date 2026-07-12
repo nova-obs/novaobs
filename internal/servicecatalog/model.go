@@ -13,7 +13,7 @@ type Service struct {
 	Name          string     `json:"name" bson:"name"`
 	DisplayName   string     `json:"display_name" bson:"display_name"`
 	Description   string     `json:"description" bson:"description"`
-	Environment   string     `json:"environment" bson:"environment"`
+	EnvironmentID string     `json:"environment_id" bson:"environment_id"`
 	Cluster       string     `json:"cluster" bson:"cluster"`
 	Namespace     string     `json:"namespace" bson:"namespace"`
 	OwnerTeam     string     `json:"owner_team" bson:"owner_team"`
@@ -45,7 +45,7 @@ type ObservedTarget struct {
 	ID                 string            `json:"id" bson:"_id"`
 	ServiceID          string            `json:"service_id" bson:"service_id"`
 	TargetType         string            `json:"target_type" bson:"target_type"`
-	Environment        string            `json:"environment" bson:"environment"`
+	EnvironmentID      string            `json:"environment_id" bson:"environment_id"`
 	DisplayName        string            `json:"display_name" bson:"display_name"`
 	IdentityAttributes map[string]string `json:"identity_attributes" bson:"identity_attributes"`
 	MatchRules         map[string]string `json:"match_rules" bson:"match_rules"`
@@ -57,18 +57,16 @@ type ObservedTarget struct {
 }
 
 type ListFilter struct {
-	Query       string
-	Environment string
-	Status      string
-	Source      string
+	Query         string
+	EnvironmentID string
+	Status        string
+	Source        string
 }
 
 type DeleteDependencies struct {
-	LogRouteRefs      int
-	MetricRouteRefs   int
-	MetricBindingRefs int
-	AgentRefs         int
-	OnboardingRefs    int
+	LogRouteRefs   int
+	AgentRefs      int
+	OnboardingRefs int
 }
 
 type UpdateRequest struct {
@@ -78,7 +76,7 @@ type UpdateRequest struct {
 	Name          *string `json:"name"`
 	DisplayName   *string `json:"display_name"`
 	Description   *string `json:"description"`
-	Environment   *string `json:"environment"`
+	EnvironmentID *string `json:"environment_id"`
 	Cluster       *string `json:"cluster"`
 	Namespace     *string `json:"namespace"`
 	OwnerTeam     *string `json:"owner_team"`

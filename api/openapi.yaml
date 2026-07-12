@@ -786,6 +786,101 @@ paths:
       responses:
         "200":
           description: 返回 K8s 发布预览或应用结果、manifest YAML 和 artifact hash
+  /logs/routes/{id}/vm-installation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 获取 VM 日志 Agent 手工安装材料
+      description: 仅适用于 vm_file 路由且要求日志路由管理权限。返回内嵌采集配置的 systemd 安装脚本，不包含永久密钥，并记录安装材料导出审计。
+      responses:
+        "200":
+          description: 返回 Collector YAML、配置哈希、单文件安装脚本、健康地址示例和前置条件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogInstallationArtifact"
+        "400": { description: 路由不是 VM 类型 }
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 日志路由不存在 }
+  /logs/routes/{id}/vm-agent-endpoints:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 查询 VM 日志 Agent 节点地址
+      responses:
+        "200":
+          description: 返回路由下登记的全部 VM 节点
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "403": { description: 无日志路由读取权限 }
+    post:
+      summary: 登记 VM 日志 Agent 节点地址
+      description: 同一路由内 address 唯一；address 必须为 host:13133，允许 RFC1918 内网地址但拒绝本机、链路本地、未指定、多播和云元数据地址。写入前记录 attempt 审计，完成后记录 success 审计；success 审计失败时补偿删除。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VMLogAgentEndpointInput"
+      responses:
+        "201":
+          description: 节点已登记，初始状态为 pending_probe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "400": { description: 请求或地址无效 }
+        "403": { description: 无日志路由管理权限 }
+        "409": { description: 同一路由已存在相同地址 }
+  /logs/routes/{id}/vm-agent-endpoints/{endpointId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: endpointId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: 删除 VM 日志 Agent 节点地址
+      description: 删除前先记录 attempt 审计，完成后记录 success 审计；success 审计失败时补偿恢复节点，即使补偿失败仍保留 attempt 证据。
+      responses:
+        "204": { description: 节点已删除 }
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 路由或节点不存在 }
+  /logs/routes/{id}/vm-agent-endpoints/{endpointId}/probe:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: endpointId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 探测 VM 日志 Agent 节点 TCP 连通性
+      description: 探测前先记录 attempt 审计，再解析并校验全部目标 IP，仅探测固定 health_check 端口 13133。持久化 reachable 或 unreachable 状态、归一化消息、时间和延迟，不返回底层网络错误；完成后记录 success 审计，失败时补偿恢复原状态。
+      responses:
+        "200":
+          description: 返回更新后的节点探测状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 路由或节点不存在 }
   /observability/endpoints:
     get:
       summary: 查询统一观测端点
@@ -997,6 +1092,59 @@ components:
       type: http
       scheme: bearer
   schemas:
+    ActorRef:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        name: { type: string }
+    VMLogAgentEndpointInput:
+      type: object
+      required: [name, address]
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+          pattern: "^\\[?[^/]+\\]?:13133$"
+          example: "10.0.0.8:13133"
+    VMLogAgentEndpoint:
+      type: object
+      required: [id, route_id, service_id, name, address, status, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: { type: string }
+        route_id: { type: string }
+        service_id: { type: string }
+        name: { type: string }
+        address: { type: string, example: "10.0.0.8:13133" }
+        status:
+          type: string
+          enum: [pending_probe, reachable, unreachable]
+        last_probe_at: { type: string, format: date-time }
+        last_probe_status:
+          type: string
+          enum: [reachable, unreachable]
+        last_probe_message: { type: string }
+        last_probe_latency_ms: { type: integer, format: int64, minimum: 0 }
+        created_by: { $ref: "#/components/schemas/ActorRef" }
+        updated_by: { $ref: "#/components/schemas/ActorRef" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    VMLogInstallationArtifact:
+      type: object
+      required: [route_id, service_id, collector_yaml, collector_config_hash, install_script, health_address_example, prerequisites]
+      properties:
+        route_id: { type: string }
+        service_id: { type: string }
+        collector_yaml: { type: string }
+        collector_config_hash: { type: string }
+        install_script:
+          type: string
+          description: 内嵌启用 health_check 0.0.0.0:13133 的 Collector YAML，只负责写配置和管理 systemd；不包含永久密钥，也不下载或安装软件。执行前必须预装平台批准版本的 otelcol-contrib。
+        health_address_example: { type: string, example: "<vm-address>:13133" }
+        prerequisites:
+          type: array
+          items: { type: string }
     ObservabilityEndpointInput:
       type: object
       required: [name, kind, signal_types, scope, urls, status]

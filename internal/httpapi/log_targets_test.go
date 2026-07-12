@@ -11,6 +11,7 @@ import (
 	"novaapm/internal/database/memstore"
 	"novaapm/internal/logs"
 	"novaapm/internal/platform/authctx"
+	platformenvironment "novaapm/internal/platform/environment"
 	platformrbac "novaapm/internal/platform/rbac"
 	"novaapm/internal/servicecatalog"
 
@@ -68,13 +69,14 @@ func TestLogsTargetAPIRejectsSubjectWithoutManagePermission(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
 	store := memstore.NewStore()
-	serviceRepo := servicecatalog.NewRepository(store.Services())
+	require.NoError(t, store.Environments().Insert(ctx, platformenvironment.Environment{ID: "production", Name: "生产环境", Stage: platformenvironment.StageProduction, Status: platformenvironment.StatusActive}))
+	serviceRepo := servicecatalog.NewRepository(store.Services(), store.Environments())
 	service, err := serviceRepo.Create(ctx, servicecatalog.Service{
-		Name:        "orders-api",
-		DisplayName: "orders-api",
-		Environment: "production",
-		OwnerTeam:   "orders-team",
-		Status:      "active",
+		Name:          "orders-api",
+		DisplayName:   "orders-api",
+		EnvironmentID: "production",
+		OwnerTeam:     "orders-team",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.LogEndpoints().Insert(ctx, logs.LogEndpoint{
@@ -99,6 +101,7 @@ func TestLogsTargetAPIRejectsSubjectWithoutManagePermission(t *testing.T) {
 		nil,
 		nil,
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithVMLogAgentEndpoints(store.VMLogAgentEndpoints()),
 		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()))),
 	)

@@ -304,9 +304,9 @@ func TestServiceUpdatesGroup(t *testing.T) {
 	ctx := context.Background()
 
 	group, err := svc.CreateGroup(ctx, CollectorGroup{
-		Name:        "prod-group",
-		Mode:        "shared_gateway",
-		Environment: "production",
+		Name:          "prod-group",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
 	})
 	require.NoError(t, err)
 

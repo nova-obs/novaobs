@@ -92,9 +92,7 @@ func createServiceTargetHandler(repo servicecatalog.Repository, targetRepo servi
 			return
 		}
 		body.ServiceID = service.ID
-		if body.Environment == "" {
-			body.Environment = service.Environment
-		}
+		body.EnvironmentID = service.EnvironmentID
 		target, err := targetRepo.Create(bg, body)
 		if err != nil {
 			writeError(ctx, err)

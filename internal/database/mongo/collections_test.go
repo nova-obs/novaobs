@@ -115,3 +115,11 @@ func TestCatalogServiceIndexKeepsProductServiceIdentityUnique(t *testing.T) {
 	require.Nil(t, model.Options.PartialFilterExpression)
 	require.Equal(t, bson.D{{Key: "product_id", Value: 1}, {Key: "name", Value: 1}}, model.Keys)
 }
+
+func TestVMLogAgentEndpointIndexKeepsRouteAddressUnique(t *testing.T) {
+	model := vmLogAgentEndpointIndexModel()
+
+	require.Equal(t, "uniq_vm_log_route_address", *model.Options.Name)
+	require.True(t, *model.Options.Unique)
+	require.Equal(t, bson.D{{Key: "route_id", Value: 1}, {Key: "address", Value: 1}}, model.Keys)
+}

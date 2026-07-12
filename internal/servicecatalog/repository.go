@@ -6,18 +6,20 @@ import (
 	"time"
 
 	"novaapm/internal/database"
+	platformenvironment "novaapm/internal/platform/environment"
 	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Repository struct {
-	store    database.ServiceStore
-	products database.ProductStore
+	store        database.ServiceStore
+	products     database.ProductStore
+	environments database.EnvironmentStore
 }
 
-func NewRepository(store database.ServiceStore, products ...database.ProductStore) Repository {
-	repo := Repository{store: store}
+func NewRepository(store database.ServiceStore, environments database.EnvironmentStore, products ...database.ProductStore) Repository {
+	repo := Repository{store: store, environments: environments}
 	if len(products) > 0 {
 		repo.products = products[0]
 	}
@@ -58,6 +60,9 @@ func (r Repository) Create(ctx context.Context, service Service) (Service, error
 	if err := r.validateProduct(ctx, service.ProductID); err != nil {
 		return Service{}, err
 	}
+	if err := r.validateEnvironment(ctx, service.EnvironmentID); err != nil {
+		return Service{}, err
+	}
 	if service.ID == "" {
 		service.ID = primitive.NewObjectID().Hex()
 	}
@@ -74,6 +79,20 @@ func (r Repository) Create(ctx context.Context, service Service) (Service, error
 		return Service{}, err
 	}
 	return r.resolveTenant(ctx, service)
+}
+
+func (r Repository) validateEnvironment(ctx context.Context, id string) error {
+	if r.environments == nil {
+		return apperr.InvalidRequest("环境存储不可用")
+	}
+	var item platformenvironment.Environment
+	if err := r.environments.FindByID(ctx, strings.TrimSpace(id), &item); err != nil {
+		return apperr.InvalidRequest("服务所属环境不存在")
+	}
+	if item.Status != platformenvironment.StatusActive {
+		return apperr.InvalidRequest("服务所属环境已归档")
+	}
+	return nil
 }
 
 func (r Repository) validateProduct(ctx context.Context, productID string) error {
@@ -124,6 +143,7 @@ func (r Repository) Update(ctx context.Context, id string, req UpdateRequest) (S
 	if err := validateService(updated); err != nil {
 		return Service{}, err
 	}
+	if err := r.validateEnvironment(ctx, updated.EnvironmentID); err != nil { return Service{}, err }
 	updated = normalizeService(updated)
 	updated.ID = current.ID
 	updated.CreatedAt = current.CreatedAt
@@ -145,12 +165,6 @@ func (r Repository) Delete(ctx context.Context, id string, deps DeleteDependenci
 	}
 	if deps.LogRouteRefs > 0 {
 		return Service{}, apperr.Conflict("服务仍有关联日志路由，不能删除")
-	}
-	if deps.MetricRouteRefs > 0 {
-		return Service{}, apperr.Conflict("服务仍有关联指标采集路由，不能删除")
-	}
-	if deps.MetricBindingRefs > 0 {
-		return Service{}, apperr.Conflict("服务仍有关联指标查询绑定，不能删除")
 	}
 	if deps.AgentRefs > 0 {
 		return Service{}, apperr.Conflict("服务仍有关联采集 Agent，不能删除")
@@ -192,7 +206,7 @@ func validateService(service Service) error {
 	if strings.TrimSpace(service.Name) == "" {
 		return apperr.InvalidRequest("服务名称不能为空")
 	}
-	if strings.TrimSpace(service.Environment) == "" {
+	if strings.TrimSpace(service.EnvironmentID) == "" {
 		return apperr.InvalidRequest("服务环境不能为空")
 	}
 	if service.Source != "" && service.Source != "manual" && service.Source != "cmdb" && service.Source != "k8s" {
@@ -213,7 +227,7 @@ func validateService(service Service) error {
 func normalizeService(service Service) Service {
 	service.Name = strings.TrimSpace(service.Name)
 	service.ProductID = strings.TrimSpace(service.ProductID)
-	service.Environment = strings.TrimSpace(service.Environment)
+	service.EnvironmentID = strings.TrimSpace(service.EnvironmentID)
 	service.Cluster = strings.TrimSpace(service.Cluster)
 	service.Namespace = strings.TrimSpace(service.Namespace)
 	service.CMDBServiceID = strings.TrimSpace(service.CMDBServiceID)
@@ -269,8 +283,8 @@ func applyUpdate(service Service, req UpdateRequest) Service {
 	if req.Description != nil {
 		service.Description = *req.Description
 	}
-	if req.Environment != nil {
-		service.Environment = *req.Environment
+	if req.EnvironmentID != nil {
+		service.EnvironmentID = *req.EnvironmentID
 	}
 	if req.Cluster != nil {
 		service.Cluster = *req.Cluster
@@ -315,7 +329,7 @@ func applyFilter(services []Service, filter ListFilter) []Service {
 		if filter.Status == "" && service.Status == "deleted" {
 			continue
 		}
-		if filter.Environment != "" && service.Environment != filter.Environment {
+		if filter.EnvironmentID != "" && service.EnvironmentID != filter.EnvironmentID {
 			continue
 		}
 		if filter.Status != "" && service.Status != filter.Status {

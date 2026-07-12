@@ -58,14 +58,14 @@ func TestRuleSpecValidateRejectsDerivedMetricForMetrics(t *testing.T) {
 	require.Contains(t, err.Error(), "指标告警不支持日志派生指标")
 }
 
-func TestRuleSpecValidateRejectsMetricsRuleWithoutBasePromQL(t *testing.T) {
+func TestRuleSpecValidateRejectsMetricsRuleWithoutEnvironment(t *testing.T) {
 	spec := validMetricsRuleSpec()
-	spec.Scope.BasePromQL = ""
+	spec.Scope.EnvironmentID = ""
 
 	err := spec.Validate()
 
 	require.ErrorIs(t, err, ErrInvalidSpec)
-	require.Contains(t, err.Error(), "base_promql")
+	require.Contains(t, err.Error(), "环境")
 }
 
 func TestRuleSpecValidateAcceptsExternalLogTargetScope(t *testing.T) {
@@ -193,13 +193,10 @@ func validMetricsRuleSpec() RuleSpec {
 		SignalType: SignalTypeMetrics,
 		Name:       "orders-request-rate",
 		Scope: RuleScope{
-			ServiceID:        "service-orders",
-			ServiceName:      "orders-api",
-			EndpointID:       "vm-prod",
-			MetricsBindingID: "binding-orders",
-			AccountID:        "1001",
-			ProjectID:        "2001",
-			BasePromQL:       `service:requests:rate5m{service="orders-api"}`,
+			EnvironmentID:   "env-prod",
+			EnvironmentName: "生产环境",
+			EndpointID:      "vm-prod",
+			ScopeLabels:     map[string]string{"cluster": "prod-a"},
 		},
 		Query: QuerySpec{Mode: QueryModePromQL, Expression: `sum(rate(http_requests_total{status=~"5.."}[5m]))`},
 		Trigger: TriggerSpec{

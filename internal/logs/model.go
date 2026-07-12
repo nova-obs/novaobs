@@ -30,6 +30,10 @@ const (
 
 	ParseRuleRegex = "regex"
 	ParseRuleJSON  = "json"
+
+	VMEndpointStatusPendingProbe = "pending_probe"
+	VMEndpointStatusReachable    = "reachable"
+	VMEndpointStatusUnreachable  = "unreachable"
 )
 
 type LogEndpoint struct {
@@ -183,6 +187,38 @@ type ActorRef struct {
 	Name string `json:"name" bson:"name"`
 }
 
+type VMLogAgentEndpoint struct {
+	ID                 string     `json:"id" bson:"_id"`
+	RouteID            string     `json:"route_id" bson:"route_id"`
+	ServiceID          string     `json:"service_id" bson:"service_id"`
+	Name               string     `json:"name" bson:"name"`
+	Address            string     `json:"address" bson:"address"`
+	Status             string     `json:"status" bson:"status"`
+	LastProbeAt        *time.Time `json:"last_probe_at,omitempty" bson:"last_probe_at,omitempty"`
+	LastProbeStatus    string     `json:"last_probe_status,omitempty" bson:"last_probe_status,omitempty"`
+	LastProbeMessage   string     `json:"last_probe_message,omitempty" bson:"last_probe_message,omitempty"`
+	LastProbeLatencyMS int64      `json:"last_probe_latency_ms,omitempty" bson:"last_probe_latency_ms,omitempty"`
+	CreatedBy          ActorRef   `json:"created_by" bson:"created_by"`
+	UpdatedBy          ActorRef   `json:"updated_by" bson:"updated_by"`
+	CreatedAt          time.Time  `json:"created_at" bson:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" bson:"updated_at"`
+}
+
+type UpsertVMEndpointRequest struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
+type VMInstallationArtifact struct {
+	RouteID              string   `json:"route_id"`
+	ServiceID            string   `json:"service_id"`
+	CollectorYAML        string   `json:"collector_yaml"`
+	CollectorConfigHash  string   `json:"collector_config_hash"`
+	InstallScript        string   `json:"install_script"`
+	HealthAddressExample string   `json:"health_address_example"`
+	Prerequisites        []string `json:"prerequisites"`
+}
+
 type K8sSourceInput struct {
 	ClusterID             string         `json:"cluster_id"`
 	Namespace             string         `json:"namespace"`
@@ -222,12 +258,12 @@ type LogCollectorClusterConfig struct {
 }
 
 type SyncK8sNamespaceRequest struct {
-	ProductID    string `json:"product_id"`
-	ClusterID    string `json:"cluster_id"`
-	Namespace    string `json:"namespace"`
-	Environment  string `json:"environment"`
-	OwnerTeam    string `json:"owner_team"`
-	WorkloadKind string `json:"workload_kind"`
+	ProductID     string `json:"product_id"`
+	ClusterID     string `json:"cluster_id"`
+	Namespace     string `json:"namespace"`
+	EnvironmentID string `json:"environment_id"`
+	OwnerTeam     string `json:"owner_team"`
+	WorkloadKind  string `json:"workload_kind"`
 }
 
 type SyncedK8sService struct {
@@ -342,20 +378,20 @@ type Workspace struct {
 }
 
 type ServiceSummary struct {
-	ID           string `json:"id"`
-	ProductID    string `json:"product_id"`
-	AccountID    string `json:"account_id"`
-	ProjectID    string `json:"project_id"`
-	Name         string `json:"name"`
-	DisplayName  string `json:"display_name"`
-	Environment  string `json:"environment"`
-	Cluster      string `json:"cluster"`
-	Namespace    string `json:"namespace"`
-	OwnerTeam    string `json:"owner_team"`
-	IdentityType string `json:"identity_type"`
-	ServiceType  string `json:"service_type"`
-	Source       string `json:"source"`
-	SyncStatus   string `json:"sync_status"`
+	ID            string `json:"id"`
+	ProductID     string `json:"product_id"`
+	AccountID     string `json:"account_id"`
+	ProjectID     string `json:"project_id"`
+	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
+	EnvironmentID string `json:"environment_id"`
+	Cluster       string `json:"cluster"`
+	Namespace     string `json:"namespace"`
+	OwnerTeam     string `json:"owner_team"`
+	IdentityType  string `json:"identity_type"`
+	ServiceType   string `json:"service_type"`
+	Source        string `json:"source"`
+	SyncStatus    string `json:"sync_status"`
 }
 
 type AgentGroupSummary struct {
@@ -363,7 +399,7 @@ type AgentGroupSummary struct {
 	Name            string `json:"name"`
 	DisplayName     string `json:"display_name"`
 	Mode            string `json:"mode"`
-	Environment     string `json:"environment"`
+	EnvironmentID   string `json:"environment_id"`
 	Cluster         string `json:"cluster"`
 	Namespace       string `json:"namespace"`
 	Status          string `json:"status"`

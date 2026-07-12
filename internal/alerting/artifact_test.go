@@ -51,7 +51,7 @@ func TestCompileVmalertArtifactProducesMetricsGroupsWithoutVLogsHeaders(t *testi
 	require.Contains(t, compiled["expr"], "http_requests_total")
 	require.Equal(t, "metrics", compiled["labels"].(map[string]any)["signal_type"])
 	require.Equal(t, "vm-prod", compiled["labels"].(map[string]any)["endpoint_id"])
-	require.Equal(t, "binding-orders", compiled["labels"].(map[string]any)["metrics_binding_id"])
+	require.Equal(t, "env-prod", compiled["labels"].(map[string]any)["novaapm_environment_id"])
 }
 
 func TestCompileVmalertArtifactIsDeterministicRegardlessOfInputOrder(t *testing.T) {
@@ -75,6 +75,7 @@ func TestCompileVmalertArtifactExcludesDisabledRules(t *testing.T) {
 func TestCompileVmalertArtifactAddsBoundedRecordingRuleWhenDerivedMetricEnabled(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Grouping.Fields = nil
+	spec.Scope.EnvironmentID = "env-prod"
 	spec.DerivedMetric = &DerivedMetricSpec{Enabled: true, Signal: "match_count", Labels: map[string]string{"environment": "prod"}}
 	artifact, err := CompileVmalertArtifact("runtime", []Rule{{ID: "rule-a", Spec: spec, State: RuleStateEnabled}}, time.Now())
 	require.NoError(t, err)
@@ -89,4 +90,5 @@ func TestCompileVmalertArtifactAddsBoundedRecordingRuleWhenDerivedMetricEnabled(
 	require.Contains(t, recording["expr"], "_time:1m")
 	require.NotContains(t, recording["expr"], "filter matches")
 	require.Equal(t, "rule-a", recording["labels"].(map[string]any)["novaapm_rule_id"])
+	require.Equal(t, "env-prod", recording["labels"].(map[string]any)["novaapm_environment_id"])
 }

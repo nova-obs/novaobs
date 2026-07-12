@@ -23,12 +23,12 @@ var k8sDaemonSetBundleTemplate = template.Must(template.New("k8s-daemonset-bundl
 const k8sLogsAgentName = "novaapm-logs-agent"
 
 type renderInput struct {
-	ServiceName string
-	Environment string
-	Source      LogSource
-	Endpoint    LogEndpoint
-	Route       LogRoute
-	Deployment  agentDeploymentOptions
+	ServiceName   string
+	EnvironmentID string
+	Source        LogSource
+	Endpoint      LogEndpoint
+	Route         LogRoute
+	Deployment    agentDeploymentOptions
 }
 
 type renderedRouteConfig struct {
@@ -853,7 +853,7 @@ func renderK8sRouteProcessor(input renderInput, suffix string) string {
         action: upsert
       - key: deployment.environment
         value: %s
-        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Route.ServiceID), yamlQuote(input.Environment))}
+        action: upsert`, suffix, yamlQuote(input.ServiceName), yamlQuote(input.Route.ServiceID), yamlQuote(input.EnvironmentID))}
 	if hasEnabledParseRules(input.Source.ParseRules) {
 		lines = append(lines, renderK8sParseProcessor(suffix, input.Source.ParseRules))
 	}
@@ -1017,7 +1017,11 @@ processors:
   batch:
 exporters:
 %s
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
 service:
+  extensions: [health_check]
   pipelines:
     logs:
       receivers: [file_log/vm]
@@ -1028,7 +1032,7 @@ service:
 		parseProcessor,
 		yamlQuote(input.ServiceName),
 		yamlQuote(input.Route.ServiceID),
-		yamlQuote(input.Environment),
+		yamlQuote(input.EnvironmentID),
 		exporterYAML,
 		pipelineProcessors,
 		exporterName,

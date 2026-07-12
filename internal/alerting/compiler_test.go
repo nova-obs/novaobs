@@ -34,12 +34,12 @@ func TestCompileTestQueryUsesLogTargetBaseFilterWhenPresent(t *testing.T) {
 	require.NotContains(t, query, `"service.name":=`)
 }
 
-func TestCompileMetricsQueryInheritsBasePromQLAndThreshold(t *testing.T) {
+func TestCompileMetricsQueryEnforcesEnvironmentScopeAndThreshold(t *testing.T) {
 	spec := validMetricsRuleSpec()
 	query, err := CompileAlertQuery(spec)
 
 	require.NoError(t, err)
-	require.Equal(t, `((sum(rate(http_requests_total{status=~"5.."}[5m]))) and (service:requests:rate5m{service="orders-api"})) >= 10`, query)
+	require.Equal(t, `((sum(rate(http_requests_total{status=~"5.."}[5m]))) and on(cluster,novaapm_environment_id) ({cluster="prod-a",novaapm_environment_id="env-prod"})) >= 10`, query)
 }
 
 func TestCompileMetricsTestQueryDoesNotApplyThreshold(t *testing.T) {
@@ -47,7 +47,7 @@ func TestCompileMetricsTestQueryDoesNotApplyThreshold(t *testing.T) {
 	query, err := CompileTestQuery(spec)
 
 	require.NoError(t, err)
-	require.Equal(t, `(sum(rate(http_requests_total{status=~"5.."}[5m]))) and (service:requests:rate5m{service="orders-api"})`, query)
+	require.Equal(t, `(sum(rate(http_requests_total{status=~"5.."}[5m]))) and on(cluster,novaapm_environment_id) ({cluster="prod-a",novaapm_environment_id="env-prod"})`, query)
 }
 
 func TestCompileQueryEscapesUserString(t *testing.T) {

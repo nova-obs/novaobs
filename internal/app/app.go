@@ -25,6 +25,7 @@ import (
 	"novaapm/internal/opamp"
 	"novaapm/internal/platform/audit"
 	platformauth "novaapm/internal/platform/auth"
+	platformenvironment "novaapm/internal/platform/environment"
 	"novaapm/internal/platform/iam"
 	platformimages "novaapm/internal/platform/images"
 	"novaapm/internal/platform/rbac"
@@ -43,7 +44,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		return nil, fmt.Errorf("连接 MongoDB 失败: %w", err)
 	}
 
-	svcRepo := servicecatalog.NewRepository(store.Services(), store.Products())
+	svcRepo := servicecatalog.NewRepository(store.Services(), store.Environments(), store.Products())
 	productRepo := servicecatalog.NewProductRepository(store.Products())
 	targetRepo := servicecatalog.NewTargetRepository(store.ServiceTargets())
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances(), collectormanagement.WithConfigVersionStore(store.CollectorConfigVersions()))
@@ -72,7 +73,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		superSubjects = append(superSubjects, bootstrapAdmin)
 	}
 	rbacSvc := rbac.NewService(rbacRepo, rbac.WithSubjectResolver(iam.NewSubjectResolver(iamRepo)), rbac.WithSuperSubjects(superSubjects...))
-	alertScopeResolver := alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsServiceBindings(), store.Products())
+	alertScopeResolver := alerting.NewSignalAwareStoreScopeResolver(store.Services(), store.LogRoutes(), store.LogTargets(), store.LogEndpoints(), store.MetricsIntegrations(), store.Environments(), store.Products())
 	alertRepository := alerting.NewStoreRepository(store.Alerting())
 	alertPolicyResolver := alerting.NewStorePolicyResolver(alertRepository)
 	alertPolicySvc := alerting.NewPolicyService(alerting.PolicyDependencies{Repository: alertRepository, Authorizer: rbacSvc})
@@ -130,6 +131,13 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		platformimages.WithAuthorizer(rbacSvc),
 		platformimages.WithAuditor(auditSvc),
 	)
+	environmentRepo := platformenvironment.NewStoreRepository(store.Environments(), store.EnvironmentResourceBindings())
+	environmentSvc := platformenvironment.NewService(
+		environmentRepo,
+		platformenvironment.NewStoreResourceValidator(store.K8sClusters(), store.CollectorGroups()),
+		platformenvironment.WithAuthorizer(rbacSvc),
+		platformenvironment.WithAuditor(auditSvc),
+	)
 	clusterCredentialSvc := cluster.NewCredentialService(secretSvc, rbacSvc, auditSvc)
 	k8sClientProvider := kubeclient.NewProvider(clusterCredentialSvc)
 	k8sOpsModule := k8sops.NewModuleWithSecurity(
@@ -164,25 +172,24 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		logs.WithAgentOpAMPEndpoint(os.Getenv("NOVAAPM_LOGS_AGENT_OPAMP_ENDPOINT")),
 		logs.WithImageTemplateValues(imageSvc),
 		logs.WithLogTargets(store.LogTargets()),
+		logs.WithVMLogAgentEndpoints(store.VMLogAgentEndpoints()),
 		logs.WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		logs.WithAuthorizer(rbacSvc),
 		logs.WithEndpointAuditor(auditSvc),
 	)
-	endpointSvc := obsendpoint.NewLogEndpointFacade(
+	endpointSvc := obsendpoint.NewService(
 		store.LogEndpoints(),
 		obsendpoint.WithAuthorizer(rbacSvc),
 		obsendpoint.WithAuditor(auditSvc),
 	)
-	metricsSvc := metrics.NewService(metrics.Dependencies{
-		Bindings:       store.MetricsServiceBindings(),
-		Routes:         store.MetricsRoutes(),
-		Runtimes:       store.ObservabilityRuntimes(),
-		Endpoints:      endpointSvc,
-		Services:       svcRepo,
-		K8sResources:   k8sOpsModule.Resource,
-		K8sDeployments: k8sOpsModule.Deploy,
-		ImageTemplates: imageSvc,
+	metricsIntegrationSvc := metrics.NewIntegrationService(metrics.IntegrationDependencies{
+		Repository:     metrics.NewStoreIntegrationRepository(store.MetricsIntegrations(), store.MetricsSourceAccesses(), store.MetricsHealthSnapshots(), store.MetricsCollectorReleases()),
+		Environments:   environmentRepo,
+		Destinations:   metrics.NewEndpointDestinationReader(endpointSvc),
 		Authorizer:     rbacSvc,
+		Deployer:       k8sOpsModule.Deploy,
+		ImageTemplates: imageSvc,
+		K8sResources:   k8sOpsModule.Resource,
 	})
 	alertRuntimeSvc := alerting.NewLogRuntimeService(alerting.LogRuntimeDependencies{
 		Endpoints:             store.LogEndpoints(),
@@ -203,27 +210,28 @@ func New(cfg config.Config) (*gin.Engine, error) {
 	})
 
 	deps := httpapi.Dependencies{
-		Store:                  store,
-		ProductRepo:            productRepo,
-		ServiceRepo:            svcRepo,
-		ServiceTargetRepo:      targetRepo,
-		CollectorConfigService: collectorConfigSvc,
-		CollectorService:       collectorSvc,
-		OnboardingService:      onboardingSvc,
-		LogsService:            logsSvc,
-		ObservabilityEndpoints: endpointSvc,
-		MetricsService:         metricsSvc,
-		AlertRuntimeService:    alertRuntimeSvc,
-		MetricsRuntimeService:  metricsRuntimeSvc,
-		AlertService:           alertSvc,
-		AlertEventIngestor:     alertEventIngestor,
-		AlertPolicyService:     alertPolicySvc,
-		PlatformIAMService:     iamSvc,
-		PlatformImageService:   imageSvc,
-		K8sOpsModule:           k8sOpsModule,
-		OpAMPManager:           opampMgr,
-		CollectorTemplate:      cfg.CollectorTemplate,
-		PlatformAuthService:    authSvc,
+		Store:                      store,
+		ProductRepo:                productRepo,
+		ServiceRepo:                svcRepo,
+		ServiceTargetRepo:          targetRepo,
+		CollectorConfigService:     collectorConfigSvc,
+		CollectorService:           collectorSvc,
+		OnboardingService:          onboardingSvc,
+		LogsService:                logsSvc,
+		ObservabilityEndpoints:     endpointSvc,
+		MetricsIntegrationService:  metricsIntegrationSvc,
+		AlertRuntimeService:        alertRuntimeSvc,
+		MetricsRuntimeService:      metricsRuntimeSvc,
+		AlertService:               alertSvc,
+		AlertEventIngestor:         alertEventIngestor,
+		AlertPolicyService:         alertPolicySvc,
+		PlatformIAMService:         iamSvc,
+		PlatformEnvironmentService: environmentSvc,
+		PlatformImageService:       imageSvc,
+		K8sOpsModule:               k8sOpsModule,
+		OpAMPManager:               opampMgr,
+		CollectorTemplate:          cfg.CollectorTemplate,
+		PlatformAuthService:        authSvc,
 	}
 	return httpapi.NewRouter(deps), nil
 }

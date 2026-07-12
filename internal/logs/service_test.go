@@ -2,18 +2,23 @@ package logs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
 	"novaapm/internal/database/memstore"
 	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
 	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
 	k8sopsresource "novaapm/internal/modules/k8sops/resource"
 	obsruntime "novaapm/internal/observability/runtime"
+	platformaudit "novaapm/internal/platform/audit"
+	platformenvironment "novaapm/internal/platform/environment"
 	platformrbac "novaapm/internal/platform/rbac"
 	"novaapm/internal/servicecatalog"
 
@@ -26,12 +31,12 @@ func TestSyncK8sNamespaceServicesCreatesServiceAndTarget(t *testing.T) {
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 
 	result, err := fixture.service.SyncK8sNamespaceServices(ctx, SyncK8sNamespaceRequest{
-		ProductID:    fixture.productID,
-		ClusterID:    "test03",
-		Namespace:    "logplatform",
-		Environment:  "prod",
-		OwnerTeam:    "sre",
-		WorkloadKind: "Deployment",
+		ProductID:     fixture.productID,
+		ClusterID:     "test03",
+		Namespace:     "logplatform",
+		EnvironmentID: "prod",
+		OwnerTeam:     "sre",
+		WorkloadKind:  "Deployment",
 	})
 
 	require.NoError(t, err)
@@ -640,7 +645,7 @@ func TestK8sHostPathSourceTypeIsRetired(t *testing.T) {
 	require.ErrorContains(t, err, "日志来源类型只支持 k8s_stdout、vm_file")
 }
 
-func TestCreateVMRouteAutoCreatesHostAgentGroup(t *testing.T) {
+func TestCreateVMRouteDoesNotCreateAgentGroupAndAwaitsNodes(t *testing.T) {
 	ctx := context.Background()
 	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
 	service := fixture.createVMService(t, "billing-api")
@@ -664,12 +669,386 @@ func TestCreateVMRouteAutoCreatesHostAgentGroup(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	group, err := collectormanagement.NewService(fixture.store.CollectorGroups(), fixture.store.CollectorInstances()).GetGroup(ctx, route.Route.AgentGroupID)
+	require.Empty(t, route.Route.AgentGroupID)
+	require.Equal(t, "awaiting_nodes", route.Route.Status)
+	groups, err := collectormanagement.NewService(fixture.store.CollectorGroups(), fixture.store.CollectorInstances()).ListGroups(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "logs-vm-prod-billing-vms", group.Name)
-	require.Equal(t, "shared_gateway", group.Mode)
-	require.Empty(t, group.Cluster)
-	require.Empty(t, group.Namespace)
+	require.Empty(t, groups)
+}
+
+type fakeVMEndpointChecker struct {
+	latency time.Duration
+	err     error
+}
+
+type countingVMEndpointChecker struct{ calls int }
+
+func (c *countingVMEndpointChecker) Check(context.Context, string) (time.Duration, error) {
+	c.calls++
+	return time.Millisecond, nil
+}
+
+type recordingEndpointAuditor struct {
+	events     []platformaudit.Event
+	err        error
+	failResult string
+}
+
+type failingCompensationVMStore struct {
+	database.VMLogAgentEndpointStore
+	failDelete       bool
+	failInsert       bool
+	failUpdateOnCall int
+	updateCalls      int
+}
+
+func (s *failingCompensationVMStore) Delete(ctx context.Context, id string) error {
+	if s.failDelete {
+		return errors.New("compensation delete failed")
+	}
+	return s.VMLogAgentEndpointStore.Delete(ctx, id)
+}
+
+func (s *failingCompensationVMStore) Insert(ctx context.Context, value interface{}) error {
+	if s.failInsert {
+		return errors.New("compensation insert failed")
+	}
+	return s.VMLogAgentEndpointStore.Insert(ctx, value)
+}
+
+func (s *failingCompensationVMStore) Update(ctx context.Context, id string, value interface{}) error {
+	s.updateCalls++
+	if s.updateCalls == s.failUpdateOnCall {
+		return errors.New("compensation update failed")
+	}
+	return s.VMLogAgentEndpointStore.Update(ctx, id, value)
+}
+
+func (a *recordingEndpointAuditor) Record(_ context.Context, event platformaudit.Event) (platformaudit.Event, error) {
+	if a.err != nil && (a.failResult == "" || a.failResult == event.Result) {
+		return platformaudit.Event{}, a.err
+	}
+	a.events = append(a.events, event)
+	return event, nil
+}
+
+func TestVMEndpointDeleteStopsWhenAuditCannotBeRecorded(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	auditor := &recordingEndpointAuditor{}
+	fixture.service.endpointAuditor = auditor
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	auditor.err, auditor.failResult = errors.New("audit unavailable"), "success"
+	require.ErrorContains(t, fixture.service.DeleteVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID), "audit unavailable")
+	var stored VMLogAgentEndpoint
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByID(ctx, node.ID, &stored))
+}
+
+func TestVMEndpointCreateRollsBackWhenAuditFails(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("audit unavailable"), failResult: "success"}
+	_, err = fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.ErrorContains(t, err, "audit unavailable")
+	var items []VMLogAgentEndpoint
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByRoute(ctx, route.Route.ID, &items))
+	require.Empty(t, items)
+}
+
+func TestVMEndpointCreateAttemptAuditFailureMakesNoBusinessChange(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("attempt audit unavailable"), failResult: "processing"}
+	_, err = fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.ErrorContains(t, err, "attempt audit unavailable")
+	var items []VMLogAgentEndpoint
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByRoute(ctx, route.Route.ID, &items))
+	require.Empty(t, items)
+}
+
+func TestVMEndpointProbeRestoresOriginalWhenAuditFails(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	fixture.service.vmEndpointChecker = fakeVMEndpointChecker{latency: time.Millisecond}
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("audit unavailable"), failResult: "success"}
+	_, err = fixture.service.ProbeVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.ErrorContains(t, err, "audit unavailable")
+	var stored VMLogAgentEndpoint
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByID(ctx, node.ID, &stored))
+	require.Equal(t, VMEndpointStatusPendingProbe, stored.Status)
+	require.Nil(t, stored.LastProbeAt)
+}
+
+func TestVMEndpointProbeAttemptAuditFailureSkipsProbeAndWrite(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	checker := &countingVMEndpointChecker{}
+	fixture.service.vmEndpointChecker = checker
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("attempt audit unavailable"), failResult: "processing"}
+	_, err = fixture.service.ProbeVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.ErrorContains(t, err, "attempt audit unavailable")
+	require.Zero(t, checker.calls)
+	var stored VMLogAgentEndpoint
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByID(ctx, node.ID, &stored))
+	require.Equal(t, VMEndpointStatusPendingProbe, stored.Status)
+}
+
+func TestVMEndpointCreateReportsAuditAndCompensationFailures(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	fixture.service.vmEndpoints = &failingCompensationVMStore{VMLogAgentEndpointStore: fixture.store.VMLogAgentEndpoints(), failDelete: true}
+	auditor := &recordingEndpointAuditor{err: errors.New("audit unavailable"), failResult: "success"}
+	fixture.service.endpointAuditor = auditor
+	_, err = fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.ErrorContains(t, err, "audit unavailable")
+	require.ErrorContains(t, err, "compensation delete failed")
+	require.Len(t, auditor.events, 1)
+	require.Equal(t, "processing", auditor.events[0].Result)
+	require.Equal(t, "attempt", auditor.events[0].RequestSummary["phase"])
+}
+
+func TestVMEndpointDeleteReportsAuditAndRestoreFailures(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	fixture.service.vmEndpoints = &failingCompensationVMStore{VMLogAgentEndpointStore: fixture.store.VMLogAgentEndpoints(), failInsert: true}
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("audit unavailable"), failResult: "success"}
+	err = fixture.service.DeleteVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.ErrorContains(t, err, "audit unavailable")
+	require.ErrorContains(t, err, "compensation insert failed")
+}
+
+func TestVMEndpointProbeReportsAuditAndRestoreFailures(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	fixture.service.vmEndpointChecker = fakeVMEndpointChecker{latency: time.Millisecond}
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	fixture.service.vmEndpoints = &failingCompensationVMStore{VMLogAgentEndpointStore: fixture.store.VMLogAgentEndpoints(), failUpdateOnCall: 2}
+	fixture.service.endpointAuditor = &recordingEndpointAuditor{err: errors.New("audit unavailable"), failResult: "success"}
+	_, err = fixture.service.ProbeVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.ErrorContains(t, err, "audit unavailable")
+	require.ErrorContains(t, err, "compensation update failed")
+}
+
+func (c fakeVMEndpointChecker) Check(context.Context, string) (time.Duration, error) {
+	return c.latency, c.err
+}
+
+func TestVMEndpointLifecycleAndRouteDeletion(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	fixture.service.vmEndpointChecker = fakeVMEndpointChecker{latency: 12 * time.Millisecond}
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+
+	node, err := fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	require.Equal(t, VMEndpointStatusPendingProbe, node.Status)
+	_, err = fixture.service.CreateVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, UpsertVMEndpointRequest{Name: "duplicate", Address: "10.0.0.8:13133"})
+	require.ErrorContains(t, err, "已存在")
+
+	probed, err := fixture.service.ProbeVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.NoError(t, err)
+	require.Equal(t, VMEndpointStatusReachable, probed.Status)
+	require.Equal(t, int64(12), probed.LastProbeLatencyMS)
+	require.NotNil(t, probed.LastProbeAt)
+	fixture.service.vmEndpointChecker = fakeVMEndpointChecker{latency: 20 * time.Millisecond, err: errors.New("connection refused")}
+	probed, err = fixture.service.ProbeVMEndpoint(ctx, platformrbac.DevAdminSubject(), route.Route.ID, node.ID)
+	require.NoError(t, err)
+	require.Equal(t, VMEndpointStatusUnreachable, probed.Status)
+	require.Equal(t, "节点拒绝 TCP 连接", probed.LastProbeMessage)
+	require.NotContains(t, probed.LastProbeMessage, "connection refused")
+
+	items, err := fixture.service.ListVMEndpoints(ctx, route.Route.ID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NoError(t, fixture.service.DeleteRoute(ctx, route.Route.ID))
+	items = nil
+	require.NoError(t, fixture.store.VMLogAgentEndpoints().FindByRoute(ctx, route.Route.ID, &items))
+	require.Empty(t, items)
+}
+
+func TestVMEndpointAddressValidation(t *testing.T) {
+	invalid := []string{"", "http://10.0.0.8:13133", "10.0.0.8:22", "127.0.0.1:13133", "[::1]:13133", "169.254.1.2:13133", "169.254.169.254:13133", "100.100.100.200:13133", "[fd00:ec2::254]:13133", "0.0.0.0:13133", "224.0.0.1:13133"}
+	for _, address := range invalid {
+		t.Run(address, func(t *testing.T) {
+			require.Error(t, validateVMEndpointAddress(address))
+		})
+	}
+	require.NoError(t, validateVMEndpointAddress("10.0.0.8:13133"))
+	require.NoError(t, validateVMEndpointAddress("collector.internal:13133"))
+}
+
+func TestVMProbeMessagesAreNormalized(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{context.DeadlineExceeded, "节点 TCP 探测超时"},
+		{errors.New("dial tcp: connection refused at 10.0.0.8"), "节点拒绝 TCP 连接"},
+		{errors.New("解析节点地址失败: no such host internal.example"), "节点地址解析失败"},
+		{errors.New("节点地址不允许使用本机或特殊地址"), "节点地址被安全策略阻断"},
+		{errors.New("dial tcp 10.0.0.8: network is unreachable"), "节点 TCP 地址不可达"},
+	}
+	for _, item := range cases {
+		require.Equal(t, item.want, normalizedVMProbeMessage(item.err))
+		require.NotContains(t, item.want, "10.0.0.8")
+	}
+}
+
+type fakeIPResolver struct{ addresses []net.IPAddr }
+
+func (r fakeIPResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return r.addresses, nil
+}
+
+func TestTCPVMEndpointCheckerRejectsHostnameResolvingToSpecialAddressBeforeDial(t *testing.T) {
+	dialed := false
+	checker := tcpVMEndpointChecker{
+		resolver: fakeIPResolver{addresses: []net.IPAddr{{IP: net.ParseIP("10.0.0.8")}, {IP: net.ParseIP("169.254.169.254")}}},
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			dialed = true
+			return nil, nil
+		},
+	}
+
+	_, err := checker.Check(context.Background(), "collector.internal:13133")
+	require.ErrorContains(t, err, "特殊地址")
+	require.False(t, dialed)
+}
+
+func TestVMInstallationArtifactHasNoSecretAndSupportsVerifiedPackage(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, fakeK8sRuntimeGroups("test03", "logplatform"))
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+
+	artifact, err := fixture.service.VMInstallation(ctx, platformrbac.DevAdminSubject(), route.Route.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, artifact.CollectorYAML)
+	require.Equal(t, route.Route.CollectorConfigHash, artifact.CollectorConfigHash)
+	require.NotContains(t, artifact.InstallScript, "OTELCOL_PACKAGE_URL")
+	require.NotContains(t, artifact.InstallScript, "curl")
+	require.Contains(t, artifact.InstallScript, "请先安装平台批准版本的 otelcol-contrib")
+	require.Contains(t, artifact.InstallScript, "base64 --decode")
+	require.NotContains(t, artifact.InstallScript, "./novaapm-logs.yaml")
+	require.Contains(t, artifact.InstallScript, "ExecStart=/usr/bin/env otelcol-contrib")
+	require.Contains(t, artifact.InstallScript, "systemctl restart novaapm-log-collector.service")
+	require.Contains(t, artifact.InstallScript, "systemctl status novaapm-log-collector.service")
+	require.NotContains(t, strings.ToLower(artifact.InstallScript), "secret")
+	require.Contains(t, artifact.HealthAddressExample, ":13133")
+	require.NotEmpty(t, artifact.Prerequisites)
+}
+
+func TestVMSensitiveOperationsRecordAuditEvents(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	auditor := &recordingEndpointAuditor{}
+	fixture.service.endpointAuditor = auditor
+	fixture.service.vmEndpointChecker = fakeVMEndpointChecker{latency: time.Millisecond}
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	route, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/logs/*.log"}})
+	require.NoError(t, err)
+	subject := platformrbac.DevAdminSubject()
+	_, err = fixture.service.VMInstallation(ctx, subject, route.Route.ID)
+	require.NoError(t, err)
+	node, err := fixture.service.CreateVMEndpoint(ctx, subject, route.Route.ID, UpsertVMEndpointRequest{Name: "billing-01", Address: "10.0.0.8:13133"})
+	require.NoError(t, err)
+	_, err = fixture.service.ProbeVMEndpoint(ctx, subject, route.Route.ID, node.ID)
+	require.NoError(t, err)
+	require.NoError(t, fixture.service.DeleteVMEndpoint(ctx, subject, route.Route.ID, node.ID))
+
+	actions := make([]string, 0, len(auditor.events))
+	results := make([]string, 0, len(auditor.events))
+	for _, event := range auditor.events {
+		actions = append(actions, event.Action)
+		results = append(results, event.Result)
+	}
+	require.Equal(t, []string{"export_installation", "create", "create", "probe", "probe", "delete", "delete"}, actions)
+	require.Equal(t, []string{"success", "processing", "success", "processing", "success", "processing", "success"}, results)
+}
+
+func TestDefaultVMCollectorEnablesHealthCheckAndCustomConfigMustDeclareIt(t *testing.T) {
+	input := renderInput{ServiceName: "billing-api", EnvironmentID: "prod", Source: LogSource{SourceType: SourceTypeVMFile, PathPattern: "/data/logs/*.log"}, Endpoint: LogEndpoint{WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs"}, Route: LogRoute{ID: "route-vm", ServiceID: "service-vm"}}
+	yaml, _ := renderVMFileConfig(input)
+	require.Contains(t, yaml, "health_check:\n    endpoint: 0.0.0.0:13133")
+	require.Contains(t, yaml, "extensions: [health_check]")
+	require.ErrorContains(t, validateVMCollectorHealthYAML(validCollectorYAMLWithoutHealthCheck("http://vl.vm:9428/insert/opentelemetry/v1/logs")), "health_check")
+}
+
+func TestUpdateVMRouteClearsLegacyPublishStateWhenConfigChanges(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLogsFixture(t, nil)
+	service := fixture.createVMService(t, "billing-api")
+	endpoint, err := fixture.service.CreateEndpoint(ctx, LogEndpoint{Name: "vl-vm", WriteURL: "http://vl.vm:9428/insert/opentelemetry/v1/logs", QueryURL: "http://vl.vm:9428/select/logsql/query", VMUIURL: "http://vl.vm:9428/select/vmui", ScopeType: EndpointScopeVM})
+	require.NoError(t, err)
+	created, err := fixture.service.CreateRoute(ctx, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/a/*.log"}})
+	require.NoError(t, err)
+	legacy := created.Route
+	now := time.Now().UTC()
+	legacy.LastPublishStatus, legacy.LastPublishMessage, legacy.LastPublishedAt = "ready_for_agent_sync", "legacy", &now
+	require.NoError(t, fixture.store.LogRoutes().Update(ctx, legacy.ID, legacy))
+	updated, err := fixture.service.UpdateRoute(ctx, legacy.ID, UpsertRouteRequest{ServiceID: service.ID, SourceType: SourceTypeVMFile, EndpointID: endpoint.ID, VM: VMSourceInput{PathPattern: "/data/b/*.log"}})
+	require.NoError(t, err)
+	require.Equal(t, "awaiting_nodes", updated.Route.Status)
+	require.Empty(t, updated.Route.LastPublishStatus)
+	require.Empty(t, updated.Route.LastPublishMessage)
+	require.Nil(t, updated.Route.LastPublishedAt)
 }
 
 func TestRouteRejectsServiceIdentityMismatchedWithSource(t *testing.T) {
@@ -1629,8 +2008,8 @@ func TestPreviewParseRulesReturnsFieldsAndErrors(t *testing.T) {
 
 func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:   SourceTypeK8sStdout,
 			ClusterID:    "test03",
@@ -1698,8 +2077,8 @@ func TestK8sDaemonSetUsesClusterStdoutIncludeAndRolloutHash(t *testing.T) {
 
 func TestK8sDaemonSetUsesImageTemplateOverride(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:   SourceTypeK8sStdout,
 			ClusterID:    "test03",
@@ -1723,8 +2102,8 @@ func TestK8sDaemonSetUsesImageTemplateOverride(t *testing.T) {
 
 func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:            SourceTypeK8sStdout,
 			ClusterID:             "test03",
@@ -1755,8 +2134,8 @@ func TestK8sDaemonSetMergesEditableRouteCollectorFragment(t *testing.T) {
 
 func TestK8sDaemonSetRendersOpAMPOnlyWhenEndpointConfigured(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:     SourceTypeK8sStdout,
 			ClusterID:      "test03",
@@ -1874,8 +2253,8 @@ func TestRouteCollectorConfigReadsPersistedCollectorYAMLByHash(t *testing.T) {
 
 func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:   SourceTypeK8sStdout,
 			ClusterID:    "test03",
@@ -1918,8 +2297,8 @@ func TestK8sDaemonSetTemplateRendersValidResourceBundle(t *testing.T) {
 
 func TestK8sDaemonSetUsesManagedCollectorConfigMapsForK8sSources(t *testing.T) {
 	input := renderInput{
-		ServiceName: "utrace-api",
-		Environment: "prod",
+		ServiceName:   "utrace-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:   SourceTypeK8sStdout,
 			ClusterID:    "test03",
@@ -1947,8 +2326,8 @@ func TestK8sDaemonSetUsesManagedCollectorConfigMapsForK8sSources(t *testing.T) {
 
 func TestVMFileConfigUsesCustomCollectorYAML(t *testing.T) {
 	input := renderInput{
-		ServiceName: "legacy-api",
-		Environment: "prod",
+		ServiceName:   "legacy-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:          SourceTypeVMFile,
 			HostGroup:           "vm-prod",
@@ -1969,8 +2348,8 @@ func TestVMFileConfigUsesCustomCollectorYAML(t *testing.T) {
 
 func TestVMFileConfigUsesProductTenantForDefaultVictoriaLogsExporter(t *testing.T) {
 	input := renderInput{
-		ServiceName: "legacy-api",
-		Environment: "prod",
+		ServiceName:   "legacy-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:  SourceTypeVMFile,
 			PathPattern: "/data/logs/*.log",
@@ -1992,8 +2371,8 @@ func TestVMFileConfigUsesProductTenantForDefaultVictoriaLogsExporter(t *testing.
 
 func TestVMRouteConfigUsesRouteScopedConfigFile(t *testing.T) {
 	input := renderInput{
-		ServiceName: "legacy-api",
-		Environment: "prod",
+		ServiceName:   "legacy-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:          SourceTypeVMFile,
 			HostGroup:           "vm-prod",
@@ -2015,8 +2394,8 @@ func TestVMRouteConfigUsesRouteScopedConfigFile(t *testing.T) {
 
 func TestRenderConfigUsesDownstreamExporterByEndpointType(t *testing.T) {
 	vmInput := renderInput{
-		ServiceName: "billing-api",
-		Environment: "prod",
+		ServiceName:   "billing-api",
+		EnvironmentID: "prod",
 		Source: LogSource{
 			SourceType:  SourceTypeVMFile,
 			HostGroup:   "vm-prod",
@@ -2086,10 +2465,11 @@ func newLogsFixture(t *testing.T, resources K8sResourceService) logsFixture {
 func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy K8sDeploymentService) logsFixture {
 	t.Helper()
 	store := memstore.NewStore()
+	require.NoError(t, store.Environments().Insert(context.Background(), platformenvironment.Environment{ID: "prod", Name: "生产环境", Stage: platformenvironment.StageProduction, Status: platformenvironment.StatusActive}))
 	productRepo := servicecatalog.NewProductRepository(store.Products())
 	product, err := productRepo.Create(context.Background(), servicecatalog.Product{Name: "test-product"})
 	require.NoError(t, err)
-	repo := servicecatalog.NewRepository(store.Services(), store.Products())
+	repo := servicecatalog.NewRepository(store.Services(), store.Environments(), store.Products())
 	targets := servicecatalog.NewTargetRepository(store.ServiceTargets())
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances())
 	service := NewService(
@@ -2106,6 +2486,7 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 		resources,
 		deploy,
 		WithLogTargets(store.LogTargets()),
+		WithVMLogAgentEndpoints(store.VMLogAgentEndpoints()),
 		WithObservabilityRuntimes(store.ObservabilityRuntimes()),
 		WithAuthorizer(platformrbac.NewService(platformrbac.NewStoreRepository(store.RBACRoles(), store.RBACBindings()), platformrbac.WithSuperSubjects(platformrbac.DevAdminSubject()))),
 	)
@@ -2115,16 +2496,16 @@ func newLogsFixtureWithDeploy(t *testing.T, resources K8sResourceService, deploy
 func (f logsFixture) createService(t *testing.T, name string) servicecatalog.Service {
 	t.Helper()
 	service, err := f.repo.Create(context.Background(), servicecatalog.Service{
-		ProductID:    f.productID,
-		Name:         name,
-		DisplayName:  name,
-		Environment:  "prod",
-		Cluster:      "test03",
-		Namespace:    "logplatform",
-		IdentityType: "k8s_workload",
-		Status:       "active",
-		Source:       "k8s",
-		SyncStatus:   "synced",
+		ProductID:     f.productID,
+		Name:          name,
+		DisplayName:   name,
+		EnvironmentID: "prod",
+		Cluster:       "test03",
+		Namespace:     "logplatform",
+		IdentityType:  "k8s_workload",
+		Status:        "active",
+		Source:        "k8s",
+		SyncStatus:    "synced",
 	})
 	require.NoError(t, err)
 	return service
@@ -2149,16 +2530,16 @@ func (f logsFixture) enableLogsCollectorRuntime(t *testing.T, clusterID string, 
 func (f logsFixture) createVMService(t *testing.T, name string) servicecatalog.Service {
 	t.Helper()
 	service, err := f.repo.Create(context.Background(), servicecatalog.Service{
-		ProductID:    f.productID,
-		Name:         name,
-		DisplayName:  name,
-		Environment:  "prod",
-		OwnerTeam:    "sre",
-		IdentityType: "host_process",
-		ServiceType:  "VM/物理机业务",
-		Status:       "active",
-		Source:       "manual",
-		SyncStatus:   "local",
+		ProductID:     f.productID,
+		Name:          name,
+		DisplayName:   name,
+		EnvironmentID: "prod",
+		OwnerTeam:     "sre",
+		IdentityType:  "host_process",
+		ServiceType:   "VM/物理机业务",
+		Status:        "active",
+		Source:        "manual",
+		SyncStatus:    "local",
 	})
 	require.NoError(t, err)
 	return service
@@ -2167,12 +2548,12 @@ func (f logsFixture) createVMService(t *testing.T, name string) servicecatalog.S
 func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGroup {
 	t.Helper()
 	group, err := collectormanagement.NewService(f.store.CollectorGroups(), f.store.CollectorInstances()).CreateGroup(context.Background(), collectormanagement.CollectorGroup{
-		Name:        "test03-logs",
-		Mode:        "dedicated_collector",
-		Environment: "prod",
-		Cluster:     "test03",
-		Namespace:   "novaapm-system",
-		Status:      "active",
+		Name:          "test03-logs",
+		Mode:          "dedicated_collector",
+		EnvironmentID: "prod",
+		Cluster:       "test03",
+		Namespace:     "novaapm-system",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 	return group
@@ -2180,6 +2561,21 @@ func (f logsFixture) createGroup(t *testing.T) collectormanagement.CollectorGrou
 
 func validCollectorYAML(writeURL string, exporterExtras string) string {
 	return validCollectorYAMLWithInclude(writeURL, "/data/app.log", exporterExtras)
+}
+
+func validCollectorYAMLWithoutHealthCheck(writeURL string) string {
+	return `receivers:
+  file_log/custom:
+    include: [/data/app.log]
+exporters:
+  otlp_http/victorialogs:
+    logs_endpoint: "` + writeURL + `"
+service:
+  pipelines:
+    logs:
+      receivers: [file_log/custom]
+      exporters: [otlp_http/victorialogs]
+`
 }
 
 func validK8sRouteFragment(name string, writeURL string) string {
@@ -2351,7 +2747,11 @@ func validCollectorYAMLWithInclude(writeURL string, include string, exporterExtr
 exporters:
   otlp_http/victorialogs:
     logs_endpoint: "` + writeURL + `"
-` + exporterExtras + `service:
+` + exporterExtras + `extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+service:
+  extensions: [health_check]
   pipelines:
     logs:
       receivers: [file_log/custom]
@@ -2367,7 +2767,11 @@ exporters:
   elasticsearch/logs_downstream:
     endpoints:
       - "` + writeURL + `"
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
 service:
+  extensions: [health_check]
   pipelines:
     logs:
       receivers: [file_log/custom]
@@ -2389,7 +2793,11 @@ func validKafkaCollectorYAML(brokers []string) string {
 	}
 	lines = append(lines,
 		`    topic: "novaapm-logs"`,
+		"extensions:",
+		"  health_check:",
+		"    endpoint: 0.0.0.0:13133",
 		"service:",
+		"  extensions: [health_check]",
 		"  pipelines:",
 		"    logs:",
 		"      receivers: [file_log/custom]",

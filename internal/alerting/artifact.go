@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"novaapm/internal/metrics"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,7 +84,8 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 			"notification_receiver":  rule.Spec.Notification.Receiver,
 		}
 		if signalType == SignalTypeMetrics {
-			labels["metrics_binding_id"] = rule.Spec.Scope.MetricsBindingID
+			delete(labels, "service_id")
+			labels[metrics.EnvironmentIdentityLabel] = rule.Spec.Scope.EnvironmentID
 		}
 		runtimeRules := []vmalertRule{{
 			Alert:         alertPrefix + safeAlertName(rule.ID),
@@ -97,7 +100,11 @@ func CompileVmalertArtifact(runtimeID string, rules []Rule, createdAt time.Time)
 			if err != nil {
 				return Artifact{}, fmt.Errorf("编译趋势指标 %s: %w", rule.ID, err)
 			}
-			labels := map[string]string{"novaapm_rule_id": rule.ID, "service_id": rule.Spec.Scope.ServiceID}
+			labels := map[string]string{
+				"novaapm_rule_id":                rule.ID,
+				"service_id":                     rule.Spec.Scope.ServiceID,
+				metrics.EnvironmentIdentityLabel: rule.Spec.Scope.EnvironmentID,
+			}
 			for key, value := range metric.Labels {
 				labels[key] = value
 			}
