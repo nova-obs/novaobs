@@ -68,9 +68,7 @@ func updateAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 
 func disableAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		var body struct {
-			ChangeSummary string `json:"change_summary"`
-		}
+		var body alerting.DisableRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			response.Error(ctx, http.StatusBadRequest, "invalid_request", "停用请求格式不正确")
 			return
@@ -79,7 +77,7 @@ func disableAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.Disable(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body.ChangeSummary)
+		result, err := service.Disable(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
 		if err != nil {
 			writeAlertingError(ctx, err)
 			return

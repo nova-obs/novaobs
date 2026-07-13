@@ -76,7 +76,7 @@ func TestRollbackToDisableRecordRestoresDisabledState(t *testing.T) {
 	service := newTestService(repo)
 	created, err := service.Enable(context.Background(), testSubject(), EnableRequest{Spec: validRuleSpec()})
 	require.NoError(t, err)
-	disabled, err := service.Disable(context.Background(), testSubject(), created.Rule.ID, "维护期停用")
+	disabled, err := service.Disable(context.Background(), testSubject(), created.Rule.ID, DisableRequest{ChangeSummary: "维护期停用"})
 	require.NoError(t, err)
 	_, err = service.Update(context.Background(), testSubject(), created.Rule.ID, UpdateRequest{Spec: validRuleSpec()})
 	require.NoError(t, err)
@@ -84,6 +84,23 @@ func TestRollbackToDisableRecordRestoresDisabledState(t *testing.T) {
 	rolledBack, err := service.Rollback(context.Background(), testSubject(), created.Rule.ID, RollbackRequest{UpdateID: disabled.Update.ID})
 	require.NoError(t, err)
 	require.Equal(t, RuleStateDisabled, rolledBack.Rule.State)
+}
+
+func TestDisableRejectsUnexpectedSignalType(t *testing.T) {
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	created, err := service.Enable(context.Background(), testSubject(), EnableRequest{Spec: validRuleSpec()})
+	require.NoError(t, err)
+
+	_, err = service.Disable(context.Background(), testSubject(), created.Rule.ID, DisableRequest{
+		ExpectedSignalType: SignalTypeMetrics,
+		ChangeSummary:      "停用指标告警",
+	})
+	require.ErrorIs(t, err, ErrConflict)
+
+	current, err := repo.GetRule(context.Background(), created.Rule.ID)
+	require.NoError(t, err)
+	require.Equal(t, RuleStateEnabled, current.State)
 }
 
 func TestTestRuleDoesNotPersistAnything(t *testing.T) {

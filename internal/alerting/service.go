@@ -2,6 +2,7 @@ package alerting
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"novaapm/internal/platform/audit"
@@ -52,6 +53,11 @@ type UpdateRequest struct {
 	Spec          RuleSpec `json:"spec"`
 	ChangeSummary string   `json:"change_summary"`
 	TestToken     string   `json:"test_token"`
+}
+
+type DisableRequest struct {
+	ExpectedSignalType string `json:"expected_signal_type"`
+	ChangeSummary      string `json:"change_summary"`
 }
 
 type RollbackRequest struct {
@@ -264,7 +270,7 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, rul
 	return s.saveExistingChange(ctx, subject, current, source.Spec.Normalize(), targetState, UpdateActionRollback, source.ID, defaultSummary(req.ChangeSummary, "回退到历史配置"))
 }
 
-func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, ruleID string, summary string) (ChangeResult, error) {
+func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, ruleID string, req DisableRequest) (ChangeResult, error) {
 	if s.repository == nil {
 		return ChangeResult{}, ErrUnavailable
 	}
@@ -275,10 +281,17 @@ func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, rule
 	if !s.allowed(subject, current.Spec.Scope, "manage") {
 		return ChangeResult{}, ErrPermissionDenied
 	}
+	expectedSignalType := strings.ToLower(strings.TrimSpace(req.ExpectedSignalType))
+	if expectedSignalType != "" && expectedSignalType != SignalTypeLogs && expectedSignalType != SignalTypeMetrics {
+		return ChangeResult{}, invalidSpec("expectedSignalType", "预期信号类型只支持 logs 或 metrics")
+	}
+	if expectedSignalType != "" && current.Spec.Normalize().SignalType != expectedSignalType {
+		return ChangeResult{}, ErrConflict
+	}
 	if current.State == RuleStateDisabled {
 		return ChangeResult{}, ErrConflict
 	}
-	return s.saveExistingChange(ctx, subject, current, current.Spec, RuleStateDisabled, UpdateActionDisable, "", defaultSummary(summary, "停用告警"))
+	return s.saveExistingChange(ctx, subject, current, current.Spec, RuleStateDisabled, UpdateActionDisable, "", defaultSummary(req.ChangeSummary, "停用告警"))
 }
 
 func (s Service) Test(ctx context.Context, subject platformrbac.Subject, req TestRequest) (TestResult, error) {

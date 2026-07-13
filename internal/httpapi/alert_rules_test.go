@@ -46,6 +46,19 @@ func TestAlertRuleAPIRejectsInvalidSpec(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"code":"invalid_alert_rule"`)
 }
 
+func TestAlertRuleAPIDisableRejectsUnexpectedSignalType(t *testing.T) {
+	env := newTestRouter(t)
+	created := performJSON(t, env.router, http.MethodPost, "/api/v1/alerts/rules", validAlertRuleBody(3))
+	ruleID := nestedString(t, created, "data", "rule", "id")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/rules/"+ruleID+"/disable", bytes.NewBufferString(`{"expected_signal_type":"metrics","change_summary":"停用指标告警"}`))
+	request.Header.Set("Content-Type", "application/json")
+	env.router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+}
+
 func TestAlertRuleAPIRequiresAuthenticatedSubject(t *testing.T) {
 	router := gin.New()
 	router.GET("/api/v1/alerts/rules", listAlertRulesHandler(alerting.Service{}))
