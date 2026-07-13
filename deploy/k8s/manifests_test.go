@@ -81,3 +81,16 @@ func TestBackendDockerfileDoesNotCopyLocalConfig(t *testing.T) {
 	require.NotContains(t, dockerfile, "COPY configs")
 	require.Contains(t, dockerfile, "USER 10001:10001")
 }
+
+func TestMakefileDefaultsToLinuxAMD64DockerBuild(t *testing.T) {
+	content, err := os.ReadFile("../../Makefile")
+	require.NoError(t, err)
+	makefile := string(content)
+
+	require.Contains(t, makefile, "PLATFORM ?= linux/amd64")
+	require.Contains(t, makefile, "IMAGE_NAME ?= novaapm-backend")
+	require.Contains(t, makefile, "docker-build:")
+	require.Contains(t, makefile, "buildx build --platform $(PLATFORM) --load")
+	require.Contains(t, makefile, "docker-build-push:")
+	require.Contains(t, makefile, "buildx build --platform $(PLATFORM) --push")
+}

@@ -6,16 +6,28 @@
 
 ## 1. 构建并推送镜像
 
-在工作区根目录执行，并把镜像名替换为实际镜像仓库：
+在工作区根目录执行。两个 `Makefile` 默认使用 `linux/amd64`，可直接构建并推送当前部署清单使用的 `0.1.1` 镜像：
 
 ```bash
-docker build -t <registry>/novaapm-backend:0.1.0 novaapm
-docker build -t <registry>/novaapm-frontend:0.1.0 novaapm-fe
-docker push <registry>/novaapm-backend:0.1.0
-docker push <registry>/novaapm-frontend:0.1.0
+make -C novaapm docker-build-push
+make -C novaapm-fe docker-build-push
 ```
 
-随后修改 `20-backend-deployment.yaml` 和 `30-frontend-deployment.yaml` 中的镜像地址。生产环境应使用不可变版本或镜像摘要，不要使用 `latest`。
+只构建到本地 Docker 时使用 `docker-build`，构建后可用 `docker-inspect` 确认结果为 `linux/amd64`：
+
+```bash
+make -C novaapm docker-build docker-inspect
+make -C novaapm-fe docker-build docker-inspect
+```
+
+镜像仓库、版本和目标平台都可以覆盖；例如：
+
+```bash
+make -C novaapm docker-build-push REGISTRY=<registry> TAG=0.1.2
+make -C novaapm-fe docker-build-push REGISTRY=<registry> TAG=0.1.2
+```
+
+若覆盖镜像地址或版本，需要同步修改 `20-backend-deployment.yaml` 和 `30-frontend-deployment.yaml`。生产环境应使用不可变版本或镜像摘要，不要使用 `latest`。`PLATFORM` 默认不要修改；只有目标集群不是 AMD64 时才显式覆盖。
 
 构建基础镜像的 tag 也会随上游更新；正式发布时应在验证和扫描后将 Dockerfile 中的基础镜像锁定到 digest。
 
