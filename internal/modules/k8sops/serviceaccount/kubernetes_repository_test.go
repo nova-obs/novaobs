@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	"novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"

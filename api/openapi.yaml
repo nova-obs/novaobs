@@ -17,6 +17,39 @@ paths:
       responses:
         "200":
           description: 返回服务、Pipeline、日志和告警摘要
+  /products:
+    get:
+      summary: 产品列表
+      responses:
+        "200":
+          description: 返回产品及其唯一 ProjectID
+    post:
+      summary: 创建产品并由平台随机生成 ProjectID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                display_name: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: 产品已创建；accountId 固定为 0，projectId 由平台生成
+  /products/{productId}:
+    get:
+      summary: 产品详情
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 返回产品详情 }
+        "404": { description: 产品不存在 }
   /services:
     get:
       summary: 服务目录列表
@@ -39,12 +72,18 @@ paths:
           in: query
           schema:
             type: string
-            enum: [manual, cmdb]
+            enum: [manual, cmdb, k8s]
       responses:
         "200":
           description: 返回服务目录
+  /products/{productId}/services:
     post:
       summary: 创建服务
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -65,12 +104,12 @@ paths:
                   type: string
                 source:
                   type: string
-                  enum: [manual, cmdb]
+                  enum: [manual, cmdb, k8s]
       responses:
         "201":
-          description: 服务已创建
+          description: 服务已创建；租户固定派生为产品的 0:ProjectID
         "409":
-          description: 相同服务身份或 CMDB 服务 ID 已存在
+          description: 同一产品下 service.name 或 CMDB 服务 ID 已存在
   /services/{id}:
     get:
       summary: 服务详情
@@ -747,6 +786,153 @@ paths:
       responses:
         "200":
           description: 返回 K8s 发布预览或应用结果、manifest YAML 和 artifact hash
+  /logs/routes/{id}/vm-installation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 获取 VM 日志 Agent 手工安装材料
+      description: 仅适用于 vm_file 路由且要求日志路由管理权限。返回内嵌采集配置的 systemd 安装脚本，不包含永久密钥，并记录安装材料导出审计。
+      responses:
+        "200":
+          description: 返回 Collector YAML、配置哈希、单文件安装脚本、健康地址示例和前置条件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogInstallationArtifact"
+        "400": { description: 路由不是 VM 类型 }
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 日志路由不存在 }
+  /logs/routes/{id}/vm-agent-endpoints:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: 查询 VM 日志 Agent 节点地址
+      responses:
+        "200":
+          description: 返回路由下登记的全部 VM 节点
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "403": { description: 无日志路由读取权限 }
+    post:
+      summary: 登记 VM 日志 Agent 节点地址
+      description: 同一路由内 address 唯一；address 必须为 host:13133，允许 RFC1918 内网地址但拒绝本机、链路本地、未指定、多播和云元数据地址。写入前记录 attempt 审计，完成后记录 success 审计；success 审计失败时补偿删除。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VMLogAgentEndpointInput"
+      responses:
+        "201":
+          description: 节点已登记，初始状态为 pending_probe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "400": { description: 请求或地址无效 }
+        "403": { description: 无日志路由管理权限 }
+        "409": { description: 同一路由已存在相同地址 }
+  /logs/routes/{id}/vm-agent-endpoints/{endpointId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: endpointId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: 删除 VM 日志 Agent 节点地址
+      description: 删除前先记录 attempt 审计，完成后记录 success 审计；success 审计失败时补偿恢复节点，即使补偿失败仍保留 attempt 证据。
+      responses:
+        "204": { description: 节点已删除 }
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 路由或节点不存在 }
+  /logs/routes/{id}/vm-agent-endpoints/{endpointId}/probe:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: endpointId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 探测 VM 日志 Agent 节点 TCP 连通性
+      description: 探测前先记录 attempt 审计，再解析并校验全部目标 IP，仅探测固定 health_check 端口 13133。持久化 reachable 或 unreachable 状态、归一化消息、时间和延迟，不返回底层网络错误；完成后记录 success 审计，失败时补偿恢复原状态。
+      responses:
+        "200":
+          description: 返回更新后的节点探测状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VMLogAgentEndpoint"
+        "403": { description: 无日志路由管理权限 }
+        "404": { description: 路由或节点不存在 }
+  /observability/endpoints:
+    get:
+      summary: 查询统一观测端点
+      parameters:
+        - name: signal_type
+          in: query
+          schema: { type: string, enum: [logs, metrics, dashboards] }
+        - name: kind
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: 返回当前主体可读的统一观测端点
+    post:
+      summary: 登记统一观测端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObservabilityEndpointInput"
+      responses:
+        "201":
+          description: 端点已创建并记录审计事件
+  /observability/endpoints/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: 更新统一观测端点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObservabilityEndpointInput"
+      responses:
+        "200":
+          description: 端点已更新并记录审计事件
+  /observability/endpoints/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: 执行统一观测端点真实连通性测试
+      responses:
+        "200":
+          description: 返回探测状态、延迟和检查时间，并持久化端点健康状态
   /observability/runtimes:
     get:
       summary: 查询观测运行时
@@ -906,6 +1092,100 @@ components:
       type: http
       scheme: bearer
   schemas:
+    ActorRef:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        name: { type: string }
+    VMLogAgentEndpointInput:
+      type: object
+      required: [name, address]
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+          pattern: "^\\[?[^/]+\\]?:13133$"
+          example: "10.0.0.8:13133"
+    VMLogAgentEndpoint:
+      type: object
+      required: [id, route_id, service_id, name, address, status, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: { type: string }
+        route_id: { type: string }
+        service_id: { type: string }
+        name: { type: string }
+        address: { type: string, example: "10.0.0.8:13133" }
+        status:
+          type: string
+          enum: [pending_probe, reachable, unreachable]
+        last_probe_at: { type: string, format: date-time }
+        last_probe_status:
+          type: string
+          enum: [reachable, unreachable]
+        last_probe_message: { type: string }
+        last_probe_latency_ms: { type: integer, format: int64, minimum: 0 }
+        created_by: { $ref: "#/components/schemas/ActorRef" }
+        updated_by: { $ref: "#/components/schemas/ActorRef" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    VMLogInstallationArtifact:
+      type: object
+      required: [route_id, service_id, collector_yaml, collector_config_hash, install_script, health_address_example, prerequisites]
+      properties:
+        route_id: { type: string }
+        service_id: { type: string }
+        collector_yaml: { type: string }
+        collector_config_hash: { type: string }
+        install_script:
+          type: string
+          description: 内嵌启用 health_check 0.0.0.0:13133 的 Collector YAML，只负责写配置和管理 systemd；不包含永久密钥，也不下载或安装软件。执行前必须预装平台批准版本的 otelcol-contrib。
+        health_address_example: { type: string, example: "<vm-address>:13133" }
+        prerequisites:
+          type: array
+          items: { type: string }
+    ObservabilityEndpointInput:
+      type: object
+      required: [name, kind, signal_types, scope, urls, status]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2048
+        kind:
+          type: string
+          enum: [victoriametrics]
+        signal_types:
+          type: array
+          items: { type: string, enum: [metrics] }
+        scope:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [global, k8s_cluster] }
+            cluster_id: { type: string }
+        urls:
+          type: object
+          required: [remote_write_url, query_url, ui_url]
+          properties:
+            remote_write_url:
+              type: string
+              description: 必须包含 /insert/0/prometheus 租户占位路径
+            query_url:
+              type: string
+              description: 必须包含 /select/0/prometheus 租户占位路径
+            ui_url:
+              type: string
+              description: 必须包含 /select/0/vmui 租户占位路径
+        secret_ref:
+          type: string
+          description: 可选凭据引用；禁止在 URL 中内嵌用户名或密码
+        status:
+          type: string
+          enum: [active, disabled]
     LogEndpointInput:
       type: object
       required: [name, sink_type, write_url, scope_type]
@@ -925,12 +1205,6 @@ components:
           type: string
         vmui_url:
           type: string
-        account_id:
-          type: string
-        project_id:
-          type: string
-        secret_ref:
-          type: string
         scope_type:
           type: string
           enum: [global, k8s_cluster, vm]
@@ -948,11 +1222,11 @@ components:
           description: vmalert Runtime 的部署集群 ID；端点为 k8s_cluster 且为空时默认使用端点绑定集群，global/vm 端点必须显式填写
         namespace:
           type: string
-          default: novaobs-system
-          description: 固定平台 namespace；非 novaobs-system 会被拒绝
+          default: novaapm-system
+          description: 固定平台 namespace；非 novaapm-system 会被拒绝
         alert_ingest_url:
           type: string
-          description: NovaObs Alert Ingest 地址；为空时使用平台默认配置
+          description: NovaAPM Alert Ingest 地址；为空时使用平台默认配置
         preview_id:
           type: string
         confirmation_token:
@@ -966,7 +1240,7 @@ components:
           description: 日志采集运行时部署的 K8s 集群 ID
         namespace:
           type: string
-          default: novaobs-system
+          default: novaapm-system
           description: 平台采集器 namespace
         preview_id:
           type: string

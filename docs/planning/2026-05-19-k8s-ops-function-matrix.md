@@ -1,8 +1,8 @@
 # K8s 运维功能等价矩阵
 
-本矩阵用于约束 `startorch` / `u8s-front` 能力迁移到 NovaObs 的第一版范围。每个能力必须有明确的来源、NovaObs API、RBAC 动作和验证方式；没有进入 golden contract 的能力，不能在最终验收时声明“功能不破坏”。
+本矩阵用于约束 `startorch` / `u8s-front` 能力迁移到 NovaAPM 的第一版范围。每个能力必须有明确的来源、NovaAPM API、RBAC 动作和验证方式；没有进入 golden contract 的能力，不能在最终验收时声明“功能不破坏”。
 
-| 能力 ID | Startorch service | Startorch route | u8s-front 页面 | NovaObs API | NovaObs 模块 | RBAC | 审计 | Golden fixture | 迁移状态 |
+| 能力 ID | Startorch service | Startorch route | u8s-front 页面 | NovaAPM API | NovaAPM 模块 | RBAC | 审计 | Golden fixture | 迁移状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | dashboard.stats | dashboard.GetDashboardStats | GET /api/dashboard/stats | Dashboard.jsx | GET /api/v1/k8s/dashboard | k8sops/dashboard | k8s.dashboard:read:cluster | 否 | 是 | 未开始 |
 | cluster.list | cluster.ListClusters | GET /api/cluster | ClusterManagement.jsx | GET /api/v1/k8s/clusters | k8sops/cluster | k8s.cluster:read:global | 否 | 是 | 未开始 |
@@ -59,6 +59,6 @@
 
 | Startorch 能力 | 处理方式 | 原因 |
 | --- | --- | --- |
-| auth.Login / JWT | 废弃 | NovaObs 统一认证接管 |
-| user.CreateUser / UpdateUser / DeleteUser | 不迁移为 K8s 独立用户体系 | K8s 模块中的用户管理仅作为 NovaObs RBAC subject/binding 入口 |
-| menu_permissions / element_permissions | 废弃 | 前端只展示后端返回的 NovaObs capabilities，后端强制授权 |
+| auth.Login / JWT | 废弃 | NovaAPM 统一认证接管 |
+| user.CreateUser / UpdateUser / DeleteUser | 不迁移为 K8s 独立用户体系 | K8s 模块中的用户管理仅作为 NovaAPM RBAC subject/binding 入口 |
+| menu_permissions / element_permissions | 废弃 | 前端只展示后端返回的 NovaAPM capabilities，后端强制授权 |

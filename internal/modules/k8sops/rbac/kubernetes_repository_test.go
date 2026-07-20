@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -108,13 +108,13 @@ func TestKubernetesRepositoryUpsertsClusterRole(t *testing.T) {
 	created, err := repo.UpsertRole(context.Background(), RoleResource{
 		ClusterID: "prod",
 		Kind:      "ClusterRole",
-		Name:      "novaobs-reader",
+		Name:      "novaapm-reader",
 		Rules:     []Rule{{Resources: []string{"nodes"}, Verbs: []string{"get", "list"}}},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, "ClusterRole", created.Kind)
-	stored, getErr := client.RbacV1().ClusterRoles().Get(context.Background(), "novaobs-reader", metav1.GetOptions{})
+	stored, getErr := client.RbacV1().ClusterRoles().Get(context.Background(), "novaapm-reader", metav1.GetOptions{})
 	require.NoError(t, getErr)
 	require.Equal(t, []string{"nodes"}, stored.Rules[0].Resources)
 }
@@ -172,16 +172,16 @@ func TestKubernetesRepositoryUpsertsClusterRoleBinding(t *testing.T) {
 	created, err := repo.UpsertBinding(context.Background(), BindingResource{
 		ClusterID: "prod",
 		Kind:      "ClusterRoleBinding",
-		Name:      "novaobs-reader-binding",
-		RoleRef:   RoleRef{Kind: "ClusterRole", Name: "novaobs-reader"},
+		Name:      "novaapm-reader-binding",
+		RoleRef:   RoleRef{Kind: "ClusterRole", Name: "novaapm-reader"},
 		Subjects:  []Subject{{Kind: "User", Name: "alice"}},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, "ClusterRoleBinding", created.Kind)
-	stored, getErr := client.RbacV1().ClusterRoleBindings().Get(context.Background(), "novaobs-reader-binding", metav1.GetOptions{})
+	stored, getErr := client.RbacV1().ClusterRoleBindings().Get(context.Background(), "novaapm-reader-binding", metav1.GetOptions{})
 	require.NoError(t, getErr)
-	require.Equal(t, "novaobs-reader", stored.RoleRef.Name)
+	require.Equal(t, "novaapm-reader", stored.RoleRef.Name)
 }
 
 func TestKubernetesRepositoryDeletesRoleBindingByUID(t *testing.T) {

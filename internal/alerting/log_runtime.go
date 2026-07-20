@@ -10,19 +10,19 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/internal/logs"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	obsruntime "novaobs/internal/observability/runtime"
-	platformimages "novaobs/internal/platform/images"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/internal/logs"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	obsruntime "novaapm/internal/observability/runtime"
+	platformimages "novaapm/internal/platform/images"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/apperr"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	defaultVmalertNamespace = "novaobs-system"
+	defaultVmalertNamespace = "novaapm-system"
 )
 
 type LogRuntimeRepository interface {
@@ -43,6 +43,7 @@ type LogRuntimeDependencies struct {
 	Endpoints             database.LogEndpointStore
 	Runtimes              database.ObservabilityRuntimeStore
 	Repository            LogRuntimeRepository
+	ScopeResolver         ScopeResolver
 	K8sDeployments        LogRuntimeDeploymentService
 	ImageTemplates        LogRuntimeImageTemplateService
 	DefaultAlertIngestURL string
@@ -53,6 +54,7 @@ type LogRuntimeService struct {
 	endpoints             database.LogEndpointStore
 	runtimes              database.ObservabilityRuntimeStore
 	repository            LogRuntimeRepository
+	scopeResolver         ScopeResolver
 	k8sDeployments        LogRuntimeDeploymentService
 	imageTemplates        LogRuntimeImageTemplateService
 	defaultAlertIngestURL string
@@ -98,6 +100,7 @@ func NewLogRuntimeService(deps LogRuntimeDependencies) LogRuntimeService {
 		endpoints:             deps.Endpoints,
 		runtimes:              deps.Runtimes,
 		repository:            deps.Repository,
+		scopeResolver:         deps.ScopeResolver,
 		k8sDeployments:        deps.K8sDeployments,
 		imageTemplates:        deps.ImageTemplates,
 		defaultAlertIngestURL: strings.TrimSpace(deps.DefaultAlertIngestURL),
@@ -122,6 +125,10 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 		return LogRuntimePublishResult{}, err
 	}
 	rules, err := s.repository.ListRuntimeRules(ctx, runtime.RuntimeID)
+	if err != nil {
+		return LogRuntimePublishResult{}, err
+	}
+	rules, err = s.resolveCurrentScopes(ctx, rules)
 	if err != nil {
 		return LogRuntimePublishResult{}, err
 	}
@@ -188,6 +195,26 @@ func (s LogRuntimeService) Publish(ctx context.Context, subject platformrbac.Sub
 		Diffs:                deployed.Diffs,
 		Warnings:             deployed.Warnings,
 	}, nil
+}
+
+func (s LogRuntimeService) resolveCurrentScopes(ctx context.Context, rules []Rule) ([]Rule, error) {
+	if s.scopeResolver == nil {
+		return rules, nil
+	}
+	resolved := make([]Rule, len(rules))
+	copy(resolved, rules)
+	for index := range resolved {
+		if resolved[index].State != RuleStateEnabled {
+			continue
+		}
+		scope, err := s.scopeResolver.ResolveScope(ctx, resolved[index].Spec)
+		if err != nil {
+			return nil, err
+		}
+		resolved[index].Spec.Scope = scope
+		resolved[index].Spec = resolved[index].Spec.Normalize()
+	}
+	return resolved, nil
 }
 
 func (s LogRuntimeService) upsertRuntime(ctx context.Context, runtime logRuntimeSpec, artifact Artifact, manifestHash string, deployed k8sopsdeployment.OperationResult, requiresConfirmation bool) error {
@@ -273,16 +300,16 @@ func newLogRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishRequest, 
 		alertIngestURL = strings.TrimSpace(defaultAlertIngestURL)
 	}
 	if alertIngestURL == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 NovaObs Alert Ingest 地址")
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 vmalert Runtime 必须填写 NovaAPM Alert Ingest 地址")
 	}
-	if err := validateHTTPURL(alertIngestURL, "NovaObs Alert Ingest 地址"); err != nil {
+	if err := validateHTTPURL(alertIngestURL, "NovaAPM Alert Ingest 地址"); err != nil {
 		return logRuntimeSpec{}, err
 	}
 	if namespace := strings.TrimSpace(req.Namespace); namespace != "" && namespace != defaultVmalertNamespace {
 		return logRuntimeSpec{}, apperr.InvalidRequest("vmalert Runtime 只能部署到固定 namespace " + defaultVmalertNamespace)
 	}
 	runtimeID := "vmalert-logs:" + endpoint.ID
-	name := dnsName("novaobs-vmalert-" + firstNonEmpty(endpoint.Name, endpoint.ID))
+	name := dnsName("novaapm-vmalert-" + firstNonEmpty(endpoint.Name, endpoint.ID))
 	return logRuntimeSpec{
 		RuntimeID:       runtimeID,
 		Name:            name,
@@ -310,7 +337,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"  namespace: " + quoteYAML(runtime.Namespace),
 		"  labels:",
 		"    app.kubernetes.io/name: " + quoteYAML(runtime.Name),
-		"    app.kubernetes.io/part-of: novaobs",
+		"    app.kubernetes.io/part-of: novaapm",
 		"data:",
 		"  runtime.yaml: |",
 		rulesBlock,
@@ -322,7 +349,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"  namespace: " + quoteYAML(runtime.Namespace),
 		"  labels:",
 		"    app.kubernetes.io/name: " + quoteYAML(runtime.Name),
-		"    app.kubernetes.io/part-of: novaobs",
+		"    app.kubernetes.io/part-of: novaapm",
 		"spec:",
 		"  type: ClusterIP",
 		"  selector:",
@@ -339,7 +366,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"  namespace: " + quoteYAML(runtime.Namespace),
 		"  labels:",
 		"    app.kubernetes.io/name: " + quoteYAML(runtime.Name),
-		"    app.kubernetes.io/part-of: novaobs",
+		"    app.kubernetes.io/part-of: novaapm",
 		"spec:",
 		"  replicas: 1",
 		"  selector:",
@@ -349,10 +376,10 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"    metadata:",
 		"      labels:",
 		"        app.kubernetes.io/name: " + quoteYAML(runtime.Name),
-		"        app.kubernetes.io/part-of: novaobs",
+		"        app.kubernetes.io/part-of: novaapm",
 		"      annotations:",
-		"        novaobs.io/runtime-id: " + quoteYAML(runtime.RuntimeID),
-		"        novaobs.io/rules-artifact-hash: " + quoteYAML(artifact.Hash),
+		"        novaapm.io/runtime-id: " + quoteYAML(runtime.RuntimeID),
+		"        novaapm.io/rules-artifact-hash: " + quoteYAML(artifact.Hash),
 		"    spec:",
 		"      containers:",
 		"        - name: vmalert",
@@ -368,7 +395,7 @@ func renderLogRuntimeManifest(runtime logRuntimeSpec, artifact Artifact) string 
 		"            - "+quoteYAML("-datasource.url="+runtime.DatasourceURL),
 		"            - "+quoteYAML("-notifier.url="+runtime.AlertIngestURL),
 		"            - "+quoteYAML("-httpListenAddr=:8880"),
-		"            - "+quoteYAML("-external.label=novaobs_runtime_id="+runtime.RuntimeID),
+		"            - "+quoteYAML("-external.label=novaapm_runtime_id="+runtime.RuntimeID),
 		"          ports:",
 		"            - name: http",
 		"              containerPort: 8880",
@@ -417,7 +444,7 @@ func dnsName(value string) string {
 	value = re.ReplaceAllString(value, "-")
 	value = strings.Trim(value, "-")
 	if value == "" {
-		value = "novaobs-vmalert"
+		value = "novaapm-vmalert"
 	}
 	if len(value) > 63 {
 		value = strings.TrimRight(value[:52], "-") + "-" + hashText(value)[:10]

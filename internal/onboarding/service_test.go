@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database/memstore"
-	"novaobs/internal/servicecatalog"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database/memstore"
+	platformenvironment "novaapm/internal/platform/environment"
+	"novaapm/internal/servicecatalog"
 
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,10 @@ func newOnboardingTestServices(t *testing.T) (context.Context, *memstore.Store, 
 	t.Helper()
 	store := memstore.NewStore()
 	ctx := context.Background()
-	svcRepo := servicecatalog.NewRepository(store.Services())
+	for _, id := range []string{"production", "staging"} {
+		require.NoError(t, store.Environments().Insert(ctx, platformenvironment.Environment{ID: id, Name: id, Stage: platformenvironment.StageTest, Status: platformenvironment.StatusActive}))
+	}
+	svcRepo := servicecatalog.NewRepository(store.Services(), store.Environments())
 	collectorSvc := collectormanagement.NewService(store.CollectorGroups(), store.CollectorInstances())
 	onbSvc := NewService(store.Onboardings(), store.IngestionIdentities(), svcRepo, collectorSvc)
 	return ctx, store, svcRepo, collectorSvc, onbSvc
@@ -25,7 +29,7 @@ func TestServiceUpsertsOnboarding(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
 		Name:          "payment-gateway",
-		Environment:   "production",
+		EnvironmentID: "production",
 		Cluster:       "prod-1",
 		Namespace:     "payments",
 		CMDBServiceID: "cmdb-svc-payment-gateway",
@@ -36,7 +40,7 @@ func TestServiceUpsertsOnboarding(t *testing.T) {
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
 		Name:           "shared-prod-1",
 		Mode:           "shared_gateway",
-		Environment:    "production",
+		EnvironmentID:  "production",
 		Cluster:        "prod-1",
 		Status:         "active",
 		IngestEndpoint: "http://collector-gateway:4317",
@@ -64,18 +68,18 @@ func TestServiceUpsertsOnboarding(t *testing.T) {
 func TestServiceDoesNotGenerateFakeEndpointWhenCollectorGroupHasNoEndpoint(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
-		Name:        "api-gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Namespace:   "gateway",
+		Name:          "api-gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Namespace:     "gateway",
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "shared-prod-1",
-		Mode:        "shared_gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Status:      "active",
+		Name:          "shared-prod-1",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 
@@ -94,19 +98,19 @@ func TestServiceDoesNotGenerateFakeEndpointWhenCollectorGroupHasNoEndpoint(t *te
 func TestServiceUsesServiceLevelRuntimeIdentityType(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
-		Name:         "vm-api",
-		Environment:  "production",
-		Cluster:      "prod-1",
-		Namespace:    "billing",
-		IdentityType: "host_process",
+		Name:          "vm-api",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Namespace:     "billing",
+		IdentityType:  "host_process",
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "shared-prod-1",
-		Mode:        "shared_gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Status:      "active",
+		Name:          "shared-prod-1",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 
@@ -122,15 +126,15 @@ func TestServiceUsesServiceLevelRuntimeIdentityType(t *testing.T) {
 func TestServiceRejectsDeprecatedSyslogIdentityType(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
-		Name:        "legacy-device",
-		Environment: "production",
+		Name:          "legacy-device",
+		EnvironmentID: "production",
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "shared-prod-1",
-		Mode:        "shared_gateway",
-		Environment: "production",
-		Status:      "active",
+		Name:          "shared-prod-1",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 
@@ -146,7 +150,7 @@ func TestServiceReturnsWorkspaceForNewService(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
 		Name:          "api-gateway",
-		Environment:   "production",
+		EnvironmentID: "production",
 		CMDBServiceID: "cmdb-svc-api",
 		Cluster:       "prod-1",
 		Namespace:     "gateway",
@@ -155,11 +159,11 @@ func TestServiceReturnsWorkspaceForNewService(t *testing.T) {
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "shared-prod-1",
-		Mode:        "shared_gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Status:      "active",
+		Name:          "shared-prod-1",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 
@@ -179,7 +183,7 @@ func TestServiceChecksOnboardingWorkspace(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
 		Name:          "check-svc",
-		Environment:   "staging",
+		EnvironmentID: "staging",
 		Cluster:       "staging-1",
 		Namespace:     "payments",
 		CMDBServiceID: "cmdb-svc-check",
@@ -188,11 +192,11 @@ func TestServiceChecksOnboardingWorkspace(t *testing.T) {
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "shared-staging-1",
-		Mode:        "shared_gateway",
-		Environment: "staging",
-		Cluster:     "staging-1",
-		Status:      "active",
+		Name:          "shared-staging-1",
+		Mode:          "shared_gateway",
+		EnvironmentID: "staging",
+		Cluster:       "staging-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 	_, err = collectorSvc.UpsertInstance(ctx, "collector-a", group.ID, collectormanagement.InstanceStatus{
@@ -223,18 +227,18 @@ func TestServiceChecksOnboardingWorkspace(t *testing.T) {
 func TestServiceRejectsMismatchedCollectorGroup(t *testing.T) {
 	ctx, _, svcRepo, collectorSvc, onbSvc := newOnboardingTestServices(t)
 	s, err := svcRepo.Create(ctx, servicecatalog.Service{
-		Name:        "payment-gateway",
-		Environment: "production",
-		Cluster:     "prod-1",
-		Namespace:   "payments",
+		Name:          "payment-gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-1",
+		Namespace:     "payments",
 	})
 	require.NoError(t, err)
 	group, err := collectorSvc.CreateGroup(ctx, collectormanagement.CollectorGroup{
-		Name:        "staging-group",
-		Mode:        "shared_gateway",
-		Environment: "staging",
-		Cluster:     "staging-1",
-		Status:      "active",
+		Name:          "staging-group",
+		Mode:          "shared_gateway",
+		EnvironmentID: "staging",
+		Cluster:       "staging-1",
+		Status:        "active",
 	})
 	require.NoError(t, err)
 

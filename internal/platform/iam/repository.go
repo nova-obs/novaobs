@@ -3,8 +3,8 @@ package iam
 import (
 	"context"
 
-	"novaobs/internal/database"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/database"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 type Repository interface {

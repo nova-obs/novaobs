@@ -19,7 +19,7 @@ type ServiceAttributes struct {
 	BusinessID    string
 	ApplicationID string
 	IdentityType  string
-	Environment   string
+	EnvironmentID string
 	Cluster       string
 	Namespace     string
 	OwnerTeam     string
@@ -276,7 +276,7 @@ func BuildEnrichmentPatch(attrs ServiceAttributes, collectorGroupID string) Serv
 		statements = append(statements, fmt.Sprintf("          - set(attributes[%q], %q)", field, value))
 	}
 	add("service.name", attrs.Name, "service.name 为空，未生成 service.name enrichment")
-	add("deployment.environment", attrs.Environment, "deployment.environment 为空，未生成 deployment.environment enrichment")
+	add("deployment.environment", attrs.EnvironmentID, "deployment.environment 为空，未生成 deployment.environment enrichment")
 	add("cmdb.service_id", attrs.CMDBServiceID, "")
 	add("business_id", attrs.BusinessID, "")
 	add("application_id", attrs.ApplicationID, "")

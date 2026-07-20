@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -306,7 +306,7 @@ func serviceAttributes(service servicecatalog.Service) ServiceAttributes {
 		BusinessID:    service.BusinessID,
 		ApplicationID: service.ApplicationID,
 		IdentityType:  service.IdentityType,
-		Environment:   service.Environment,
+		EnvironmentID: service.EnvironmentID,
 		Cluster:       service.Cluster,
 		Namespace:     service.Namespace,
 		OwnerTeam:     service.OwnerTeam,

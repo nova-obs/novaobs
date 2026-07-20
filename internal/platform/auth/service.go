@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/platform/iam"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/iam"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 var (

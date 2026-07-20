@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -75,7 +75,7 @@ func (r KubernetesRepository) Create(ctx context.Context, item Namespace) (Names
 	}
 	labels := map[string]string{}
 	if item.Owner != "" {
-		labels["novaobs.io/owner"] = item.Owner
+		labels["novaapm.io/owner"] = item.Owner
 	}
 	created, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: item.Name, Labels: labels},
@@ -126,7 +126,7 @@ func (r KubernetesRepository) allowed(ctx context.Context, clusterID string) boo
 }
 
 func namespaceFromKubernetes(clusterID string, item corev1.Namespace) Namespace {
-	owner := item.Labels["novaobs.io/owner"]
+	owner := item.Labels["novaapm.io/owner"]
 	if owner == "" {
 		owner = item.Labels["owner"]
 	}

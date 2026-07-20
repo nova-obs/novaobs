@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

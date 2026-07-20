@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 )

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -486,7 +486,7 @@ func (s Service) enrichGroupRuntimeSummary(ctx context.Context, group CollectorG
 func normalizeGroup(group CollectorGroup) CollectorGroup {
 	group.Name = strings.TrimSpace(group.Name)
 	group.Mode = strings.TrimSpace(group.Mode)
-	group.Environment = strings.TrimSpace(group.Environment)
+	group.EnvironmentID = strings.TrimSpace(group.EnvironmentID)
 	group.IngestEndpoint = strings.TrimSpace(group.IngestEndpoint)
 	if strings.TrimSpace(group.Status) == "" {
 		group.Status = "draft"
@@ -535,7 +535,7 @@ func applyGroupFilter(groups []CollectorGroup, filter ListGroupFilter) []Collect
 		if filter.Status == "" && group.Status == "deleted" {
 			continue
 		}
-		if filter.Environment != "" && group.Environment != filter.Environment {
+		if filter.EnvironmentID != "" && group.EnvironmentID != filter.EnvironmentID {
 			continue
 		}
 		if filter.Cluster != "" && group.Cluster != filter.Cluster {
@@ -566,7 +566,7 @@ func groupMatchesQuery(group CollectorGroup, query string) bool {
 		group.Name,
 		group.DisplayName,
 		group.Description,
-		group.Environment,
+		group.EnvironmentID,
 		group.Cluster,
 		group.Namespace,
 		group.TenantID,
@@ -593,8 +593,8 @@ func applyGroupPatch(group CollectorGroup, patch UpdateGroupRequest) CollectorGr
 	if patch.Mode != nil {
 		group.Mode = *patch.Mode
 	}
-	if patch.Environment != nil {
-		group.Environment = *patch.Environment
+	if patch.EnvironmentID != nil {
+		group.EnvironmentID = *patch.EnvironmentID
 	}
 	if patch.Cluster != nil {
 		group.Cluster = *patch.Cluster

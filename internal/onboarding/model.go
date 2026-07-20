@@ -3,18 +3,18 @@ package onboarding
 import "time"
 
 type IngestionIdentity struct {
-	ID           string     `json:"id" bson:"_id"`
-	ServiceID    string     `json:"service_id" bson:"service_id"`
-	TenantID     string     `json:"tenant_id" bson:"tenant_id"`
-	Environment  string     `json:"environment" bson:"environment"`
-	IdentityType string     `json:"identity_type" bson:"identity_type"`
-	TokenHash    string     `json:"-" bson:"token_hash"`
-	K8sNamespace string     `json:"k8s_namespace" bson:"k8s_namespace"`
-	K8sWorkload  string     `json:"k8s_workload" bson:"k8s_workload"`
-	Enabled      bool       `json:"enabled" bson:"enabled"`
-	ExpiresAt    *time.Time `json:"expires_at" bson:"expires_at"`
-	CreatedAt    time.Time  `json:"created_at" bson:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at" bson:"updated_at"`
+	ID            string     `json:"id" bson:"_id"`
+	ServiceID     string     `json:"service_id" bson:"service_id"`
+	TenantID      string     `json:"tenant_id" bson:"tenant_id"`
+	EnvironmentID string     `json:"environment_id" bson:"environment_id"`
+	IdentityType  string     `json:"identity_type" bson:"identity_type"`
+	TokenHash     string     `json:"-" bson:"token_hash"`
+	K8sNamespace  string     `json:"k8s_namespace" bson:"k8s_namespace"`
+	K8sWorkload   string     `json:"k8s_workload" bson:"k8s_workload"`
+	Enabled       bool       `json:"enabled" bson:"enabled"`
+	ExpiresAt     *time.Time `json:"expires_at" bson:"expires_at"`
+	CreatedAt     time.Time  `json:"created_at" bson:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at" bson:"updated_at"`
 }
 
 type ServiceOnboarding struct {
@@ -65,7 +65,7 @@ type ServiceSummary struct {
 	Name          string `json:"name"`
 	DisplayName   string `json:"display_name"`
 	IdentityType  string `json:"identity_type"`
-	Environment   string `json:"environment"`
+	EnvironmentID string `json:"environment_id"`
 	Cluster       string `json:"cluster"`
 	Namespace     string `json:"namespace"`
 	OwnerTeam     string `json:"owner_team"`
@@ -75,24 +75,24 @@ type ServiceSummary struct {
 }
 
 type IdentitySummary struct {
-	ID           string     `json:"id"`
-	IdentityType string     `json:"identity_type"`
-	Enabled      bool       `json:"enabled"`
-	TenantID     string     `json:"tenant_id"`
-	Environment  string     `json:"environment"`
-	K8sNamespace string     `json:"k8s_namespace"`
-	K8sWorkload  string     `json:"k8s_workload"`
-	ExpiresAt    *time.Time `json:"expires_at"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	TokenPresent bool       `json:"token_present"`
+	ID            string     `json:"id"`
+	IdentityType  string     `json:"identity_type"`
+	Enabled       bool       `json:"enabled"`
+	TenantID      string     `json:"tenant_id"`
+	EnvironmentID string     `json:"environment_id"`
+	K8sNamespace  string     `json:"k8s_namespace"`
+	K8sWorkload   string     `json:"k8s_workload"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	TokenPresent  bool       `json:"token_present"`
 }
 
 type CollectorTarget struct {
 	GroupID                      string `json:"group_id"`
 	Name                         string `json:"name"`
 	Mode                         string `json:"mode"`
-	Environment                  string `json:"environment"`
+	EnvironmentID                string `json:"environment_id"`
 	Cluster                      string `json:"cluster"`
 	Namespace                    string `json:"namespace"`
 	Status                       string `json:"status"`

@@ -13,6 +13,7 @@ var (
 
 // Store is the top-level database abstraction.
 type Store interface {
+	Products() ProductStore
 	Services() ServiceStore
 	ServiceTargets() ServiceTargetStore
 	CollectorGroups() CollectorGroupStore
@@ -28,12 +29,16 @@ type Store interface {
 	LogEndpoints() LogEndpointStore
 	LogSources() LogSourceStore
 	LogRoutes() LogRouteStore
+	VMLogAgentEndpoints() VMLogAgentEndpointStore
 	LogTargets() LogTargetStore
 	LogCollectorConfigVersions() LogCollectorConfigVersionStore
 	LogDeploymentManifestVersions() LogDeploymentManifestVersionStore
 	LogCollectorClusterConfigs() LogCollectorClusterConfigStore
 	ObservabilityRuntimes() ObservabilityRuntimeStore
-	MetricsServiceBindings() MetricsServiceBindingStore
+	MetricsIntegrations() MetricsIntegrationStore
+	MetricsSourceAccesses() MetricsSourceAccessStore
+	MetricsHealthSnapshots() MetricsHealthSnapshotStore
+	MetricsCollectorReleases() MetricsCollectorReleaseStore
 	Alerting() AlertingStore
 	RBACRoles() RBACRoleStore
 	RBACBindings() RBACBindingStore
@@ -45,11 +50,20 @@ type Store interface {
 	PlatformImages() PlatformImageStore
 	Secrets() SecretStore
 	AuditEvents() AuditEventStore
+	Environments() EnvironmentStore
+	EnvironmentResourceBindings() EnvironmentResourceBindingStore
 	K8sClusters() K8sClusterStore
 	K8sNamespaces() K8sNamespaceStore
 	K8sDeploymentInventory() K8sDeploymentInventoryStore
 	K8sDeploymentHistory() K8sDeploymentHistoryStore
 	Close(ctx context.Context) error
+}
+
+type ProductStore interface {
+	Insert(ctx context.Context, product interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, product interface{}) error
 }
 
 // ServiceStore manages service catalog entries.
@@ -163,6 +177,15 @@ type LogRouteStore interface {
 	Delete(ctx context.Context, id string) error
 }
 
+type VMLogAgentEndpointStore interface {
+	Insert(ctx context.Context, endpoint interface{}) error
+	FindByRoute(ctx context.Context, routeID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, endpoint interface{}) error
+	Delete(ctx context.Context, id string) error
+	DeleteByRoute(ctx context.Context, routeID string) error
+}
+
 type LogTargetStore interface {
 	Insert(ctx context.Context, target interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
@@ -193,12 +216,32 @@ type ObservabilityRuntimeStore interface {
 	FindByCluster(ctx context.Context, clusterID string, results interface{}) error
 }
 
-type MetricsServiceBindingStore interface {
-	Insert(ctx context.Context, binding interface{}) error
+type MetricsIntegrationStore interface {
+	Insert(ctx context.Context, integration interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
-	FindByService(ctx context.Context, serviceID string, results interface{}) error
 	FindByID(ctx context.Context, id string, result interface{}) error
-	Update(ctx context.Context, id string, binding interface{}) error
+	FindByEnvironment(ctx context.Context, environmentID string, result interface{}) error
+	Update(ctx context.Context, id string, integration interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type MetricsSourceAccessStore interface {
+	Insert(ctx context.Context, source interface{}) error
+	FindByIntegration(ctx context.Context, integrationID string, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, source interface{}) error
+	Delete(ctx context.Context, id string) error
+}
+
+type MetricsHealthSnapshotStore interface {
+	Insert(ctx context.Context, snapshot interface{}) error
+	FindLatestByIntegration(ctx context.Context, integrationID string, result interface{}) error
+}
+
+type MetricsCollectorReleaseStore interface {
+	Insert(ctx context.Context, release interface{}) error
+	Update(ctx context.Context, id string, release interface{}) error
+	FindLatestBySourceAccess(ctx context.Context, sourceAccessID string, result interface{}) error
 }
 
 type AlertingStore interface {
@@ -281,6 +324,20 @@ type SecretStore interface {
 type AuditEventStore interface {
 	Insert(ctx context.Context, event interface{}) error
 	FindAll(ctx context.Context, results interface{}) error
+}
+
+type EnvironmentStore interface {
+	Insert(ctx context.Context, environment interface{}) error
+	FindAll(ctx context.Context, results interface{}) error
+	FindByID(ctx context.Context, id string, result interface{}) error
+	Update(ctx context.Context, id string, environment interface{}) error
+}
+
+type EnvironmentResourceBindingStore interface {
+	Insert(ctx context.Context, binding interface{}) error
+	FindByEnvironment(ctx context.Context, environmentID string, results interface{}) error
+	FindByResource(ctx context.Context, resourceKind string, resourceRef string, result interface{}) error
+	Delete(ctx context.Context, id string) error
 }
 
 type K8sClusterStore interface {

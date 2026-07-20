@@ -87,7 +87,7 @@ func (r MemoryReader) GetDetail(_ context.Context, query DetailQuery) (ResourceD
 	if !ok {
 		return ResourceDetail{}, ErrResourceNotFound
 	}
-	return ResourceDetail{Identity: item.Identity, Status: item.Status, Labels: item.Labels, Spec: map[string]any{"managed_by": "novaobs"}, UpdatedAt: item.UpdatedAt}, nil
+	return ResourceDetail{Identity: item.Identity, Status: item.Status, Labels: item.Labels, Spec: map[string]any{"managed_by": "novaapm"}, UpdatedAt: item.UpdatedAt}, nil
 }
 
 func (r MemoryReader) GetYAML(_ context.Context, query DetailQuery) (ResourceYAML, error) {

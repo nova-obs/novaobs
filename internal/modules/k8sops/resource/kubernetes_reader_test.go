@@ -2,17 +2,21 @@ package resource
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +63,38 @@ func TestKubernetesReaderListsDeploymentSummaries(t *testing.T) {
 	require.Equal(t, "healthy", items[0].Status)
 	require.Equal(t, "orders-api", items[0].Labels["app"])
 	require.Equal(t, createdAt, items[0].UpdatedAt)
+}
+
+func TestKubernetesReaderListsExplicitClusterScopedResourcesWithoutNamespace(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "novaapm-system", UID: "uid-namespace"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "uid-node"}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "novaapm-vmagent", UID: "uid-role"}},
+	)
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client})
+
+	namespaces, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Namespace"})
+	require.NoError(t, err)
+	require.Len(t, namespaces, 1)
+	require.Equal(t, "novaapm-system", namespaces[0].Identity.Name)
+
+	roles, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "ClusterRole"})
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	require.Equal(t, "novaapm-vmagent", roles[0].Identity.Name)
+
+	nodes, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Node"})
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+	require.Equal(t, "node-a", nodes[0].Identity.Name)
+}
+
+func TestKubernetesReaderStillRequiresNamespaceForNamespacedLists(t *testing.T) {
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: fake.NewSimpleClientset()})
+
+	_, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Deployment"})
+
+	require.ErrorIs(t, err, ErrNamespaceRequired)
 }
 
 func TestKubernetesReaderListsAppsWorkloadSummaries(t *testing.T) {
@@ -679,6 +715,37 @@ func TestKubernetesReaderRequiresNamespaceForResourceList(t *testing.T) {
 	require.ErrorIs(t, err, ErrNamespaceRequired)
 }
 
+func TestKubernetesReaderNormalizesKubernetesForbidden(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "nodes"}, "", errors.New("forbidden"))
+	})
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client}, allowResourceReadAuthorizer{})
+
+	_, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Node"})
+
+	require.ErrorIs(t, err, ErrReadPermissionDenied)
+}
+
+func TestKubernetesReaderNormalizesCredentialPermissionDenied(t *testing.T) {
+	reader := NewKubernetesReader(errorResourceClientsetProvider{err: k8sopscluster.ErrCredentialPermissionDenied}, allowResourceReadAuthorizer{})
+
+	_, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "Node"})
+
+	require.ErrorIs(t, err, ErrReadPermissionDenied)
+}
+
+func TestKubernetesReaderListsClusterRoleBindingsWithoutNamespace(t *testing.T) {
+	client := fake.NewSimpleClientset(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "metrics", UID: "binding-uid"}})
+	reader := NewKubernetesReader(staticResourceClientsetProvider{client: client}, allowResourceReadAuthorizer{})
+
+	items, err := reader.List(context.Background(), ListFilter{ClusterID: "prod", Kind: "ClusterRoleBinding"})
+
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "metrics", items[0].Identity.Name)
+}
+
 func TestPodLogOptionsAreBounded(t *testing.T) {
 	options := podLogOptions("api")
 
@@ -691,6 +758,12 @@ func TestPodLogOptionsAreBounded(t *testing.T) {
 
 type staticResourceClientsetProvider struct {
 	client kubernetes.Interface
+}
+
+type errorResourceClientsetProvider struct{ err error }
+
+func (p errorResourceClientsetProvider) Clientset(_ context.Context, _ string) (kubernetes.Interface, error) {
+	return nil, p.err
 }
 
 func (p staticResourceClientsetProvider) Clientset(_ context.Context, _ string) (kubernetes.Interface, error) {

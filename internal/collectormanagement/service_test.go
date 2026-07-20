@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
 
 	"github.com/stretchr/testify/require"
 )
@@ -93,7 +93,7 @@ func TestServiceUpsertsK8sInstancesByRuntimeIdentity(t *testing.T) {
 	ctx := context.Background()
 
 	group, err := svc.CreateGroup(ctx, CollectorGroup{
-		Name:    "logs-k8s-test03-novaobs-system",
+		Name:    "logs-k8s-test03-novaapm-system",
 		Mode:    "dedicated_collector",
 		Cluster: "test03",
 	})
@@ -102,10 +102,10 @@ func TestServiceUpsertsK8sInstancesByRuntimeIdentity(t *testing.T) {
 	first, err := svc.UpsertInstance(ctx, "opamp-uid-a", group.ID, InstanceStatus{
 		RuntimeIdentity: "k8s:test03:" + group.ID + ":node-01",
 		ClusterID:       "test03",
-		Namespace:       "novaobs-system",
-		AgentNamespace:  "novaobs-system",
+		Namespace:       "novaapm-system",
+		AgentNamespace:  "novaapm-system",
 		PodUID:          "pod-uid-a",
-		PodName:         "novaobs-logs-agent-a",
+		PodName:         "novaapm-logs-agent-a",
 		NodeName:        "node-01",
 		PodIP:           "10.0.0.11",
 		Online:          true,
@@ -119,10 +119,10 @@ func TestServiceUpsertsK8sInstancesByRuntimeIdentity(t *testing.T) {
 	second, err := svc.UpsertInstance(ctx, "opamp-uid-b", group.ID, InstanceStatus{
 		RuntimeIdentity: "k8s:test03:" + group.ID + ":node-01",
 		ClusterID:       "test03",
-		Namespace:       "novaobs-system",
-		AgentNamespace:  "novaobs-system",
+		Namespace:       "novaapm-system",
+		AgentNamespace:  "novaapm-system",
 		PodUID:          "pod-uid-b",
-		PodName:         "novaobs-logs-agent-b",
+		PodName:         "novaapm-logs-agent-b",
 		NodeName:        "node-01",
 		PodIP:           "10.0.0.12",
 		Online:          true,
@@ -149,7 +149,7 @@ func TestServiceIgnoresStaleOfflineEventForReplacedRuntimeIdentity(t *testing.T)
 	ctx := context.Background()
 
 	group, err := svc.CreateGroup(ctx, CollectorGroup{
-		Name:    "logs-k8s-test03-novaobs-system",
+		Name:    "logs-k8s-test03-novaapm-system",
 		Mode:    "dedicated_collector",
 		Cluster: "test03",
 	})
@@ -304,9 +304,9 @@ func TestServiceUpdatesGroup(t *testing.T) {
 	ctx := context.Background()
 
 	group, err := svc.CreateGroup(ctx, CollectorGroup{
-		Name:        "prod-group",
-		Mode:        "shared_gateway",
-		Environment: "production",
+		Name:          "prod-group",
+		Mode:          "shared_gateway",
+		EnvironmentID: "production",
 	})
 	require.NoError(t, err)
 

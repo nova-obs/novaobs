@@ -39,19 +39,19 @@ func TestCommandPolicyTruncatesOutput(t *testing.T) {
 	output, truncated := (CommandPolicy{MaxOutputBytes: 12}).TrimOutput("0123456789abcdef")
 
 	require.True(t, truncated)
-	require.Equal(t, "0123456789ab\n... output truncated by NovaObs terminal policy ...", output)
+	require.Equal(t, "0123456789ab\n... output truncated by NovaAPM terminal policy ...", output)
 }
 
 func TestCommandPolicyTruncatesOutputAtUTF8Boundary(t *testing.T) {
 	output, truncated := (CommandPolicy{MaxOutputBytes: 7}).TrimOutput("节点状态abcdef")
 
 	require.True(t, truncated)
-	require.Equal(t, "节点\n... output truncated by NovaObs terminal policy ...", output)
+	require.Equal(t, "节点\n... output truncated by NovaAPM terminal policy ...", output)
 }
 
 func TestCommandPolicyKeepsFirstRuneWhenLimitIsSmallerThanRune(t *testing.T) {
 	output, truncated := (CommandPolicy{MaxOutputBytes: 1}).TrimOutput("节abc")
 
 	require.True(t, truncated)
-	require.Equal(t, "节\n... output truncated by NovaObs terminal policy ...", output)
+	require.Equal(t, "节\n... output truncated by NovaAPM terminal policy ...", output)
 }

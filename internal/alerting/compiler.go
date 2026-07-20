@@ -3,8 +3,11 @@ package alerting
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"novaapm/internal/metrics"
 )
 
 var logsQLFieldPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
@@ -75,9 +78,20 @@ func compileQuery(spec RuleSpec, applyTimeWindow bool, applyThreshold bool) (str
 
 func compileMetricQuery(spec RuleSpec, applyThreshold bool) (string, error) {
 	expression := strings.TrimSpace(spec.Query.Expression)
-	if spec.Scope.BasePromQL != "" {
-		expression = "(" + expression + ") and (" + spec.Scope.BasePromQL + ")"
+	labels := map[string]string{metrics.EnvironmentIdentityLabel: spec.Scope.EnvironmentID}
+	for key, value := range spec.Scope.ScopeLabels {
+		labels[key] = value
 	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	matchers := make([]string, 0, len(keys))
+	for _, key := range keys {
+		matchers = append(matchers, key+"="+strconv.Quote(labels[key]))
+	}
+	expression = "(" + expression + ") and on(" + strings.Join(keys, ",") + ") ({" + strings.Join(matchers, ",") + "})"
 	if applyThreshold {
 		op := ">="
 		if spec.Trigger.Operator == OperatorGT {

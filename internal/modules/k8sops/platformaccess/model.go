@@ -3,7 +3,7 @@ package platformaccess
 import (
 	"time"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 type PermissionOption struct {

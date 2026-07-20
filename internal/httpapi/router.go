@@ -7,36 +7,37 @@ import (
 	"net/http"
 	"strings"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/collectorconfig"
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	"novaobs/internal/logs"
-	"novaobs/internal/metrics"
-	"novaobs/internal/modules/k8sops"
-	k8sopscertificate "novaobs/internal/modules/k8sops/certificate"
-	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
-	k8sopsdashboard "novaobs/internal/modules/k8sops/dashboard"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	k8sopskubeconfig "novaobs/internal/modules/k8sops/kubeconfig"
-	k8sopsnamespace "novaobs/internal/modules/k8sops/namespace"
-	k8sopsplatformaccess "novaobs/internal/modules/k8sops/platformaccess"
-	k8sopsrbac "novaobs/internal/modules/k8sops/rbac"
-	k8sopsresource "novaobs/internal/modules/k8sops/resource"
-	k8sopsserviceaccount "novaobs/internal/modules/k8sops/serviceaccount"
-	k8sopstemplate "novaobs/internal/modules/k8sops/template"
-	k8sopsterminal "novaobs/internal/modules/k8sops/terminal"
-	obsendpoint "novaobs/internal/observability/endpoint"
-	"novaobs/internal/onboarding"
-	"novaobs/internal/opamp"
-	platformauth "novaobs/internal/platform/auth"
-	"novaobs/internal/platform/authctx"
-	"novaobs/internal/platform/iam"
-	platformimages "novaobs/internal/platform/images"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/internal/collectorconfig"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	"novaapm/internal/logs"
+	"novaapm/internal/metrics"
+	"novaapm/internal/modules/k8sops"
+	k8sopscertificate "novaapm/internal/modules/k8sops/certificate"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	k8sopsdashboard "novaapm/internal/modules/k8sops/dashboard"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	k8sopskubeconfig "novaapm/internal/modules/k8sops/kubeconfig"
+	k8sopsnamespace "novaapm/internal/modules/k8sops/namespace"
+	k8sopsplatformaccess "novaapm/internal/modules/k8sops/platformaccess"
+	k8sopsrbac "novaapm/internal/modules/k8sops/rbac"
+	k8sopsresource "novaapm/internal/modules/k8sops/resource"
+	k8sopsserviceaccount "novaapm/internal/modules/k8sops/serviceaccount"
+	k8sopstemplate "novaapm/internal/modules/k8sops/template"
+	k8sopsterminal "novaapm/internal/modules/k8sops/terminal"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	"novaapm/internal/onboarding"
+	"novaapm/internal/opamp"
+	platformauth "novaapm/internal/platform/auth"
+	"novaapm/internal/platform/authctx"
+	platformenvironment "novaapm/internal/platform/environment"
+	"novaapm/internal/platform/iam"
+	platformimages "novaapm/internal/platform/images"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -46,27 +47,29 @@ import (
 var bg = context.Background()
 
 type Dependencies struct {
-	Store                  database.Store
-	ServiceRepo            servicecatalog.Repository
-	ServiceTargetRepo      servicecatalog.TargetRepository
-	CollectorConfigService collectorconfig.Service
-	CollectorService       collectormanagement.Service
-	OnboardingService      onboarding.Service
-	LogsService            logs.Service
-	ObservabilityEndpoints obsendpoint.Service
-	MetricsService         metrics.Service
-	AlertRuntimeService    alerting.LogRuntimeService
-	MetricsRuntimeService  alerting.MetricsRuntimeService
-	AlertService           alerting.Service
-	AlertEventIngestor     alerting.EventIngestor
-	AlertPolicyService     alerting.PolicyService
-	PlatformIAMService     iam.Service
-	PlatformImageService   platformimages.Service
-	K8sOpsModule           k8sops.Module
-	OpAMPManager           *opamp.Manager
-	CollectorTemplate      string
-	PlatformAuthService    *platformauth.Service
-	DefaultSubject         platformrbac.Subject
+	Store                      database.Store
+	ProductRepo                servicecatalog.ProductRepository
+	ServiceRepo                servicecatalog.Repository
+	ServiceTargetRepo          servicecatalog.TargetRepository
+	CollectorConfigService     collectorconfig.Service
+	CollectorService           collectormanagement.Service
+	OnboardingService          onboarding.Service
+	LogsService                logs.Service
+	ObservabilityEndpoints     obsendpoint.Service
+	MetricsIntegrationService  metrics.IntegrationService
+	AlertRuntimeService        alerting.LogRuntimeService
+	MetricsRuntimeService      alerting.MetricsRuntimeService
+	AlertService               alerting.Service
+	AlertEventIngestor         alerting.EventIngestor
+	AlertPolicyService         alerting.PolicyService
+	PlatformIAMService         iam.Service
+	PlatformEnvironmentService platformenvironment.Service
+	PlatformImageService       platformimages.Service
+	K8sOpsModule               k8sops.Module
+	OpAMPManager               *opamp.Manager
+	CollectorTemplate          string
+	PlatformAuthService        *platformauth.Service
+	DefaultSubject             platformrbac.Subject
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -122,8 +125,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	api.GET("/auth/session", platformauth.SessionHandler())
 	api.GET("/overview", overviewHandler(deps))
+	api.GET("/products", listProductsHandler(deps.ProductRepo))
+	api.POST("/products", createProductHandler(deps.ProductRepo))
+	api.GET("/products/:productId", getProductHandler(deps.ProductRepo))
 	api.GET("/services", listServicesHandler(deps.ServiceRepo))
-	api.POST("/services", createServiceHandler(deps.ServiceRepo))
+	api.POST("/products/:productId/services", createServiceHandler(deps.ServiceRepo))
 	api.GET("/services/:id", getServiceHandler(deps.ServiceRepo))
 	api.PATCH("/services/:id", updateServiceHandler(deps.ServiceRepo))
 	api.DELETE("/services/:id", deleteServiceHandler(deps.ServiceRepo, deps.CollectorService, deps.Store))
@@ -152,9 +158,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/collector-platform-templates/import-from-agent", importCollectorPlatformTemplateHandler(deps.CollectorConfigService, deps.OpAMPManager))
 	api.GET("/collector-platform-templates/:id", getCollectorPlatformTemplateHandler(deps.CollectorConfigService))
 	api.PUT("/collector-platform-templates/:id", updateCollectorPlatformTemplateHandler(deps.CollectorConfigService))
-	api.GET("/logs/onboarding/workspace", getLogsOnboardingWorkspaceHandler(deps.LogsService))
+	api.GET("/products/:productId/services/:id/logs/workspace", getLogsOnboardingWorkspaceHandler(deps.LogsService))
 	api.GET("/logs/onboarding/k8s/workloads", getLogsK8sWorkloadsHandler(deps.LogsService))
-	api.POST("/logs/onboarding/k8s/sync-services", syncLogsK8sServicesHandler(deps.LogsService))
+	api.POST("/products/:productId/logs/onboarding/k8s/sync-services", syncLogsK8sServicesHandler(deps.LogsService))
 	api.GET("/logs/endpoints", listLogsEndpointsHandler(deps.LogsService))
 	api.POST("/logs/endpoints", createLogsEndpointHandler(deps.LogsService))
 	api.PATCH("/logs/endpoints/:id", updateLogsEndpointHandler(deps.LogsService))
@@ -168,23 +174,22 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.POST("/logs/routes", createLogsRouteHandler(deps.LogsService))
 	api.PATCH("/logs/routes/:id", updateLogsRouteHandler(deps.LogsService))
 	api.GET("/logs/routes/:id/collector-config", getLogsRouteCollectorConfigHandler(deps.LogsService))
+	api.GET("/logs/routes/:id/vm-installation", getVMInstallationHandler(deps.LogsService))
+	api.GET("/logs/routes/:id/vm-agent-endpoints", listVMLogAgentEndpointsHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/vm-agent-endpoints", createVMLogAgentEndpointHandler(deps.LogsService))
+	api.DELETE("/logs/routes/:id/vm-agent-endpoints/:endpointId", deleteVMLogAgentEndpointHandler(deps.LogsService))
+	api.POST("/logs/routes/:id/vm-agent-endpoints/:endpointId/probe", probeVMLogAgentEndpointHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/probe", probeLogsRouteHandler(deps.LogsService))
 	api.DELETE("/logs/routes/:id", deleteLogsRouteHandler(deps.LogsService))
 	api.POST("/logs/routes/:id/publish", publishLogsRouteHandler(deps.LogsService))
 	api.GET("/observability/endpoints", listObservabilityEndpointsHandler(deps.ObservabilityEndpoints))
+	api.POST("/observability/endpoints", createObservabilityEndpointHandler(deps.ObservabilityEndpoints))
+	api.PATCH("/observability/endpoints/:id", updateObservabilityEndpointHandler(deps.ObservabilityEndpoints))
 	api.POST("/observability/endpoints/:id/test", testObservabilityEndpointHandler(deps.ObservabilityEndpoints))
-	api.GET("/observability/runtimes", listObservabilityRuntimesHandler(deps.Store.ObservabilityRuntimes()))
+	api.GET("/observability/runtimes/logs-collector/status", getLogsCollectorRuntimeStatusHandler(deps.LogsService))
 	api.POST("/observability/runtimes/logs-collector/publish", publishLogsCollectorRuntimeHandler(deps.LogsService))
-	api.GET("/metrics/endpoints", listMetricsEndpointsHandler(deps.MetricsService))
-	api.POST("/metrics/endpoints/:id/vmalert-runtime/publish", publishMetricsEndpointVmalertRuntimeHandler(deps.MetricsRuntimeService))
-	api.GET("/metrics/workspace", getMetricsWorkspaceHandler(deps.MetricsService))
-	api.GET("/metrics/service-bindings", listMetricsServiceBindingsHandler(deps.MetricsService))
-	api.POST("/metrics/service-bindings", createMetricsServiceBindingHandler(deps.MetricsService))
-	api.PATCH("/metrics/service-bindings/:id", updateMetricsServiceBindingHandler(deps.MetricsService))
-	api.POST("/metrics/service-bindings/:id/probe", probeMetricsServiceBindingHandler(deps.MetricsService))
-	api.GET("/metrics/alert-rules", listMetricsAlertRulesHandler(deps.AlertService))
-	api.POST("/metrics/alert-rules/test", testMetricsAlertRuleHandler(deps.AlertService))
-	api.POST("/metrics/alert-rules", createMetricsAlertRuleHandler(deps.AlertService))
+	metrics.RegisterIntegrationRoutes(api, deps.MetricsIntegrationService)
+	api.POST("/observability/endpoints/:id/metrics-alert-runtime/publish", publishMetricsAlertRuntimeHandler(deps.MetricsRuntimeService))
 	api.GET("/alerts/rules", listAlertRulesHandler(deps.AlertService))
 	api.POST("/alerts/rules/test", testAlertRuleHandler(deps.AlertService))
 	api.POST("/alerts/rules", createAlertRuleHandler(deps.AlertService))
@@ -221,6 +226,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	api.GET("/platform/effective-permissions", iam.EffectivePermissionsHandler(deps.PlatformIAMService))
 	api.GET("/platform/images", platformimages.ListHandler(deps.PlatformImageService))
 	api.PUT("/platform/images", platformimages.UpsertHandler(deps.PlatformImageService))
+	platformenvironment.RegisterRoutes(api, deps.PlatformEnvironmentService)
 	api.GET("/k8sops/dashboard", getK8sOpsDashboardHandler(deps.K8sOpsModule.Dashboard))
 	api.GET("/k8s/clusters", k8sopscluster.ListHandler(deps.K8sOpsModule.Cluster))
 	api.POST("/k8s/clusters", k8sopscluster.CreateHandler(deps.K8sOpsModule.Cluster))
@@ -360,16 +366,54 @@ func overviewHandler(deps Dependencies) gin.HandlerFunc {
 func listServicesHandler(repo servicecatalog.Repository) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		services, err := repo.List(bg, servicecatalog.ListFilter{
-			Query:       ctx.Query("q"),
-			Environment: ctx.Query("environment"),
-			Status:      ctx.Query("status"),
-			Source:      ctx.Query("source"),
+			Query:         ctx.Query("q"),
+			EnvironmentID: ctx.Query("environment_id"),
+			Status:        ctx.Query("status"),
+			Source:        ctx.Query("source"),
 		})
 		if err != nil {
 			writeError(ctx, err)
 			return
 		}
 		response.OK(ctx, services, gin.H{"total": len(services)})
+	}
+}
+
+func listProductsHandler(repo servicecatalog.ProductRepository) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		products, err := repo.List(ctx.Request.Context())
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.OK(ctx, products, gin.H{"total": len(products)})
+	}
+}
+
+func createProductHandler(repo servicecatalog.ProductRepository) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var body servicecatalog.Product
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("产品创建请求无效"))
+			return
+		}
+		product, err := repo.Create(ctx.Request.Context(), body)
+		if err != nil {
+			writeError(ctx, err)
+			return
+		}
+		response.Created(ctx, product)
+	}
+}
+
+func getProductHandler(repo servicecatalog.ProductRepository) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		product, err := repo.Get(ctx.Request.Context(), strings.TrimSpace(ctx.Param("productId")))
+		if err != nil {
+			writeError(ctx, normalizeNotFound(err, "产品不存在"))
+			return
+		}
+		response.OK(ctx, product, gin.H{})
 	}
 }
 
@@ -380,7 +424,14 @@ func createServiceHandler(repo servicecatalog.Repository) gin.HandlerFunc {
 			writeError(ctx, apperr.InvalidRequest("服务创建请求无效"))
 			return
 		}
-		service, err := repo.Create(bg, body)
+		if strings.TrimSpace(body.ProductID) == "" {
+			body.ProductID = strings.TrimSpace(ctx.Param("productId"))
+		}
+		if body.ProductID != strings.TrimSpace(ctx.Param("productId")) {
+			writeError(ctx, apperr.InvalidRequest("product_id 与路径产品不一致"))
+			return
+		}
+		service, err := repo.Create(ctx.Request.Context(), body)
 		if err != nil {
 			writeError(ctx, err)
 			return
@@ -497,7 +548,7 @@ func listCollectorGroupsHandler(service collectormanagement.Service) gin.Handler
 	return func(ctx *gin.Context) {
 		groups, err := service.ListGroups(bg, collectormanagement.ListGroupFilter{
 			Query:           ctx.Query("q"),
-			Environment:     ctx.Query("environment"),
+			EnvironmentID:   ctx.Query("environment_id"),
 			Cluster:         ctx.Query("cluster"),
 			Namespace:       ctx.Query("namespace"),
 			Mode:            ctx.Query("mode"),

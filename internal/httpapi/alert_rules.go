@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"novaobs/internal/alerting"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,72 +29,6 @@ func testAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 		}
 		response.OK(ctx, result, gin.H{})
 	}
-}
-
-func testMetricsAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		var body alerting.TestRequest
-		if err := ctx.ShouldBindJSON(&body); err != nil {
-			response.Error(ctx, http.StatusBadRequest, "invalid_request", "规则测试请求格式不正确")
-			return
-		}
-		body.Spec = forceAlertRuleSignal(body.Spec, alerting.SignalTypeMetrics)
-		subject, ok := alertSubject(ctx)
-		if !ok {
-			return
-		}
-		result, err := service.Test(ctx.Request.Context(), subject, body)
-		if err != nil {
-			writeAlertingError(ctx, err)
-			return
-		}
-		response.OK(ctx, result, gin.H{})
-	}
-}
-
-func listMetricsAlertRulesHandler(service alerting.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		subject, ok := alertSubject(ctx)
-		if !ok {
-			return
-		}
-		rules, err := service.List(ctx.Request.Context(), subject, alerting.RuleFilter{
-			ServiceID:  strings.TrimSpace(ctx.Query("service_id")),
-			State:      strings.TrimSpace(ctx.Query("state")),
-			SignalType: alerting.SignalTypeMetrics,
-		})
-		if err != nil {
-			writeAlertingError(ctx, err)
-			return
-		}
-		response.OK(ctx, rules, gin.H{"total": len(rules)})
-	}
-}
-
-func createMetricsAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		var body alerting.EnableRequest
-		if err := ctx.ShouldBindJSON(&body); err != nil {
-			response.Error(ctx, http.StatusBadRequest, "invalid_request", "告警规则请求格式不正确")
-			return
-		}
-		body.Spec = forceAlertRuleSignal(body.Spec, alerting.SignalTypeMetrics)
-		subject, ok := alertSubject(ctx)
-		if !ok {
-			return
-		}
-		result, err := service.Enable(ctx.Request.Context(), subject, body)
-		if err != nil {
-			writeAlertingError(ctx, err)
-			return
-		}
-		response.Created(ctx, result)
-	}
-}
-
-func forceAlertRuleSignal(spec alerting.RuleSpec, signalType string) alerting.RuleSpec {
-	spec.SignalType = signalType
-	return spec
 }
 
 func getAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
@@ -134,9 +68,7 @@ func updateAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 
 func disableAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		var body struct {
-			ChangeSummary string `json:"change_summary"`
-		}
+		var body alerting.DisableRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			response.Error(ctx, http.StatusBadRequest, "invalid_request", "停用请求格式不正确")
 			return
@@ -145,7 +77,7 @@ func disableAlertRuleHandler(service alerting.Service) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.Disable(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body.ChangeSummary)
+		result, err := service.Disable(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
 		if err != nil {
 			writeAlertingError(ctx, err)
 			return

@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 startorch 已实现的 K8s 资源运行时拓扑能力迁移到 NovaObs，并在 NovaObs 的统一权限、统一 API、多版本 discovery、审计和前端设计体系下增强。
+**Goal:** 将 startorch 已实现的 K8s 资源运行时拓扑能力迁移到 NovaAPM，并在 NovaAPM 的统一权限、统一 API、多版本 discovery、审计和前端设计体系下增强。
 
-**Architecture:** 后端新增 `k8sops/resource` runtime topology 读模型和接口，复用现有 `kubeclient.BundleProvider`、`DiscoverCapabilities`、`ResourceVersionResolver` 和 dynamic client。前端在 K8s 运维模块内新增运行时拓扑视图，先完成 startorch 等价展示，再按 NovaObs UI skill 优化为更专业的拓扑工作台。
+**Architecture:** 后端新增 `k8sops/resource` runtime topology 读模型和接口，复用现有 `kubeclient.BundleProvider`、`DiscoverCapabilities`、`ResourceVersionResolver` 和 dynamic client。前端在 K8s 运维模块内新增运行时拓扑视图，先完成 startorch 等价展示，再按 NovaAPM UI skill 优化为更专业的拓扑工作台。
 
-**Tech Stack:** Go、Gin、client-go typed/dynamic/discovery、React、TypeScript/JavaScript、现有 NovaObs response envelope、现有 K8s RBAC authorizer。
+**Tech Stack:** Go、Gin、client-go typed/dynamic/discovery、React、TypeScript/JavaScript、现有 NovaAPM response envelope、现有 K8s RBAC authorizer。
 
 ---
 
 ## 基线对齐结论
 
-startorch 已实现但 NovaObs 当前缺失或不完整的基线能力：
+startorch 已实现但 NovaAPM 当前缺失或不完整的基线能力：
 
 - 资源运行时拓扑：`/api/k8s/runtime-groups`，按单 namespace 聚合 Service、Deployment、StatefulSet、DaemonSet、Pod、PVC、HPA、Ingress、Istio Gateway、VirtualService、DestinationRule、安全策略。
 - 服务与工作负载关系：Service selector 匹配 workload template labels，Pod 通过 workload selector 归属到更具体的 workload。
@@ -21,7 +21,7 @@ startorch 已实现但 NovaObs 当前缺失或不完整的基线能力：
 - Istio 安全策略归一：PeerAuthentication、AuthorizationPolicy、RequestAuthentication、legacy Policy、MeshPolicy、ServiceRoleBinding、ClusterRbacConfig。
 - 前端运行时视图：namespace 详情中的 Runtime tab、拓扑关系图、治理面板、资源浏览、YAML/日志/历史弹窗联动。
 
-NovaObs 已具备可复用基础：
+NovaAPM 已具备可复用基础：
 
 - 集群凭据、clientset/dynamic/discovery provider。
 - 资源读取权限 `k8s.resource:read`。
@@ -47,9 +47,9 @@ NovaObs 已具备可复用基础：
   - 新增 `GET /api/v1/k8s/runtime-groups`。
 - 修改：`internal/modules/k8sops/resource/*_test.go`
   - 覆盖 service 权限、handler 路由、reader 拓扑聚合、多版本 Istio/HPA/Ingress。
-- 修改：`novaobs-fe/src/pages/k8s/*`
+- 修改：`novaapm-fe/src/pages/k8s/*`
   - 新增运行时拓扑页面或 tab。
-- 修改：`novaobs-fe/src/services/*`
+- 修改：`novaapm-fe/src/services/*`
   - 新增 runtime-groups API。
 
 ## Task 1: 后端 API 模型与服务入口
@@ -108,7 +108,7 @@ Expected: 编译失败，提示 `RuntimeGroupsQuery` 或 `ListRuntimeGroups` 未
 
 - [ ] **Step 3: 增加模型和服务方法**
 
-在 `model.go` 增加 startorch 等价 runtime 类型；命名保留 NovaObs 语义：
+在 `model.go` 增加 startorch 等价 runtime 类型；命名保留 NovaAPM 语义：
 
 ```go
 type RuntimeGroupsQuery struct {
@@ -303,7 +303,7 @@ Expected: PASS。
 
 - [ ] **Step 2: 迁移安全策略 binding 逻辑**
 
-从 startorch 的 `runtimeSecurityPolicyBinding` 思路迁移，但适配 NovaObs 命名和错误处理：
+从 startorch 的 `runtimeSecurityPolicyBinding` 思路迁移，但适配 NovaAPM 命名和错误处理：
 
 - namespace scoped dynamic list 失败不阻塞主拓扑。
 - cluster scoped legacy resource list 失败不阻塞主拓扑。
@@ -318,9 +318,9 @@ Expected: PASS。
 ## Task 6: 前端 Runtime Topology API 与页面
 
 **Files:**
-- Modify: `novaobs-fe/src/services/*`
-- Modify/Create: `novaobs-fe/src/pages/k8s/*`
-- Modify/Create: `novaobs-fe/src/components/k8s/runtime/*`
+- Modify: `novaapm-fe/src/services/*`
+- Modify/Create: `novaapm-fe/src/pages/k8s/*`
+- Modify/Create: `novaapm-fe/src/components/k8s/runtime/*`
 
 - [ ] **Step 1: 新增 API 客户端**
 
@@ -338,9 +338,9 @@ Expected: PASS。
 - Istio 治理关系
 - 配置与运行状态
 
-- [ ] **Step 3: 迁移 startorch UI 能力但按 NovaObs 设计约束重做**
+- [ ] **Step 3: 迁移 startorch UI 能力但按 NovaAPM 设计约束重做**
 
-必须遵守 `novaobs-ui-design-system`：
+必须遵守 `novaapm-ui-design-system`：
 
 - 不照搬强线条和纯色大块。
 - 用柔和分层、专业密度、可扫描结构。
@@ -376,7 +376,7 @@ Expected: PASS。
 
 确认：
 
-- runtime groups API 有等价 NovaObs endpoint。
+- runtime groups API 有等价 NovaAPM endpoint。
 - typed resources 已聚合。
 - HPA / Ingress / Istio networking 多版本已聚合。
 - Istio security legacy 资源已归一。
@@ -392,13 +392,13 @@ git commit -m "feat: add k8s runtime topology backend"
 ```
 
 ```bash
-git add ../novaobs-fe
+git add ../novaapm-fe
 git commit -m "feat: add k8s runtime topology view"
 ```
 
 ## 风险与原则
 
-- 不迁移 startorch 的旧权限模型；全部纳入 NovaObs 当前/未来 RBAC。
+- 不迁移 startorch 的旧权限模型；全部纳入 NovaAPM 当前/未来 RBAC。
 - 不新增 demo seed 或静态兜底数据。
 - 不复制第二套多版本候选表；统一走 `ResourceVersionResolver`。
 - 运行时拓扑失败不应影响普通资源列表。

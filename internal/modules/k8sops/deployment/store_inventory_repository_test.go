@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
 
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +21,7 @@ func TestStoreInventoryRepositoryPersistsRecordsAcrossInstances(t *testing.T) {
 		APIVersion:    "apps/v1",
 		Kind:          "Deployment",
 		Name:          "orders-api",
-		FieldManager:  "novaobs-k8sops",
+		FieldManager:  "novaapm-k8sops",
 		LastApplyHash: "hash-v1",
 		LastPreviewID: "preview-v1",
 		UpdatedAt:     time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),

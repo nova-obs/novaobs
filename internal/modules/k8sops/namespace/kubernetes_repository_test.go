@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -22,7 +22,7 @@ func TestKubernetesRepositoryListsNamespacesFromCluster(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "orders",
 				UID:               "uid-orders",
-				Labels:            map[string]string{"novaobs.io/owner": "orders-team"},
+				Labels:            map[string]string{"novaapm.io/owner": "orders-team"},
 				CreationTimestamp: metav1.NewTime(createdAt),
 			},
 			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
@@ -80,7 +80,7 @@ func TestKubernetesRepositoryCreatesNamespaceInCluster(t *testing.T) {
 	require.Equal(t, "orders-team", created.Owner)
 	stored, getErr := client.CoreV1().Namespaces().Get(context.Background(), "orders", metav1.GetOptions{})
 	require.NoError(t, getErr)
-	require.Equal(t, "orders-team", stored.Labels["novaobs.io/owner"])
+	require.Equal(t, "orders-team", stored.Labels["novaapm.io/owner"])
 }
 
 func TestKubernetesRepositoryDeletesNamespaceByUID(t *testing.T) {

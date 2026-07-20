@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/pkg/response"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"

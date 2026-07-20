@@ -1,40 +1,31 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/mongo"
 
-	"novaobs/internal/database"
-	"novaobs/internal/logs"
-	obsruntime "novaobs/internal/observability/runtime"
-	"novaobs/internal/platform/authctx"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/logs"
+	"novaapm/internal/platform/authctx"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 )
 
-func listObservabilityRuntimesHandler(store database.ObservabilityRuntimeStore) gin.HandlerFunc {
+func getLogsCollectorRuntimeStatusHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if _, ok := authctx.SubjectFrom(ctx.Request.Context()); !ok {
 			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
 			return
 		}
-		if store == nil {
-			response.OK(ctx, []obsruntime.Runtime{}, gin.H{})
+		result, err := service.CheckK8sCollectorRuntimeStatus(ctx.Request.Context(), logs.K8sCollectorRuntimeStatusRequest{
+			ClusterID: ctx.Query("cluster_id"),
+			Namespace: ctx.Query("namespace"),
+		})
+		if err != nil {
+			writeLogsError(ctx, err)
 			return
 		}
-		var runtimes []obsruntime.Runtime
-		if err := store.FindAll(ctx.Request.Context(), &runtimes); err != nil {
-			if errors.Is(err, mongo.ErrNoDocuments) || errors.Is(err, database.ErrNotFound) {
-				response.OK(ctx, []obsruntime.Runtime{}, gin.H{})
-				return
-			}
-			writeError(ctx, err)
-			return
-		}
-		response.OK(ctx, runtimes, gin.H{})
+		response.OK(ctx, result, gin.H{})
 	}
 }
 

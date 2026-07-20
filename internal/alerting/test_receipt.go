@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	platformrbac "novaobs/internal/platform/rbac"
+	platformrbac "novaapm/internal/platform/rbac"
 )
 
 const testReceiptTTL = 10 * time.Minute

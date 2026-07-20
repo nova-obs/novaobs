@@ -6,13 +6,13 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/internal/logs"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	obsruntime "novaobs/internal/observability/runtime"
-	platformimages "novaobs/internal/platform/images"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/internal/logs"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	obsruntime "novaapm/internal/observability/runtime"
+	platformimages "novaapm/internal/platform/images"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/apperr"
 )
 
 type MetricsRuntimeDependencies = LogRuntimeDependencies
@@ -190,16 +190,16 @@ func newMetricsRuntimeSpec(endpoint logs.LogEndpoint, req LogRuntimePublishReque
 		alertIngestURL = strings.TrimSpace(defaultAlertIngestURL)
 	}
 	if alertIngestURL == "" {
-		return logRuntimeSpec{}, apperr.InvalidRequest("部署 metrics vmalert Runtime 必须填写 NovaObs Alert Ingest 地址")
+		return logRuntimeSpec{}, apperr.InvalidRequest("部署 metrics vmalert Runtime 必须填写 NovaAPM Alert Ingest 地址")
 	}
-	if err := validateHTTPURL(alertIngestURL, "NovaObs Alert Ingest 地址"); err != nil {
+	if err := validateHTTPURL(alertIngestURL, "NovaAPM Alert Ingest 地址"); err != nil {
 		return logRuntimeSpec{}, err
 	}
 	if namespace := strings.TrimSpace(req.Namespace); namespace != "" && namespace != defaultVmalertNamespace {
 		return logRuntimeSpec{}, apperr.InvalidRequest("vmalert Runtime 只能部署到固定 namespace " + defaultVmalertNamespace)
 	}
 	runtimeID := "vmalert-metrics:" + endpoint.ID
-	name := dnsName("novaobs-vmalert-metrics-" + firstNonEmpty(endpoint.Name, endpoint.ID))
+	name := dnsName("novaapm-vmalert-metrics-" + firstNonEmpty(endpoint.Name, endpoint.ID))
 	return logRuntimeSpec{
 		RuntimeID:      runtimeID,
 		Name:           name,

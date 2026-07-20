@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	obsendpoint "novaobs/internal/observability/endpoint"
-	"novaobs/internal/platform/authctx"
-	"novaobs/pkg/response"
+	obsendpoint "novaapm/internal/observability/endpoint"
+	"novaapm/internal/platform/authctx"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,6 +32,48 @@ func listObservabilityEndpointsHandler(service obsendpoint.Service) gin.HandlerF
 	}
 }
 
+func createObservabilityEndpointHandler(service obsendpoint.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body obsendpoint.Endpoint
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("观测端点请求无效"))
+			return
+		}
+		endpoint, err := service.CreateForSubject(ctx.Request.Context(), subject, body)
+		if err != nil {
+			writeObservabilityEndpointError(ctx, err)
+			return
+		}
+		response.Created(ctx, endpoint)
+	}
+}
+
+func updateObservabilityEndpointHandler(service obsendpoint.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body obsendpoint.Endpoint
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeError(ctx, apperr.InvalidRequest("观测端点请求无效"))
+			return
+		}
+		endpoint, err := service.UpdateForSubject(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
+		if err != nil {
+			writeObservabilityEndpointError(ctx, err)
+			return
+		}
+		response.OK(ctx, endpoint, gin.H{})
+	}
+}
+
 func testObservabilityEndpointHandler(service obsendpoint.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
@@ -49,7 +92,7 @@ func testObservabilityEndpointHandler(service obsendpoint.Service) gin.HandlerFu
 
 func writeObservabilityEndpointError(ctx *gin.Context, err error) {
 	if errors.Is(err, obsendpoint.ErrPermissionDenied) {
-		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权查看观测端点")
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权操作观测端点")
 		return
 	}
 	writeError(ctx, err)

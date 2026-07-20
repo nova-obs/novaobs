@@ -2,10 +2,11 @@ package alerting
 
 import (
 	"context"
+	"strings"
 	"time"
 
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -52,6 +53,11 @@ type UpdateRequest struct {
 	Spec          RuleSpec `json:"spec"`
 	ChangeSummary string   `json:"change_summary"`
 	TestToken     string   `json:"test_token"`
+}
+
+type DisableRequest struct {
+	ExpectedSignalType string `json:"expected_signal_type"`
+	ChangeSummary      string `json:"change_summary"`
 }
 
 type RollbackRequest struct {
@@ -264,7 +270,7 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, rul
 	return s.saveExistingChange(ctx, subject, current, source.Spec.Normalize(), targetState, UpdateActionRollback, source.ID, defaultSummary(req.ChangeSummary, "回退到历史配置"))
 }
 
-func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, ruleID string, summary string) (ChangeResult, error) {
+func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, ruleID string, req DisableRequest) (ChangeResult, error) {
 	if s.repository == nil {
 		return ChangeResult{}, ErrUnavailable
 	}
@@ -275,10 +281,17 @@ func (s Service) Disable(ctx context.Context, subject platformrbac.Subject, rule
 	if !s.allowed(subject, current.Spec.Scope, "manage") {
 		return ChangeResult{}, ErrPermissionDenied
 	}
+	expectedSignalType := strings.ToLower(strings.TrimSpace(req.ExpectedSignalType))
+	if expectedSignalType != "" && expectedSignalType != SignalTypeLogs && expectedSignalType != SignalTypeMetrics {
+		return ChangeResult{}, invalidSpec("expectedSignalType", "预期信号类型只支持 logs 或 metrics")
+	}
+	if expectedSignalType != "" && current.Spec.Normalize().SignalType != expectedSignalType {
+		return ChangeResult{}, ErrConflict
+	}
 	if current.State == RuleStateDisabled {
 		return ChangeResult{}, ErrConflict
 	}
-	return s.saveExistingChange(ctx, subject, current, current.Spec, RuleStateDisabled, UpdateActionDisable, "", defaultSummary(summary, "停用告警"))
+	return s.saveExistingChange(ctx, subject, current, current.Spec, RuleStateDisabled, UpdateActionDisable, "", defaultSummary(req.ChangeSummary, "停用告警"))
 }
 
 func (s Service) Test(ctx context.Context, subject platformrbac.Subject, req TestRequest) (TestResult, error) {
@@ -443,7 +456,7 @@ func (s Service) allowed(subject platformrbac.Subject, scope RuleScope, action s
 	decision := s.authorizer.Authorize(subject, platformrbac.Request{
 		Resource: "alerts.rule",
 		Action:   action,
-		Scope:    platformrbac.Scope{ServiceID: scope.ServiceID},
+		Scope:    platformrbac.Scope{ServiceID: scope.ServiceID, EnvironmentID: scope.EnvironmentID},
 	})
 	return decision.Allowed
 }
@@ -458,15 +471,15 @@ func newAuditEvent(id string, actor Actor, ruleID string, spec RuleSpec, action 
 		Actor:    audit.Actor{ID: actor.ID, Name: actor.Name},
 		Resource: audit.Resource{Type: "alerts.rule", Name: ruleID},
 		Action:   action,
-		Scope:    spec.Scope.ServiceID,
+		Scope:    firstNonEmpty(spec.Scope.EnvironmentID, spec.Scope.ServiceID),
 		RequestSummary: map[string]any{
-			"signal_type":        spec.SignalType,
-			"service_id":         spec.Scope.ServiceID,
-			"log_route_id":       spec.Scope.LogRouteID,
-			"log_target_id":      spec.Scope.LogTargetID,
-			"metrics_binding_id": spec.Scope.MetricsBindingID,
-			"endpoint_id":        spec.Scope.EndpointID,
-			"rule_name":          spec.Name,
+			"signal_type":    spec.SignalType,
+			"service_id":     spec.Scope.ServiceID,
+			"log_route_id":   spec.Scope.LogRouteID,
+			"log_target_id":  spec.Scope.LogTargetID,
+			"environment_id": spec.Scope.EnvironmentID,
+			"endpoint_id":    spec.Scope.EndpointID,
+			"rule_name":      spec.Name,
 		},
 		Result:    "accepted",
 		CreatedAt: now,

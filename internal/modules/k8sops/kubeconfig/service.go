@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/platform/secret"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/platform/secret"
 
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

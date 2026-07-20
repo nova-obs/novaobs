@@ -3,7 +3,7 @@ package authctx
 import (
 	"context"
 
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/rbac"
 )
 
 type subjectKey struct{}

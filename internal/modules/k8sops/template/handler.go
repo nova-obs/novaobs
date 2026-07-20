@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/pkg/response"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

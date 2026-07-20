@@ -8,12 +8,15 @@ import (
 	"io"
 	"strings"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,15 +71,15 @@ func NewKubernetesReader(clients ClientsetProvider, dependencies ...any) Kuberne
 
 func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]ResourceSummary, error) {
 	filter.Namespace = strings.TrimSpace(filter.Namespace)
-	if filter.Namespace == "" {
+	if filter.Namespace == "" && !clusterScopedListKind(filter.Kind) {
 		return nil, ErrNamespaceRequired
 	}
-	if !r.allowed(ctx, filter.ClusterID, filter.Namespace) {
+	if !r.allowedForKind(ctx, filter.ClusterID, filter.Namespace, filter.Kind) {
 		return nil, ErrReadPermissionDenied
 	}
 	client, err := r.clients.Clientset(ctx, filter.ClusterID)
 	if err != nil {
-		return nil, err
+		return nil, normalizeKubernetesReadError(err)
 	}
 	items := make([]ResourceSummary, 0)
 	kinds := listKinds(filter.Kind)
@@ -87,7 +90,7 @@ func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]Resour
 			if errors.Is(err, ErrUnsupportedKind) && (bestEffort || isKnownListKind(kind)) {
 				continue
 			}
-			return nil, err
+			return nil, normalizeKubernetesReadError(err)
 		}
 		items = append(items, current...)
 	}
@@ -100,12 +103,12 @@ func (r KubernetesReader) List(ctx context.Context, filter ListFilter) ([]Resour
 }
 
 func (r KubernetesReader) GetDetail(ctx context.Context, query DetailQuery) (ResourceDetail, error) {
-	if !r.allowed(ctx, query.Identity.ClusterID, query.Identity.Namespace) {
+	if !r.allowedForKind(ctx, query.Identity.ClusterID, query.Identity.Namespace, query.Identity.Kind) {
 		return ResourceDetail{}, ErrReadPermissionDenied
 	}
 	object, identity, err := r.getObject(ctx, query.Identity)
 	if err != nil {
-		return ResourceDetail{}, err
+		return ResourceDetail{}, normalizeKubernetesReadError(err)
 	}
 	spec, err := objectSpec(object)
 	if err != nil {
@@ -121,12 +124,12 @@ func (r KubernetesReader) GetDetail(ctx context.Context, query DetailQuery) (Res
 }
 
 func (r KubernetesReader) GetYAML(ctx context.Context, query DetailQuery) (ResourceYAML, error) {
-	if !r.allowed(ctx, query.Identity.ClusterID, query.Identity.Namespace) {
+	if !r.allowedForKind(ctx, query.Identity.ClusterID, query.Identity.Namespace, query.Identity.Kind) {
 		return ResourceYAML{}, ErrReadPermissionDenied
 	}
 	object, identity, err := r.getObject(ctx, query.Identity)
 	if err != nil {
-		return ResourceYAML{}, err
+		return ResourceYAML{}, normalizeKubernetesReadError(err)
 	}
 	content, err := objectYAML(object, identity)
 	if err != nil {
@@ -146,7 +149,7 @@ func (r KubernetesReader) GetPodLogs(ctx context.Context, query PodLogQuery) (Po
 	request := client.CoreV1().Pods(query.Namespace).GetLogs(query.Pod, podLogOptions(query.Container))
 	stream, err := request.Stream(ctx)
 	if err != nil {
-		return PodLogResult{}, err
+		return PodLogResult{}, normalizeKubernetesReadError(err)
 	}
 	defer stream.Close()
 	data, err := io.ReadAll(stream)
@@ -174,6 +177,23 @@ func (r KubernetesReader) allowed(ctx context.Context, clusterID string, namespa
 	return decision.Allowed
 }
 
+func (r KubernetesReader) allowedForKind(ctx context.Context, clusterID string, namespace string, kind string) bool {
+	resource := "k8s.resource"
+	scope := platformrbac.Scope{ClusterID: strings.TrimSpace(clusterID), Namespace: strings.TrimSpace(namespace)}
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace":
+		resource = "k8s.namespace"
+		scope.Namespace = ""
+	case "role", "rolebinding", "clusterrole", "clusterrolebinding":
+		resource = "k8s.rbac"
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(kind)), "cluster") {
+			scope.Namespace = ""
+		}
+	}
+	subject, _ := authctx.SubjectFrom(ctx)
+	return r.authorizer.Authorize(subject, platformrbac.Request{Resource: resource, Action: "read", Scope: scope}).Allowed
+}
+
 func podLogOptions(container string) *corev1.PodLogOptions {
 	tailLines := int64(200)
 	limitBytes := int64(1_048_576)
@@ -194,6 +214,16 @@ func (r KubernetesReader) listKind(ctx context.Context, client kubernetes.Interf
 		items := make([]ResourceSummary, 0, len(result.Items))
 		for _, item := range result.Items {
 			items = append(items, podSummary(filter.ClusterID, item))
+		}
+		return items, nil
+	case "node":
+		result, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, "v1", "Node", &result.Items[index]))
 		}
 		return items, nil
 	case "deployment":
@@ -256,9 +286,55 @@ func (r KubernetesReader) listKind(ctx context.Context, client kubernetes.Interf
 			items = append(items, configMapSummary(filter.ClusterID, item))
 		}
 		return items, nil
+	case "namespace":
+		result, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, "v1", "Namespace", &result.Items[index]))
+		}
+		return items, nil
+	case "clusterrole":
+		result, err := client.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, "rbac.authorization.k8s.io/v1", "ClusterRole", &result.Items[index]))
+		}
+		return items, nil
+	case "clusterrolebinding":
+		result, err := client.RbacV1().ClusterRoleBindings().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]ResourceSummary, 0, len(result.Items))
+		for index := range result.Items {
+			items = append(items, metadataSummary(filter.ClusterID, rbacv1.SchemeGroupVersion.String(), "ClusterRoleBinding", &result.Items[index]))
+		}
+		return items, nil
 	default:
 		return r.listDynamicKind(ctx, filter, kind)
 	}
+}
+
+func clusterScopedListKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "namespace", "node", "clusterrole", "clusterrolebinding":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeKubernetesReadError(err error) error {
+	if apierrors.IsForbidden(err) || errors.Is(err, k8sopscluster.ErrCredentialPermissionDenied) {
+		return ErrReadPermissionDenied
+	}
+	return err
 }
 
 func (r KubernetesReader) getObject(ctx context.Context, identity Identity) (metav1.Object, Identity, error) {
@@ -529,6 +605,15 @@ func configMapSummary(clusterID string, item corev1.ConfigMap) ResourceSummary {
 		Status:    "active",
 		Labels:    copyLabels(item.Labels),
 		UpdatedAt: item.CreationTimestamp.Time,
+	}
+}
+
+func metadataSummary(clusterID string, apiVersion string, kind string, item metav1.Object) ResourceSummary {
+	return ResourceSummary{
+		Identity:  Identity{ClusterID: clusterID, Namespace: item.GetNamespace(), APIVersion: apiVersion, Kind: kind, Name: item.GetName(), UID: string(item.GetUID())},
+		Status:    "active",
+		Labels:    copyLabels(item.GetLabels()),
+		UpdatedAt: item.GetCreationTimestamp().Time,
 	}
 }
 

@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.env.*
+*.out
+*.test
+bin/
+coverage.*
+configs/config.yaml
+data/
+deploy/
+docs/

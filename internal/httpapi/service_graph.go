@@ -3,14 +3,14 @@ package httpapi
 import (
 	"context"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/logs"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/logs"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -92,9 +92,7 @@ func createServiceTargetHandler(repo servicecatalog.Repository, targetRepo servi
 			return
 		}
 		body.ServiceID = service.ID
-		if body.Environment == "" {
-			body.Environment = service.Environment
-		}
+		body.EnvironmentID = service.EnvironmentID
 		target, err := targetRepo.Create(bg, body)
 		if err != nil {
 			writeError(ctx, err)

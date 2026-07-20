@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/authctx"
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/authctx"
+	"novaapm/internal/platform/rbac"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -108,7 +108,7 @@ func TestServiceAccountWriteIgnoresSpoofableUserHeaders(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/k8s/service-accounts", strings.NewReader(`{"cluster_id":"prod","namespace":"orders","name":"orders-reader"}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-NovaObs-User", "user-1")
+	request.Header.Set("X-NovaAPM-User", "user-1")
 
 	router.ServeHTTP(recorder, request)
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -14,11 +14,43 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type productStore struct{ col *mongo.Collection }
+
+func (s *productStore) Insert(ctx context.Context, product interface{}) error {
+	_, err := s.col.InsertOne(ctx, product)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+func (s *productStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"name": 1}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+func (s *productStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+func (s *productStore) Update(ctx context.Context, id string, product interface{}) error {
+	oid, _ := objectID(id)
+	_, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, product)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
 // ---------- ServiceStore ----------
 type svcStore struct{ col *mongo.Collection }
 
 func (s *svcStore) Insert(ctx context.Context, svc interface{}) error {
 	_, err := s.col.InsertOne(ctx, svc)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
 	return err
 }
 func (s *svcStore) FindAll(ctx context.Context, results interface{}) error {
@@ -530,6 +562,58 @@ func (s *logRouteStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+type vmLogAgentEndpointStore struct{ col *mongo.Collection }
+
+func (s *vmLogAgentEndpointStore) Insert(ctx context.Context, endpoint interface{}) error {
+	_, err := s.col.InsertOne(ctx, endpoint)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
+func (s *vmLogAgentEndpointStore) FindByRoute(ctx context.Context, routeID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"route_id": routeID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *vmLogAgentEndpointStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	oid, _ := objectID(id)
+	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
+}
+
+func (s *vmLogAgentEndpointStore) Update(ctx context.Context, id string, endpoint interface{}) error {
+	oid, _ := objectID(id)
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": oid}, endpoint)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+func (s *vmLogAgentEndpointStore) Delete(ctx context.Context, id string) error {
+	oid, _ := objectID(id)
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": oid})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+func (s *vmLogAgentEndpointStore) DeleteByRoute(ctx context.Context, routeID string) error {
+	_, err := s.col.DeleteMany(ctx, bson.M{"route_id": routeID})
+	return err
+}
+
 type logTargetStore struct{ col *mongo.Collection }
 
 func (s *logTargetStore) Insert(ctx context.Context, target interface{}) error {
@@ -651,49 +735,26 @@ func (s *observabilityRuntimeStore) FindByCluster(ctx context.Context, clusterID
 	return cursor.All(ctx, results)
 }
 
-// ---------- Metrics 服务绑定 ----------
-type metricsServiceBindingStore struct{ col *mongo.Collection }
+type metricsIntegrationStore struct{ col *mongo.Collection }
 
-func (s *metricsServiceBindingStore) Insert(ctx context.Context, binding interface{}) error {
-	_, err := s.col.InsertOne(ctx, binding)
+type metricsHealthSnapshotStore struct{ col *mongo.Collection }
+type metricsCollectorReleaseStore struct{ col *mongo.Collection }
+
+func (s *metricsCollectorReleaseStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
 	if mongo.IsDuplicateKeyError(err) {
 		return database.ErrConflict
 	}
 	return err
 }
 
-func (s *metricsServiceBindingStore) FindAll(ctx context.Context, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"updated_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
-func (s *metricsServiceBindingStore) FindByService(ctx context.Context, serviceID string, results interface{}) error {
-	cursor, err := s.col.Find(ctx, bson.M{"service_id": serviceID}, options.Find().SetSort(bson.M{"updated_at": -1}))
-	if err != nil {
-		return err
-	}
-	return cursor.All(ctx, results)
-}
-
-func (s *metricsServiceBindingStore) FindByID(ctx context.Context, id string, result interface{}) error {
-	oid, _ := objectID(id)
-	return s.col.FindOne(ctx, bson.M{"_id": oid}).Decode(result)
-}
-
-func (s *metricsServiceBindingStore) Update(ctx context.Context, id string, binding interface{}) error {
-	oid, _ := objectID(id)
-	setDoc, err := toBSONMap(binding)
+func (s *metricsCollectorReleaseStore) Update(ctx context.Context, id string, value interface{}) error {
+	setDoc, err := toBSONMap(value)
 	if err != nil {
 		return err
 	}
 	delete(setDoc, "_id")
-	result, err := s.col.UpdateOne(ctx, bson.M{"_id": oid}, bson.M{"$set": setDoc})
-	if mongo.IsDuplicateKeyError(err) {
-		return database.ErrConflict
-	}
+	result, err := s.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": setDoc})
 	if err != nil {
 		return err
 	}
@@ -701,6 +762,94 @@ func (s *metricsServiceBindingStore) Update(ctx context.Context, id string, bind
 		return mongo.ErrNoDocuments
 	}
 	return nil
+}
+
+func (s *metricsCollectorReleaseStore) FindLatestBySourceAccess(ctx context.Context, sourceAccessID string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"source_access_id": sourceAccessID}, options.FindOne().SetSort(bson.D{{Key: "generation", Value: -1}})).Decode(result)
+}
+
+func (s *metricsHealthSnapshotStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+
+func (s *metricsHealthSnapshotStore) FindLatestByIntegration(ctx context.Context, integrationID string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"integration_id": integrationID}, options.FindOne().SetSort(bson.D{{Key: "created_at", Value: -1}})).Decode(result)
+}
+
+func (s *metricsIntegrationStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+func (s *metricsIntegrationStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "environment_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+func (s *metricsIntegrationStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+func (s *metricsIntegrationStore) FindByEnvironment(ctx context.Context, environmentID string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"environment_id": environmentID}).Decode(result)
+}
+func (s *metricsIntegrationStore) Update(ctx context.Context, id string, value interface{}) error {
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, value)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	if err == nil && result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+func (s *metricsIntegrationStore) Delete(ctx context.Context, id string) error {
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	if err == nil && result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+
+type metricsSourceAccessStore struct{ col *mongo.Collection }
+
+func (s *metricsSourceAccessStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
+	if mongo.IsDuplicateKeyError(err) {
+		return database.ErrConflict
+	}
+	return err
+}
+func (s *metricsSourceAccessStore) FindByIntegration(ctx context.Context, integrationID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"integration_id": integrationID}, options.Find().SetSort(bson.D{{Key: "source_kind", Value: 1}, {Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+func (s *metricsSourceAccessStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+func (s *metricsSourceAccessStore) Update(ctx context.Context, id string, value interface{}) error {
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, value)
+	if err == nil && result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+func (s *metricsSourceAccessStore) Delete(ctx context.Context, id string) error {
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	if err == nil && result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
 }
 
 // ---------- Alerting Repository ----------
@@ -1228,6 +1377,61 @@ func (s *auditEventStore) FindAll(ctx context.Context, results interface{}) erro
 		return err
 	}
 	return cursor.All(ctx, results)
+}
+
+// ---------- K8s Ops Stores ----------
+type environmentStore struct{ col *mongo.Collection }
+
+func (s *environmentStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
+	return err
+}
+
+func (s *environmentStore) FindAll(ctx context.Context, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}, {Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *environmentStore) FindByID(ctx context.Context, id string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"_id": id}).Decode(result)
+}
+
+func (s *environmentStore) Update(ctx context.Context, id string, value interface{}) error {
+	result, err := s.col.ReplaceOne(ctx, bson.M{"_id": id}, value)
+	if err == nil && result.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+
+type environmentResourceBindingStore struct{ col *mongo.Collection }
+
+func (s *environmentResourceBindingStore) Insert(ctx context.Context, value interface{}) error {
+	_, err := s.col.InsertOne(ctx, value)
+	return err
+}
+
+func (s *environmentResourceBindingStore) FindByEnvironment(ctx context.Context, environmentID string, results interface{}) error {
+	cursor, err := s.col.Find(ctx, bson.M{"environment_id": environmentID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}}))
+	if err != nil {
+		return err
+	}
+	return cursor.All(ctx, results)
+}
+
+func (s *environmentResourceBindingStore) FindByResource(ctx context.Context, resourceKind string, resourceRef string, result interface{}) error {
+	return s.col.FindOne(ctx, bson.M{"resource_kind": resourceKind, "resource_ref": resourceRef}).Decode(result)
+}
+
+func (s *environmentResourceBindingStore) Delete(ctx context.Context, id string) error {
+	result, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	if err == nil && result.DeletedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
 }
 
 // ---------- K8s Ops Stores ----------

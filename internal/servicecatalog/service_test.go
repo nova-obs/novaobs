@@ -2,22 +2,33 @@ package servicecatalog
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
+	platformenvironment "novaapm/internal/platform/environment"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestRepositoryCreatesAndListsServices(t *testing.T) {
+func newCatalogTestStore(t *testing.T) *memstore.Store {
+	t.Helper()
 	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	for _, id := range []string{"prod", "production", "staging", "dev"} {
+		require.NoError(t, store.Environments().Insert(context.Background(), platformenvironment.Environment{ID: id, Name: id, Stage: platformenvironment.StageTest, Status: platformenvironment.StatusActive}))
+	}
+	return store
+}
+
+func TestRepositoryCreatesAndListsServices(t *testing.T) {
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
 	svc, err := repo.Create(ctx, Service{
-		Name:        "payment-gateway",
-		Environment: "production",
-		Cluster:     "prod-cluster-1",
+		Name:          "payment-gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-cluster-1",
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, svc.ID)
@@ -33,65 +44,116 @@ func TestRepositoryCreatesAndListsServices(t *testing.T) {
 	require.Equal(t, "payment-gateway", services[0].Name)
 }
 
+func TestProductRepositoryGeneratesUniqueProjectIDs(t *testing.T) {
+	store := newCatalogTestStore(t)
+	repo := NewProductRepository(store.Products())
+	ctx := context.Background()
+
+	first, err := repo.Create(ctx, Product{ID: "client-product-id", Name: "commerce", ProjectID: "1", Status: "disabled"})
+	require.NoError(t, err)
+	second, err := repo.Create(ctx, Product{Name: "payments"})
+	require.NoError(t, err)
+
+	requireValidTenantID(t, first.ProjectID)
+	require.NotEqual(t, "client-product-id", first.ID)
+	require.Equal(t, "active", first.Status)
+	require.NotEqual(t, "1", first.ProjectID)
+	require.NotEqual(t, first.ProjectID, second.ProjectID)
+}
+
+func TestServicesInSameProductShareProjectTenant(t *testing.T) {
+	store := newCatalogTestStore(t)
+	products := NewProductRepository(store.Products())
+	repo := NewRepository(store.Services(), store.Environments(), store.Products())
+	ctx := context.Background()
+
+	product, err := products.Create(ctx, Product{Name: "commerce"})
+	require.NoError(t, err)
+	first, err := repo.Create(ctx, Service{Name: "orders-api", EnvironmentID: "prod", ProductID: product.ID})
+	require.NoError(t, err)
+	second, err := repo.Create(ctx, Service{Name: "payments-api", EnvironmentID: "prod", ProductID: product.ID})
+	require.NoError(t, err)
+
+	require.Equal(t, "0", first.AccountID)
+	require.Equal(t, product.ProjectID, first.ProjectID)
+	require.Equal(t, first.ProjectID, second.ProjectID)
+}
+
+func TestProductAwareRepositoryRejectsOrphanService(t *testing.T) {
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments(), store.Products())
+
+	_, err := repo.Create(context.Background(), Service{Name: "orders-api", EnvironmentID: "prod"})
+
+	require.ErrorContains(t, err, "所属产品")
+}
+
+func requireValidTenantID(t *testing.T, value string) {
+	t.Helper()
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	require.NoError(t, err)
+	require.NotZero(t, parsed)
+}
+
 func TestRepositoryRejectsDuplicateServiceIdentity(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
 	_, err := repo.Create(ctx, Service{
-		Name:        "payment-gateway",
-		Environment: "production",
-		Cluster:     "prod-cluster-1",
-		Namespace:   "payments",
+		Name:          "payment-gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-cluster-1",
+		Namespace:     "payments",
 	})
 	require.NoError(t, err)
 
 	_, err = repo.Create(ctx, Service{
-		Name:        "payment-gateway",
-		Environment: "production",
-		Cluster:     "prod-cluster-1",
-		Namespace:   "payments",
+		Name:          "payment-gateway",
+		EnvironmentID: "production",
+		Cluster:       "prod-cluster-1",
+		Namespace:     "payments",
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "服务已存在")
+	require.Contains(t, err.Error(), "服务名称已存在")
 }
 
 func TestRepositoryRejectsUnsupportedServiceIdentityType(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
 	_, err := repo.Create(ctx, Service{
-		Name:         "syslog-device",
-		Environment:  "production",
-		IdentityType: "syslog_device",
+		Name:          "syslog-device",
+		EnvironmentID: "production",
+		IdentityType:  "syslog_device",
 	})
 
 	require.ErrorContains(t, err, "服务身份类型只能是 k8s_workload 或 host_process")
 }
 
 func TestRepositoryFiltersServices(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
-	_, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production", OwnerTeam: "payments"})
+	_, err := repo.Create(ctx, Service{Name: "payment-api", EnvironmentID: "production", OwnerTeam: "payments"})
 	require.NoError(t, err)
-	_, err = repo.Create(ctx, Service{Name: "inventory-api", Environment: "staging", OwnerTeam: "inventory"})
+	_, err = repo.Create(ctx, Service{Name: "inventory-api", EnvironmentID: "staging", OwnerTeam: "inventory"})
 	require.NoError(t, err)
 
-	services, err := repo.List(ctx, ListFilter{Query: "payment", Environment: "production", Source: "manual"})
+	services, err := repo.List(ctx, ListFilter{Query: "payment", EnvironmentID: "production", Source: "manual"})
 	require.NoError(t, err)
 	require.Len(t, services, 1)
 	require.Equal(t, "payment-api", services[0].Name)
 }
 
 func TestRepositoryUpdatesManualService(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
-	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", EnvironmentID: "production"})
 	require.NoError(t, err)
 
 	ownerTeam := "payments"
@@ -107,12 +169,24 @@ func TestRepositoryUpdatesManualService(t *testing.T) {
 	require.True(t, updated.UpdatedAt.After(svc.UpdatedAt) || updated.UpdatedAt.Equal(svc.UpdatedAt))
 }
 
+func TestRepositoryRejectsServiceNameChange(t *testing.T) {
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
+	service, err := repo.Create(context.Background(), Service{Name: "orders-api", EnvironmentID: "prod"})
+	require.NoError(t, err)
+	changedName := "payments-api"
+
+	_, err = repo.Update(context.Background(), service.ID, UpdateRequest{Name: &changedName})
+
+	require.ErrorContains(t, err, "service.name 创建后不可修改")
+}
+
 func TestRepositorySoftDeletesServiceWhenNoBlockingDependencies(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
-	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", EnvironmentID: "production"})
 	require.NoError(t, err)
 
 	deleted, err := repo.Delete(ctx, svc.ID, DeleteDependencies{})
@@ -128,17 +202,32 @@ func TestRepositorySoftDeletesServiceWhenNoBlockingDependencies(t *testing.T) {
 	require.Len(t, services, 1)
 	require.Equal(t, svc.ID, services[0].ID)
 
-	recreated, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	_, err = repo.Create(ctx, Service{Name: "payment-api", EnvironmentID: "production"})
+	require.ErrorContains(t, err, "服务名称已存在")
+}
+
+func TestProductServiceNameIsNotReusedAfterDeletion(t *testing.T) {
+	store := newCatalogTestStore(t)
+	products := NewProductRepository(store.Products())
+	product, err := products.Create(context.Background(), Product{Name: "commerce"})
 	require.NoError(t, err)
-	require.NotEqual(t, svc.ID, recreated.ID)
+	repo := NewRepository(store.Services(), store.Environments(), store.Products())
+	service, err := repo.Create(context.Background(), Service{ProductID: product.ID, Name: "orders-api", EnvironmentID: "prod"})
+	require.NoError(t, err)
+	_, err = repo.Delete(context.Background(), service.ID, DeleteDependencies{})
+	require.NoError(t, err)
+
+	_, err = repo.Create(context.Background(), Service{ProductID: product.ID, Name: "orders-api", EnvironmentID: "prod"})
+
+	require.ErrorContains(t, err, "服务名称已存在")
 }
 
 func TestRepositoryRejectsDeletingServiceWithBlockingDependencies(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
-	svc, err := repo.Create(ctx, Service{Name: "payment-api", Environment: "production"})
+	svc, err := repo.Create(ctx, Service{Name: "payment-api", EnvironmentID: "production"})
 	require.NoError(t, err)
 
 	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{LogRouteRefs: 1})
@@ -146,16 +235,17 @@ func TestRepositoryRejectsDeletingServiceWithBlockingDependencies(t *testing.T) 
 
 	_, err = repo.Delete(ctx, svc.ID, DeleteDependencies{AgentRefs: 1})
 	require.ErrorContains(t, err, "采集 Agent")
+
 }
 
 func TestRepositoryGetsService(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
 	svc, err := repo.Create(ctx, Service{
 		Name:          "payment-gateway",
-		Environment:   "production",
+		EnvironmentID: "production",
 		CMDBServiceID: "svc-001",
 		DisplayName:   "支付网关",
 	})
@@ -168,13 +258,13 @@ func TestRepositoryGetsService(t *testing.T) {
 }
 
 func TestRepositoryPersistsAllFields(t *testing.T) {
-	store := memstore.NewStore()
-	repo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	repo := NewRepository(store.Services(), store.Environments())
 	ctx := context.Background()
 
 	svc, err := repo.Create(ctx, Service{
 		Name:          "api-gateway",
-		Environment:   "staging",
+		EnvironmentID: "staging",
 		Cluster:       "staging-1",
 		Namespace:     "default",
 		BusinessID:    "biz-001",
@@ -188,7 +278,7 @@ func TestRepositoryPersistsAllFields(t *testing.T) {
 	got, err := repo.Get(ctx, svc.ID)
 	require.NoError(t, err)
 	require.Equal(t, "api-gateway", got.Name)
-	require.Equal(t, "staging", got.Environment)
+	require.Equal(t, "staging", got.EnvironmentID)
 	require.Equal(t, "staging-1", got.Cluster)
 	require.Equal(t, "default", got.Namespace)
 	require.Equal(t, "biz-001", got.BusinessID)
@@ -197,19 +287,19 @@ func TestRepositoryPersistsAllFields(t *testing.T) {
 }
 
 func TestTargetRepositoryCreatesHostProcessWithoutNamespace(t *testing.T) {
-	store := memstore.NewStore()
-	serviceRepo := NewRepository(store.Services())
+	store := newCatalogTestStore(t)
+	serviceRepo := NewRepository(store.Services(), store.Environments())
 	targetRepo := NewTargetRepository(store.ServiceTargets())
 	ctx := context.Background()
 
-	svc, err := serviceRepo.Create(ctx, Service{Name: "legacy-billing", Environment: "prod"})
+	svc, err := serviceRepo.Create(ctx, Service{Name: "legacy-billing", EnvironmentID: "prod"})
 	require.NoError(t, err)
 
 	target, err := targetRepo.Create(ctx, ObservedTarget{
-		ServiceID:   svc.ID,
-		TargetType:  "host_process",
-		Environment: "prod",
-		DisplayName: "legacy-billing on vm-01",
+		ServiceID:     svc.ID,
+		TargetType:    "host_process",
+		EnvironmentID: "prod",
+		DisplayName:   "legacy-billing on vm-01",
 		IdentityAttributes: map[string]string{
 			"host.name":               "vm-01",
 			"process.executable.name": "legacy-billing",

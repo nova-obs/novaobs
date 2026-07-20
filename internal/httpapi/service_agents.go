@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"strings"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/opamp"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/opamp"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

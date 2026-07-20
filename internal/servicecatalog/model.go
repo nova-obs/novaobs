@@ -4,13 +4,16 @@ import "time"
 
 type Service struct {
 	ID            string     `json:"id" bson:"_id"`
+	ProductID     string     `json:"product_id" bson:"product_id"`
+	AccountID     string     `json:"account_id" bson:"-"`
+	ProjectID     string     `json:"project_id" bson:"-"`
 	CMDBServiceID string     `json:"cmdb_service_id" bson:"cmdb_service_id"`
 	BusinessID    string     `json:"business_id" bson:"business_id"`
 	ApplicationID string     `json:"application_id" bson:"application_id"`
 	Name          string     `json:"name" bson:"name"`
 	DisplayName   string     `json:"display_name" bson:"display_name"`
 	Description   string     `json:"description" bson:"description"`
-	Environment   string     `json:"environment" bson:"environment"`
+	EnvironmentID string     `json:"environment_id" bson:"environment_id"`
 	Cluster       string     `json:"cluster" bson:"cluster"`
 	Namespace     string     `json:"namespace" bson:"namespace"`
 	OwnerTeam     string     `json:"owner_team" bson:"owner_team"`
@@ -27,11 +30,22 @@ type Service struct {
 	UpdatedAt     time.Time  `json:"updated_at" bson:"updated_at"`
 }
 
+type Product struct {
+	ID          string    `json:"id" bson:"_id"`
+	Name        string    `json:"name" bson:"name"`
+	DisplayName string    `json:"display_name" bson:"display_name"`
+	Description string    `json:"description" bson:"description"`
+	ProjectID   string    `json:"project_id" bson:"project_id"`
+	Status      string    `json:"status" bson:"status"`
+	CreatedAt   time.Time `json:"created_at" bson:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at" bson:"updated_at"`
+}
+
 type ObservedTarget struct {
 	ID                 string            `json:"id" bson:"_id"`
 	ServiceID          string            `json:"service_id" bson:"service_id"`
 	TargetType         string            `json:"target_type" bson:"target_type"`
-	Environment        string            `json:"environment" bson:"environment"`
+	EnvironmentID      string            `json:"environment_id" bson:"environment_id"`
 	DisplayName        string            `json:"display_name" bson:"display_name"`
 	IdentityAttributes map[string]string `json:"identity_attributes" bson:"identity_attributes"`
 	MatchRules         map[string]string `json:"match_rules" bson:"match_rules"`
@@ -43,10 +57,10 @@ type ObservedTarget struct {
 }
 
 type ListFilter struct {
-	Query       string
-	Environment string
-	Status      string
-	Source      string
+	Query         string
+	EnvironmentID string
+	Status        string
+	Source        string
 }
 
 type DeleteDependencies struct {
@@ -62,7 +76,7 @@ type UpdateRequest struct {
 	Name          *string `json:"name"`
 	DisplayName   *string `json:"display_name"`
 	Description   *string `json:"description"`
-	Environment   *string `json:"environment"`
+	EnvironmentID *string `json:"environment_id"`
 	Cluster       *string `json:"cluster"`
 	Namespace     *string `json:"namespace"`
 	OwnerTeam     *string `json:"owner_team"`

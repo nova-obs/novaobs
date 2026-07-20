@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -135,7 +135,7 @@ func (s Service) CreateBinding(ctx context.Context, subject platformrbac.Subject
 		UID:       defaultUID(req.UID),
 		RoleRef:   req.RoleRef,
 		Subjects:  append([]Subject(nil), req.Subjects...),
-		Source:    "novaobs",
+		Source:    "novaapm",
 		UpdatedAt: time.Now().UTC(),
 	}
 	created, err := s.repo.UpsertBinding(ctx, item)
@@ -215,7 +215,7 @@ func (s Service) upsertRole(ctx context.Context, subject platformrbac.Subject, r
 		Name:      req.Name,
 		UID:       defaultUID(req.UID),
 		Rules:     cloneRules(req.Rules),
-		Source:    "novaobs",
+		Source:    "novaapm",
 		UpdatedAt: time.Now().UTC(),
 	}
 	saved, err := s.repo.UpsertRole(ctx, item)

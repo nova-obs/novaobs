@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/database"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -58,7 +58,7 @@ func validateTarget(target ObservedTarget) error {
 	default:
 		return apperr.InvalidRequest("服务目标类型只能是 cloud_native_workload、host_process 或 physical_or_network_device")
 	}
-	if strings.TrimSpace(target.Environment) == "" {
+	if strings.TrimSpace(target.EnvironmentID) == "" {
 		return apperr.InvalidRequest("服务目标环境不能为空")
 	}
 	if target.Source != "" && target.Source != "manual" && target.Source != "cmdb" && target.Source != "discovered" {
@@ -73,7 +73,7 @@ func validateTarget(target ObservedTarget) error {
 func normalizeTarget(target ObservedTarget) ObservedTarget {
 	target.ServiceID = strings.TrimSpace(target.ServiceID)
 	target.TargetType = strings.TrimSpace(target.TargetType)
-	target.Environment = strings.TrimSpace(target.Environment)
+	target.EnvironmentID = strings.TrimSpace(target.EnvironmentID)
 	target.DisplayName = strings.TrimSpace(target.DisplayName)
 	if target.IdentityAttributes == nil {
 		target.IdentityAttributes = map[string]string{}

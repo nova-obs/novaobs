@@ -15,7 +15,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 	namespaceRole := Role{
 		ID:          K8sOpsAdminRoleID,
 		Name:        "K8s 运维管理员",
-		Description: "NovaObs K8s 运维开发与运维闭环默认角色",
+		Description: "NovaAPM K8s 运维开发与运维闭环默认角色",
 		Permissions: []Permission{
 			{Resource: "k8s.service-account", Action: "create", ScopeMode: "namespace"},
 			{Resource: "k8s.service-account", Action: "delete", ScopeMode: "namespace"},
@@ -51,7 +51,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 	globalRole := Role{
 		ID:          K8sOpsGlobalAdminRoleID,
 		Name:        "K8s 运维全局管理员",
-		Description: "NovaObs K8s 运维全局资源默认角色",
+		Description: "NovaAPM K8s 运维全局资源默认角色",
 		Permissions: []Permission{
 			{Resource: "k8s.template", Action: "create", ScopeMode: "global"},
 			{Resource: "k8s.template", Action: "update", ScopeMode: "global"},
@@ -65,7 +65,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 	globalReaderRole := Role{
 		ID:          K8sOpsGlobalReaderRoleID,
 		Name:        "K8s 运维全局只读",
-		Description: "NovaObs K8s 运维开发态真实集群只读接入默认角色",
+		Description: "NovaAPM K8s 运维开发态真实集群只读接入默认角色",
 		Permissions: []Permission{
 			{Resource: "k8s.namespace", Action: "read", ScopeMode: "cluster"},
 			{Resource: "k8s.resource", Action: "read", ScopeMode: "namespace"},
@@ -82,7 +82,7 @@ func EnsureK8sOpsDefaults(repo Repository, subject Subject, scope Scope) error {
 	globalCredentialManagerRole := Role{
 		ID:          K8sOpsGlobalCredentialManagerRoleID,
 		Name:        "K8s 运维全局凭据托管",
-		Description: "NovaObs K8s 运维开发态真实集群 kubeconfig 托管默认角色",
+		Description: "NovaAPM K8s 运维开发态真实集群 kubeconfig 托管默认角色",
 		Permissions: []Permission{
 			{Resource: "k8s.cluster-credential", Action: "create", ScopeMode: "cluster"},
 			{Resource: "k8s.cluster-credential", Action: "rotate", ScopeMode: "cluster"},

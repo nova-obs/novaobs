@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"gopkg.in/yaml.v3"
@@ -314,7 +314,7 @@ func (s Service) Apply(ctx context.Context, subject platformrbac.Subject, req Op
 	if err := s.recordHistory(ctx, subject, "deploy", "accepted", event.ID, identities); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{Status: "accepted", Message: "部署请求已通过 NovaObs 校验", AuditID: event.ID, Resources: identities}, nil
+	return OperationResult{Status: "accepted", Message: "部署请求已通过 NovaAPM 校验", AuditID: event.ID, Resources: identities}, nil
 }
 
 func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req DeleteRequest) (OperationResult, error) {
@@ -379,7 +379,7 @@ func (s Service) Delete(ctx context.Context, subject platformrbac.Subject, req D
 	if err := s.recordHistory(ctx, subject, "delete", "deleted", event.ID, []ResourceIdentity{identity}); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{Status: "deleted", Message: "删除请求已通过 NovaObs 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
+	return OperationResult{Status: "deleted", Message: "删除请求已通过 NovaAPM 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
 }
 
 func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, req RollbackRequest) (OperationResult, error) {
@@ -411,7 +411,7 @@ func (s Service) Rollback(ctx context.Context, subject platformrbac.Subject, req
 	if err := s.recordHistory(ctx, subject, "rollback", "requested", event.ID, []ResourceIdentity{identity}); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{Status: "rollback_requested", Message: "回滚请求已通过 NovaObs 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
+	return OperationResult{Status: "rollback_requested", Message: "回滚请求已通过 NovaAPM 校验", AuditID: event.ID, Resources: []ResourceIdentity{identity}}, nil
 }
 
 type MemoryReader struct {

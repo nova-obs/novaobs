@@ -42,16 +42,16 @@ func TestCompileVmalertArtifactProducesMetricsGroupsWithoutVLogsHeaders(t *testi
 	var document map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(artifact.Content), &document))
 	group := document["groups"].([]any)[0].(map[string]any)
-	require.Equal(t, "novaobs_metrics_rule_metrics", group["name"])
+	require.Equal(t, "novaapm_metrics_rule_metrics", group["name"])
 	require.NotContains(t, group, "type")
 	require.NotContains(t, group, "headers")
 	rules := group["rules"].([]any)
 	compiled := rules[0].(map[string]any)
-	require.Equal(t, "NovaObsMetricAlert_rule_metrics", compiled["alert"])
+	require.Equal(t, "NovaAPMMetricAlert_rule_metrics", compiled["alert"])
 	require.Contains(t, compiled["expr"], "http_requests_total")
 	require.Equal(t, "metrics", compiled["labels"].(map[string]any)["signal_type"])
 	require.Equal(t, "vm-prod", compiled["labels"].(map[string]any)["endpoint_id"])
-	require.Equal(t, "binding-orders", compiled["labels"].(map[string]any)["metrics_binding_id"])
+	require.Equal(t, "env-prod", compiled["labels"].(map[string]any)["novaapm_environment_id"])
 }
 
 func TestCompileVmalertArtifactIsDeterministicRegardlessOfInputOrder(t *testing.T) {
@@ -75,6 +75,7 @@ func TestCompileVmalertArtifactExcludesDisabledRules(t *testing.T) {
 func TestCompileVmalertArtifactAddsBoundedRecordingRuleWhenDerivedMetricEnabled(t *testing.T) {
 	spec := validRuleSpec()
 	spec.Grouping.Fields = nil
+	spec.Scope.EnvironmentID = "env-prod"
 	spec.DerivedMetric = &DerivedMetricSpec{Enabled: true, Signal: "match_count", Labels: map[string]string{"environment": "prod"}}
 	artifact, err := CompileVmalertArtifact("runtime", []Rule{{ID: "rule-a", Spec: spec, State: RuleStateEnabled}}, time.Now())
 	require.NoError(t, err)
@@ -85,8 +86,9 @@ func TestCompileVmalertArtifactAddsBoundedRecordingRuleWhenDerivedMetricEnabled(
 	rules := group["rules"].([]any)
 	require.Len(t, rules, 2)
 	recording := rules[1].(map[string]any)
-	require.Equal(t, "novaobs_log_matches", recording["record"])
+	require.Equal(t, "novaapm_log_matches", recording["record"])
 	require.Contains(t, recording["expr"], "_time:1m")
 	require.NotContains(t, recording["expr"], "filter matches")
-	require.Equal(t, "rule-a", recording["labels"].(map[string]any)["novaobs_rule_id"])
+	require.Equal(t, "rule-a", recording["labels"].(map[string]any)["novaapm_rule_id"])
+	require.Equal(t, "env-prod", recording["labels"].(map[string]any)["novaapm_environment_id"])
 }

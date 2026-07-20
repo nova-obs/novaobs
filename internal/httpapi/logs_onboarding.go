@@ -5,20 +5,25 @@ import (
 	"net/http"
 	"strings"
 
-	"novaobs/internal/alerting"
-	"novaobs/internal/logs"
-	k8sopscluster "novaobs/internal/modules/k8sops/cluster"
-	k8sopsdeployment "novaobs/internal/modules/k8sops/deployment"
-	"novaobs/internal/platform/authctx"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/alerting"
+	"novaapm/internal/logs"
+	k8sopscluster "novaapm/internal/modules/k8sops/cluster"
+	k8sopsdeployment "novaapm/internal/modules/k8sops/deployment"
+	"novaapm/internal/platform/authctx"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
 
 func getLogsOnboardingWorkspaceHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		workspace, err := service.Workspace(ctx.Request.Context())
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		workspace, err := service.Workspace(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("productId")), strings.TrimSpace(ctx.Param("id")))
 		if err != nil {
 			writeError(ctx, err)
 			return
@@ -45,6 +50,12 @@ func syncLogsK8sServicesHandler(service logs.Service) gin.HandlerFunc {
 			writeError(ctx, apperr.InvalidRequest("K8s 服务同步请求无效"))
 			return
 		}
+		productID := strings.TrimSpace(ctx.Param("productId"))
+		if body.ProductID != "" && strings.TrimSpace(body.ProductID) != productID {
+			writeError(ctx, apperr.InvalidRequest("请求产品与路径产品不一致"))
+			return
+		}
+		body.ProductID = productID
 		result, err := service.SyncK8sNamespaceServices(ctx.Request.Context(), body)
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -56,12 +67,17 @@ func syncLogsK8sServicesHandler(service logs.Service) gin.HandlerFunc {
 
 func createLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		var body logs.LogEndpoint
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body logEndpointRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
 			return
 		}
-		endpoint, err := service.CreateEndpoint(ctx.Request.Context(), body)
+		endpoint, err := service.CreateEndpointForSubject(ctx.Request.Context(), subject, body.endpoint())
 		if err != nil {
 			writeLogsError(ctx, err)
 			return
@@ -72,7 +88,12 @@ func createLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 
 func listLogsEndpointsHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		endpoints, err := service.ListEndpoints(ctx.Request.Context())
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		endpoints, err := service.ListEndpointsForSubject(ctx.Request.Context(), subject)
 		if err != nil {
 			writeLogsError(ctx, err)
 			return
@@ -83,17 +104,54 @@ func listLogsEndpointsHandler(service logs.Service) gin.HandlerFunc {
 
 func updateLogsEndpointHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		var body logs.LogEndpoint
+		subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+		if !ok {
+			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+			return
+		}
+		var body logEndpointRequest
 		if err := ctx.ShouldBindJSON(&body); err != nil {
 			writeError(ctx, apperr.InvalidRequest("日志下游端点请求无效"))
 			return
 		}
-		endpoint, err := service.UpdateEndpoint(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")), body)
+		endpoint, err := service.UpdateEndpointForSubject(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body.endpoint())
 		if err != nil {
 			writeLogsError(ctx, err)
 			return
 		}
 		response.OK(ctx, endpoint, gin.H{})
+	}
+}
+
+type logEndpointRequest struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Kind        string   `json:"kind"`
+	SignalTypes []string `json:"signal_types"`
+	SinkType    string   `json:"sink_type"`
+	StreamName  string   `json:"stream_name"`
+	WriteURL    string   `json:"write_url"`
+	QueryURL    string   `json:"query_url"`
+	VMUIURL     string   `json:"vmui_url"`
+	ScopeType   string   `json:"scope_type"`
+	ClusterID   string   `json:"cluster_id"`
+	Status      string   `json:"status"`
+}
+
+func (req logEndpointRequest) endpoint() logs.LogEndpoint {
+	return logs.LogEndpoint{
+		Name:        req.Name,
+		Description: req.Description,
+		Kind:        req.Kind,
+		SignalTypes: req.SignalTypes,
+		SinkType:    req.SinkType,
+		StreamName:  req.StreamName,
+		WriteURL:    req.WriteURL,
+		QueryURL:    req.QueryURL,
+		VMUIURL:     req.VMUIURL,
+		ScopeType:   req.ScopeType,
+		ClusterID:   req.ClusterID,
+		Status:      req.Status,
 	}
 }
 
@@ -199,6 +257,9 @@ func previewLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 			writeError(ctx, apperr.InvalidRequest("日志接入预览请求无效"))
 			return
 		}
+		if !authorizeLogsServiceRoute(ctx, service, body.ServiceID, "manage") {
+			return
+		}
 		preview, err := service.PreviewRoute(ctx.Request.Context(), body)
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -231,6 +292,9 @@ func createLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 			writeError(ctx, apperr.InvalidRequest("日志接入路由请求无效"))
 			return
 		}
+		if !authorizeLogsServiceRoute(ctx, service, body.ServiceID, "manage") {
+			return
+		}
 		route, err := service.CreateRoute(ctx.Request.Context(), body)
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -247,6 +311,9 @@ func updateLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 			writeError(ctx, apperr.InvalidRequest("日志接入路由请求无效"))
 			return
 		}
+		if !authorizeLogsRoute(ctx, service, strings.TrimSpace(ctx.Param("id")), "manage") {
+			return
+		}
 		route, err := service.UpdateRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")), body)
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -258,6 +325,9 @@ func updateLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 
 func getLogsRouteCollectorConfigHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if !authorizeLogsRoute(ctx, service, strings.TrimSpace(ctx.Param("id")), "read") {
+			return
+		}
 		config, err := service.RouteCollectorConfig(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")))
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -267,8 +337,94 @@ func getLogsRouteCollectorConfigHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func getVMInstallationHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		artifact, err := service.VMInstallation(ctx.Request.Context(), subject, routeID)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, artifact, gin.H{})
+	}
+}
+
+func listVMLogAgentEndpointsHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "read") {
+			return
+		}
+		items, err := service.ListVMEndpoints(ctx.Request.Context(), routeID)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, items, gin.H{"total": len(items)})
+	}
+}
+
+func createVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		var body logs.UpsertVMEndpointRequest
+		if err := ctx.ShouldBindJSON(&body); err != nil {
+			writeLogsError(ctx, apperr.InvalidRequest("VM 节点请求无效"))
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		item, err := service.CreateVMEndpoint(ctx.Request.Context(), subject, routeID, body)
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.Created(ctx, item)
+	}
+}
+
+func deleteVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		if err := service.DeleteVMEndpoint(ctx.Request.Context(), subject, routeID, strings.TrimSpace(ctx.Param("endpointId"))); err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		ctx.Status(http.StatusNoContent)
+	}
+}
+
+func probeVMLogAgentEndpointHandler(service logs.Service) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		routeID := strings.TrimSpace(ctx.Param("id"))
+		if !authorizeLogsRoute(ctx, service, routeID, "manage") {
+			return
+		}
+		subject, _ := authctx.SubjectFrom(ctx.Request.Context())
+		item, err := service.ProbeVMEndpoint(ctx.Request.Context(), subject, routeID, strings.TrimSpace(ctx.Param("endpointId")))
+		if err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
+		response.OK(ctx, item, gin.H{})
+	}
+}
+
 func probeLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if !authorizeLogsRoute(ctx, service, strings.TrimSpace(ctx.Param("id")), "manage") {
+			return
+		}
 		result, err := service.ProbeRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id")))
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -280,6 +436,9 @@ func probeLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 
 func deleteLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if !authorizeLogsRoute(ctx, service, strings.TrimSpace(ctx.Param("id")), "manage") {
+			return
+		}
 		if err := service.DeleteRoute(ctx.Request.Context(), strings.TrimSpace(ctx.Param("id"))); err != nil {
 			writeLogsError(ctx, err)
 			return
@@ -300,6 +459,10 @@ func publishLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 			response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
 			return
 		}
+		if err := service.AuthorizeRoute(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), "manage"); err != nil {
+			writeLogsError(ctx, err)
+			return
+		}
 		result, err := service.PublishRoute(ctx.Request.Context(), subject, strings.TrimSpace(ctx.Param("id")), body)
 		if err != nil {
 			writeLogsError(ctx, err)
@@ -309,10 +472,36 @@ func publishLogsRouteHandler(service logs.Service) gin.HandlerFunc {
 	}
 }
 
+func authorizeLogsServiceRoute(ctx *gin.Context, service logs.Service, serviceID string, action string) bool {
+	subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+	if !ok {
+		response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+		return false
+	}
+	if err := service.AuthorizeServiceRoute(subject, serviceID, action); err != nil {
+		writeLogsError(ctx, err)
+		return false
+	}
+	return true
+}
+
+func authorizeLogsRoute(ctx *gin.Context, service logs.Service, routeID string, action string) bool {
+	subject, ok := authctx.SubjectFrom(ctx.Request.Context())
+	if !ok {
+		response.Error(ctx, http.StatusUnauthorized, "unauthorized", "请先登录")
+		return false
+	}
+	if err := service.AuthorizeRoute(ctx.Request.Context(), subject, routeID, action); err != nil {
+		writeLogsError(ctx, err)
+		return false
+	}
+	return true
+}
+
 func writeLogsError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, logs.ErrPermissionDenied):
-		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权管理该服务的日志目标")
+		response.Error(ctx, http.StatusForbidden, "permission_denied", "无权访问该服务的日志资源")
 	case errors.Is(err, k8sopscluster.ErrClusterReadOnly):
 		response.Error(ctx, http.StatusForbidden, "k8s_cluster_read_only", "当前集群为只读接入，只能生成配置预览，不能发布 Agent")
 	case errors.Is(err, k8sopsdeployment.ErrPermissionDenied):

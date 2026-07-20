@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/modules/k8sops/kubeclient"
 
 	"github.com/stretchr/testify/require"
 )

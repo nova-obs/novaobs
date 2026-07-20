@@ -8,7 +8,7 @@ type CollectorGroup struct {
 	DisplayName                  string     `json:"display_name" bson:"display_name"`
 	Description                  string     `json:"description" bson:"description"`
 	Mode                         string     `json:"mode" bson:"mode"`
-	Environment                  string     `json:"environment" bson:"environment"`
+	EnvironmentID                string     `json:"environment_id" bson:"environment_id"`
 	Cluster                      string     `json:"cluster" bson:"cluster"`
 	Namespace                    string     `json:"namespace" bson:"namespace"`
 	TenantID                     string     `json:"tenant_id" bson:"tenant_id"`
@@ -108,7 +108,7 @@ type InstanceStatus struct {
 
 type ListGroupFilter struct {
 	Query           string
-	Environment     string
+	EnvironmentID   string
 	Cluster         string
 	Namespace       string
 	Mode            string
@@ -128,7 +128,7 @@ type UpdateGroupRequest struct {
 	DisplayName           *string `json:"display_name"`
 	Description           *string `json:"description"`
 	Mode                  *string `json:"mode"`
-	Environment           *string `json:"environment"`
+	EnvironmentID         *string `json:"environment_id"`
 	Cluster               *string `json:"cluster"`
 	Namespace             *string `json:"namespace"`
 	TenantID              *string `json:"tenant_id"`

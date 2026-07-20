@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -88,7 +88,7 @@ func TestBaseTemplateHandlerReturnsBuiltInTemplateWithoutAudit(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "Gateway")
-	require.Contains(t, recorder.Body.String(), "novaobs-base")
+	require.Contains(t, recorder.Body.String(), "novaapm-base")
 	events, err := auditStore.List(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, events)

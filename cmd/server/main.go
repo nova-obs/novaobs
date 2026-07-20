@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"os"
 
-	"novaobs/internal/app"
-	"novaobs/internal/config"
+	"novaapm/internal/app"
+	"novaapm/internal/config"
 )
 
 func main() {

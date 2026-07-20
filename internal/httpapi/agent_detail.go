@@ -3,14 +3,14 @@ package httpapi
 import (
 	"strings"
 
-	"novaobs/internal/collectorconfig"
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	"novaobs/internal/onboarding"
-	"novaobs/internal/opamp"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
-	"novaobs/pkg/response"
+	"novaapm/internal/collectorconfig"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	"novaapm/internal/onboarding"
+	"novaapm/internal/opamp"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
+	"novaapm/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )

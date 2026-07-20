@@ -77,8 +77,8 @@ func TestResourceOperationEngineDryRunApplyCanForceConflicts(t *testing.T) {
 	_, err := engine.DryRunApply(context.Background(), DryRunApplyRequest{ForceConflicts: true, YAMLContent: `apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: novaobs-logs-agent-config
-  namespace: novaobs-system
+  name: novaapm-logs-agent-config
+  namespace: novaapm-system
 data:
   collector.yaml: |
     receivers: {}`})
@@ -364,8 +364,8 @@ spec:
 func TestResourceOperationEngineDryRunApplyDefersObjectsInNamespaceCreatedBySameBundle(t *testing.T) {
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	dynamicClient.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		if action.GetNamespace() == "novaobs-system" {
-			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "novaobs-system")
+		if action.GetNamespace() == "novaapm-system" {
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "novaapm-system")
 		}
 		return successfulDryRunPatch(action)
 	})
@@ -381,19 +381,19 @@ func TestResourceOperationEngineDryRunApplyDefersObjectsInNamespaceCreatedBySame
 	result, err := engine.DryRunApply(context.Background(), DryRunApplyRequest{YAMLContent: `apiVersion: v1
 kind: Namespace
 metadata:
-  name: novaobs-system
+  name: novaapm-system
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: novaobs-logs-agent
-  namespace: novaobs-system
+  name: novaapm-logs-agent
+  namespace: novaapm-system
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: novaobs-logs-agent-config
-  namespace: novaobs-system`})
+  name: novaapm-logs-agent-config
+  namespace: novaapm-system`})
 
 	require.NoError(t, err)
 	require.Len(t, result.Objects, 3)
@@ -401,7 +401,7 @@ metadata:
 	require.Equal(t, OperationExecutorDeferredDryRun, result.Objects[1].Executor)
 	require.Equal(t, OperationExecutorDeferredDryRun, result.Objects[2].Executor)
 	require.Len(t, result.Warnings, 2)
-	require.Contains(t, result.Warnings[0], `namespace "novaobs-system"`)
+	require.Contains(t, result.Warnings[0], `namespace "novaapm-system"`)
 	actions := dynamicClient.Actions()
 	require.Len(t, actions, 6)
 	require.Equal(t, "namespaces", actions[1].GetResource().Resource)

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/collectormanagement"
-	"novaobs/internal/database"
-	"novaobs/internal/servicecatalog"
-	"novaobs/pkg/apperr"
+	"novaapm/internal/collectormanagement"
+	"novaapm/internal/database"
+	"novaapm/internal/servicecatalog"
+	"novaapm/pkg/apperr"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,7 +19,7 @@ import (
 
 type Guide struct {
 	ServiceName        string            `json:"service_name"`
-	Environment        string            `json:"environment"`
+	EnvironmentID      string            `json:"environment_id"`
 	Endpoint           string            `json:"endpoint"`
 	ResourceAttributes string            `json:"resource_attributes"`
 	KubernetesLabels   map[string]string `json:"kubernetes_labels"`
@@ -165,7 +165,7 @@ func BuildGuide(service servicecatalog.Service) Guide {
 
 	return Guide{
 		ServiceName:        service.Name,
-		Environment:        service.Environment,
+		EnvironmentID:      service.EnvironmentID,
 		Endpoint:           config.Endpoint,
 		ResourceAttributes: config.ResourceAttributesText,
 		KubernetesLabels:   config.KubernetesLabels,
@@ -196,7 +196,7 @@ func (s Service) upsertIdentity(ctx context.Context, service servicecatalog.Serv
 	if err == mongo.ErrNoDocuments {
 		identity.ID = primitive.NewObjectID().Hex()
 		identity.ServiceID = service.ID
-		identity.Environment = service.Environment
+		identity.EnvironmentID = service.EnvironmentID
 		identity.IdentityType = req.IdentityType
 		identity.Enabled = true
 		identity.CreatedAt = time.Now().UTC()
@@ -255,7 +255,7 @@ func BuildGeneratedConfigWithEndpoint(service servicecatalog.Service, endpoint s
 	endpoint = strings.TrimSpace(endpoint)
 	resourceAttributes := map[string]string{
 		"service.name":           service.Name,
-		"deployment.environment": service.Environment,
+		"deployment.environment": service.EnvironmentID,
 		"cmdb.service_id":        cmdbServiceID(service),
 		"business_id":            service.BusinessID,
 		"application_id":         service.ApplicationID,
@@ -268,9 +268,9 @@ func BuildGeneratedConfigWithEndpoint(service servicecatalog.Service, endpoint s
 		"cmdb.business_id":                     service.BusinessID,
 		"cmdb.app_id":                          service.ApplicationID,
 		"cmdb.service_id":                      cmdbServiceID(service),
-		"env":                                  service.Environment,
+		"env":                                  service.EnvironmentID,
 		"observability.ucloud.cn/service":      service.Name,
-		"observability.ucloud.cn/environment":  service.Environment,
+		"observability.ucloud.cn/environment":  service.EnvironmentID,
 		"observability.ucloud.cn/collector-id": cmdbServiceID(service),
 	}
 	env := map[string]string{
@@ -322,7 +322,7 @@ func (s Service) validateUpsertRequest(ctx context.Context, service servicecatal
 	if group.Mode != "" && group.Mode != req.Mode {
 		return apperr.InvalidRequest("Collector Group 模式与接入模式不匹配")
 	}
-	if group.Environment != "" && service.Environment != "" && group.Environment != service.Environment {
+	if group.EnvironmentID != "" && service.EnvironmentID != "" && group.EnvironmentID != service.EnvironmentID {
 		return apperr.InvalidRequest("Collector Group 环境与服务不匹配")
 	}
 	if group.Cluster != "" && service.Cluster != "" && group.Cluster != service.Cluster {
@@ -378,7 +378,7 @@ func (s Service) recommendedCollectorGroupID(ctx context.Context, service servic
 		return ""
 	}
 	for _, group := range groups {
-		if group.Mode == "shared_gateway" && group.Status == "active" && group.Environment == service.Environment && group.Cluster == service.Cluster {
+		if group.Mode == "shared_gateway" && group.Status == "active" && group.EnvironmentID == service.EnvironmentID && group.Cluster == service.Cluster {
 			return group.ID
 		}
 	}
@@ -401,7 +401,7 @@ func (s Service) collectorTarget(ctx context.Context, groupID string, service se
 		GroupID:         group.ID,
 		Name:            group.Name,
 		Mode:            group.Mode,
-		Environment:     group.Environment,
+		EnvironmentID:   group.EnvironmentID,
 		Cluster:         group.Cluster,
 		Namespace:       group.Namespace,
 		Status:          group.Status,
@@ -456,7 +456,7 @@ func serviceSummary(service servicecatalog.Service) ServiceSummary {
 		Name:          service.Name,
 		DisplayName:   service.DisplayName,
 		IdentityType:  service.IdentityType,
-		Environment:   service.Environment,
+		EnvironmentID: service.EnvironmentID,
 		Cluster:       service.Cluster,
 		Namespace:     service.Namespace,
 		OwnerTeam:     service.OwnerTeam,
@@ -468,17 +468,17 @@ func serviceSummary(service servicecatalog.Service) ServiceSummary {
 
 func identitySummary(identity IngestionIdentity) IdentitySummary {
 	return IdentitySummary{
-		ID:           identity.ID,
-		IdentityType: identity.IdentityType,
-		Enabled:      identity.Enabled,
-		TenantID:     identity.TenantID,
-		Environment:  identity.Environment,
-		K8sNamespace: identity.K8sNamespace,
-		K8sWorkload:  identity.K8sWorkload,
-		ExpiresAt:    identity.ExpiresAt,
-		CreatedAt:    identity.CreatedAt,
-		UpdatedAt:    identity.UpdatedAt,
-		TokenPresent: identity.TokenHash != "",
+		ID:            identity.ID,
+		IdentityType:  identity.IdentityType,
+		Enabled:       identity.Enabled,
+		TenantID:      identity.TenantID,
+		EnvironmentID: identity.EnvironmentID,
+		K8sNamespace:  identity.K8sNamespace,
+		K8sWorkload:   identity.K8sWorkload,
+		ExpiresAt:     identity.ExpiresAt,
+		CreatedAt:     identity.CreatedAt,
+		UpdatedAt:     identity.UpdatedAt,
+		TokenPresent:  identity.TokenHash != "",
 	}
 }
 

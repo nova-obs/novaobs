@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/rbac"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -87,7 +87,7 @@ func (s Service) Create(ctx context.Context, subject rbac.Subject, req CreateReq
 		Name:      req.Name,
 		UID:       primitive.NewObjectID().Hex(),
 		Status:    "active",
-		Source:    "novaobs",
+		Source:    "novaapm",
 		CreatedAt: time.Now().UTC(),
 	}
 	created, err := s.repo.Create(ctx, item)

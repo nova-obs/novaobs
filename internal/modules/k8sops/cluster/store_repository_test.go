@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"novaobs/internal/database/memstore"
+	"novaapm/internal/database/memstore"
 
 	"github.com/stretchr/testify/require"
 )

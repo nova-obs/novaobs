@@ -1,20 +1,20 @@
-# NovaObs 日志告警一期生产化 Handoff 架构设计
+# NovaAPM 日志告警一期生产化 Handoff 架构设计
 
 > 日期：2026-06-22  
 > 状态：下一阶段实施基线  
-> 范围：NovaObs 告警中心、查询式日志规则、日志派生指标、vmalert Runtime、Alertmanager 通知闭环  
+> 范围：NovaAPM 告警中心、查询式日志规则、日志派生指标、vmalert Runtime、Alertmanager 通知闭环
 > 明确延期：流式日志告警、严格连续事件匹配、Kafka 状态计算进入二期
 
-> 2026-07-06 更新：本文中的 `cmd/alert-controller`、MongoDB Deployment lease、共享规则目录写入器、端点保存 Alertmanager URL 方案已废弃。当前实现改为观测运行时发布：VictoriaLogs/VictoriaMetrics 端点只作为 datasource，`logs_vmalert` / `metrics_vmalert` runtime 可部署到授权 K8s 集群，vmalert notifier 指向 NovaObs Alert Ingest，外部 NOC/通知系统由平台通知出口统一适配。历史正文仅保留早期决策背景，不能再作为实施基线。
+> 2026-07-06 更新：本文中的 `cmd/alert-controller`、MongoDB Deployment lease、共享规则目录写入器、端点保存 Alertmanager URL 方案已废弃。当前实现改为观测运行时发布：VictoriaLogs/VictoriaMetrics 端点只作为 datasource，`logs_vmalert` / `metrics_vmalert` runtime 可部署到授权 K8s 集群，vmalert notifier 指向 NovaAPM Alert Ingest，外部 NOC/通知系统由平台通知出口统一适配。历史正文仅保留早期决策背景，不能再作为实施基线。
 
 ## 0. 架构决策摘要
 
 下一阶段按以下结论实施，不再继续扩展当前只有列表和创建能力的 `AlertRule` 占位模型：
 
 1. **不引入 Flink，不自研日志规则执行引擎。**一期只实现查询式日志告警，执行器采用社区版 vmalert。
-2. **规则管理集中在 NovaObs。**MongoDB 保存当前规则、更新记录、通知策略、告警事件和审计，是唯一控制面生产真值；产品不引入草稿态，也不突出“版本”概念。
+2. **规则管理集中在 NovaAPM。**MongoDB 保存当前规则、更新记录、通知策略、告警事件和审计，是唯一控制面生产真值；产品不引入草稿态，也不突出“版本”概念。
 3. **不再新增独立部署进程。**端点级 vmalert Runtime 由 `cmd/server` 通过 K8s 安全部署能力预览和应用；旧 `cmd/alert-controller` 方案已废弃。
-4. **vmalert 是外部 Runtime，不是 NovaObs 业务服务。**NovaObs 负责生成、发布、核对和回滚规则产物，vmalert 只负责周期查询、计算、状态机和向 Alertmanager 发送告警。
+4. **vmalert 是外部 Runtime，不是 NovaAPM 业务服务。**NovaAPM 负责生成、发布、核对和回滚规则产物，vmalert 只负责周期查询、计算、状态机和向 Alertmanager 发送告警。
 5. **独立 VictoriaLogs Endpoint 默认对应独立日志 Runtime。**同一 Endpoint 下的多个业务和 VictoriaLogs 租户共享 Runtime；不按业务、不按规则启动 vmalert。
 6. **日志和指标使用独立 vmalert Runtime。**`vmalert-logs` 查询 VictoriaLogs；`vmalert-metrics` 查询 VictoriaMetrics。不要让一个进程同时承担两类故障域。
 7. **一期同时支持直接日志告警和日志派生指标。**直接告警是默认正确性路径；派生指标用于趋势、复用和后续 Metrics 告警，不能把高基数原样搬进 VictoriaMetrics。
@@ -101,13 +101,13 @@ POST /api/v1/alert-rules
 - 不实现机器学习异常检测、动态基线和日志聚类告警。
 - 不允许用户直接编辑完整 vmalert YAML 或 Alertmanager YAML。
 - 不允许任意日志字段作为指标 label 或告警 group by。
-- 不把 VMUI iframe 内部状态当 NovaObs 可读取的查询真值。
+- 不把 VMUI iframe 内部状态当 NovaAPM 可读取的查询真值。
 
 ## 3. 目标架构
 
 ```mermaid
 flowchart LR
-    UI["NovaObs 控制台"] --> API["novaobs server<br/>规则/实例/通知 API"]
+    UI["NovaAPM 控制台"] --> API["novaapm server<br/>规则/实例/通知 API"]
     API --> Mongo["MongoDB<br/>控制面生产真值"]
 
     Controller["alert-controller<br/>校验/编译/发布/核对/回滚"] --> Mongo
@@ -124,7 +124,7 @@ flowchart LR
     MetricRuntime --> AM
 
     AM --> Receiver["业务通知接收器"]
-    AM --> Webhook["NovaObs AlertEvent Webhook"]
+    AM --> Webhook["NovaAPM AlertEvent Webhook"]
     Webhook --> API
     API --> Mongo
 
@@ -136,7 +136,7 @@ flowchart LR
 
 | 组件 | 负责 | 不负责 |
 | --- | --- | --- |
-| `novaobs server` | 用户 API、IAM、规则真值、查询测试、实例/事件查询、内部规则产物读取 | 不周期执行 LogsQL，不直接维护告警状态机 |
+| `novaapm server` | 用户 API、IAM、规则真值、查询测试、实例/事件查询、内部规则产物读取 | 不周期执行 LogsQL，不直接维护告警状态机 |
 | `alert-controller` | Deployment 调和、规则编译、产物发布、vmalert/Alertmanager 重载、回读、回滚、Runtime 健康同步 | 不处理业务 HTTP 请求，不承载日志流量 |
 | `vmalert-logs` | 执行 LogsQL 告警/recording rules、维护 Pending/Firing 状态、remote write | 不保存规则业务真值，不提供用户 CRUD |
 | `vmalert-metrics` | 执行 MetricsQL/PromQL 规则 | 不查询 VictoriaLogs |
@@ -148,7 +148,7 @@ flowchart LR
 
 ### 4.1 不新建仓库
 
-在现有 `novaobs` 仓库增加：
+在现有 `novaapm` 仓库增加：
 
 ```text
 cmd/
@@ -329,7 +329,7 @@ created_at
 
 vmalert 配置 `-configCheckInterval` 作为自愈，controller 在 ConfigMap 更新后主动调用 `/-/reload`。本地开发使用普通文件挂载。
 
-虽然 vmalert 支持通过 HTTP URL 拉取规则，但一期生产不把 NovaObs API 可用性和规则源鉴权能力变成 Runtime 重启依赖。后续如改为 HTTP pull，必须先解决独立服务身份、TLS、缓存和控制面不可用时的最后成功版本恢复。
+虽然 vmalert 支持通过 HTTP URL 拉取规则，但一期生产不把 NovaAPM API 可用性和规则源鉴权能力变成 Runtime 重启依赖。后续如改为 HTTP pull，必须先解决独立服务身份、TLS、缓存和控制面不可用时的最后成功版本恢复。
 
 ### 5.6 AlertInstance 与 AlertEvent
 
@@ -384,9 +384,9 @@ NotificationPolicy
   enabled
 ```
 
-一期只管理业务规则到平台通知 receiver 稳定标识的关联，不在 NovaObs 保存第三方 Webhook URL 或凭据，也不暴露尚未由平台下发的分组时间伪配置。企业 IM、电话、短信、自建 NOC 由平台通知出口统一承接。
+一期只管理业务规则到平台通知 receiver 稳定标识的关联，不在 NovaAPM 保存第三方 Webhook URL 或凭据，也不暴露尚未由平台下发的分组时间伪配置。企业 IM、电话、短信、自建 NOC 由平台通知出口统一承接。
 
-平台通知出口必须为策略登记的 `receiver` 建立稳定投递目标；规则产物只写入策略标识和必要标签，具体分组、去重、抑制、NOC 字段映射和重试由告警事件与通知出口域处理。receiver 标识创建后不可修改，需要换路由时新建策略并更新规则。vmalert notifier 指向 NovaObs Alert Ingest，所有 Firing/Resolved 变化都先进入告警中心，再由通知出口分发。
+平台通知出口必须为策略登记的 `receiver` 建立稳定投递目标；规则产物只写入策略标识和必要标签，具体分组、去重、抑制、NOC 字段映射和重试由告警事件与通知出口域处理。receiver 标识创建后不可修改，需要换路由时新建策略并更新规则。vmalert notifier 指向 NovaAPM Alert Ingest，所有 Firing/Resolved 变化都先进入告警中心，再由通知出口分发。
 
 ## 6. 规则执行路径
 
@@ -411,17 +411,17 @@ groups:
     eval_delay: 5s
     limit: 100
     labels:
-      novaobs_runtime_id: logs-endpoint-01
+      novaapm_runtime_id: logs-endpoint-01
     headers:
       - "AccountID: 1001"
       - "ProjectID: 2001"
     rules:
-      - alert: NovaObsLogRule
+      - alert: NovaAPMLogRule
         expr: '_time:1m AND service.name:="payment-service" AND "payment failed" | stats by (service.name) count() as matches | filter matches:>=3'
         for: 0s
         keep_firing_for: 30s
         labels:
-          novaobs_rule_id: rule-123
+          novaapm_rule_id: rule-123
           service_id: payment-service
           severity: critical
           signal_type: logs
@@ -442,14 +442,14 @@ groups:
 ```text
 VictoriaLogs
 -> LogsQL stats
--> novaobs_log_rule_value
+-> novaapm_log_rule_value
 -> VictoriaMetrics
 ```
 
 派生指标统一命名：
 
 ```text
-novaobs_log_rule_value{
+novaapm_log_rule_value{
   rule_id,
   service_id,
   environment,
@@ -470,9 +470,9 @@ novaobs_log_rule_value{
 派生指标告警必须增加新鲜度保护，避免无新样本时旧值继续触发：
 
 ```promql
-last_over_time(novaobs_log_rule_value{rule_id="rule-123"}[2m]) >= 3
+last_over_time(novaapm_log_rule_value{rule_id="rule-123"}[2m]) >= 3
 and
-time() - timestamp(novaobs_log_rule_value{rule_id="rule-123"}) < 60
+time() - timestamp(novaapm_log_rule_value{rule_id="rule-123"}) < 60
 ```
 
 一期默认仍由直接 LogsQL 规则负责告警正确性。只有通过零值/新鲜度测试的派生指标，才允许切换为 `vmalert-metrics` 告警源。
@@ -586,7 +586,7 @@ LogEndpoint + Region + Environment
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant API as novaobs server
+    participant API as novaapm server
     participant DB as MongoDB
     participant K as K8s API
     participant V as vmalert Runtime
@@ -608,7 +608,7 @@ sequenceDiagram
 - 保存按内容 hash 标识的 Artifact，并原子替换 Runtime 规则文件。
 - Runtime 只挂载 controller 管理的规则目录。
 - controller 主动 reload，同时保留 `configCheckInterval` 作为自愈。
-- reload 后必须回读 `/api/v1/rules`，按 `novaobs_rule_id` 核对。
+- reload 后必须回读 `/api/v1/rules`，按 `novaapm_rule_id` 核对。
 - 不能因为 HTTP reload 返回 200 就标记发布成功。
 - 发布失败保留失败状态并退避重试；文件原子替换确保不会出现半份配置。
 
@@ -729,12 +729,12 @@ ServiceID
 
 ### 14.1 生产可用要求
 
-- `novaobs server`、`alert-controller`、vmalert、Alertmanager 均多副本部署。
+- `novaapm server`、`alert-controller`、vmalert、Alertmanager 均多副本部署。
 - controller 使用 Mongo lease 保证同一 Deployment 单执行者。
 - 所有外部调用有 timeout、指数退避和最大重试次数。
 - 查询错误与无匹配严格区分；错误不能触发自动恢复。
 - Runtime 加载失败继续保留最后一个成功产物。
-- Alertmanager Webhook 和通知投递按至少一次处理，NovaObs Event API 幂等。
+- Alertmanager Webhook 和通知投递按至少一次处理，NovaAPM Event API 幂等。
 - 规则、通知和 Runtime 的所有敏感信息使用平台 Secret Store。
 - 内部规则产物接口不得匿名暴露。
 
@@ -839,7 +839,7 @@ alert_events
 
 交付：
 
-- LogsQL recording rule 编译与 `novaobs_log_rule_value` 写入。
+- LogsQL recording rule 编译与 `novaapm_log_rule_value` 写入。
 - vmalert-metrics Runtime。
 - 派生指标新鲜度保护。
 - NotificationPolicy 与预配置 Alertmanager receiver 的稳定关联。
@@ -946,6 +946,6 @@ AlertRule / Version / Deployment / Runtime / AlertEvent / NotificationPolicy
 - [VictoriaMetrics vmalert：规则、热加载、remote write/read 与运行 API](https://docs.victoriametrics.com/vmalert/)
 - [VictoriaLogs 与 vmalert：LogsQL 告警、recording rules 和租户 headers](https://docs.victoriametrics.com/victorialogs/vmalert/)
 - [Prometheus Alertmanager：分组、去重、抑制和静默](https://prometheus.io/docs/alerting/latest/alertmanager/)
-- NovaObs 当前日志架构：`docs/planning/2026-05-28-logs-module-rebuild-architecture.md`
-- NovaObs 日志字段规范：工作区 `docs/logging/log-output-standard.md`
+- NovaAPM 当前日志架构：`docs/planning/2026-05-28-logs-module-rebuild-architecture.md`
+- NovaAPM 日志字段规范：工作区 `docs/logging/log-output-standard.md`
 - 本地验证环境：工作区 `tools/vmalert-local/`

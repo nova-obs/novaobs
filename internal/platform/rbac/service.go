@@ -133,7 +133,7 @@ func scopeAllowed(mode string, policy Scope, req Scope) bool {
 		if policy.Global {
 			return true
 		}
-		return policy.Environment != "" && policy.Environment == req.Environment &&
+		return policy.EnvironmentID != "" && policy.EnvironmentID == req.EnvironmentID &&
 			optionalScopeMatches(policy, req)
 	case "service":
 		if policy.Global {
@@ -156,7 +156,7 @@ func optionalScopeMatches(policy Scope, req Scope) bool {
 	if len(policy.Namespaces) > 0 && !containsString(policy.Namespaces, req.Namespace) {
 		return false
 	}
-	if policy.Environment != "" && policy.Environment != req.Environment {
+	if policy.EnvironmentID != "" && policy.EnvironmentID != req.EnvironmentID {
 		return false
 	}
 	return true
@@ -175,13 +175,13 @@ func scopeContains(policy Scope, req Scope) bool {
 	if len(policy.Namespaces) > 0 && !containsString(policy.Namespaces, req.Namespace) {
 		return false
 	}
-	if policy.Environment != "" && policy.Environment != req.Environment {
+	if policy.EnvironmentID != "" && policy.EnvironmentID != req.EnvironmentID {
 		return false
 	}
 	if policy.ServiceID != "" && policy.ServiceID != req.ServiceID {
 		return false
 	}
-	return policy.ClusterID != "" || policy.Namespace != "" || len(policy.Namespaces) > 0 || policy.Environment != "" || policy.ServiceID != ""
+	return policy.ClusterID != "" || policy.Namespace != "" || len(policy.Namespaces) > 0 || policy.EnvironmentID != "" || policy.ServiceID != ""
 }
 
 func namespaceAllowed(policy Scope, namespace string) bool {

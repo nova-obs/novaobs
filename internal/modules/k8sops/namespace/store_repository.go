@@ -3,7 +3,7 @@ package namespace
 import (
 	"context"
 
-	"novaobs/internal/database"
+	"novaapm/internal/database"
 )
 
 type StoreRepository struct {

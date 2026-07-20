@@ -4,9 +4,9 @@
 
 **Goal:** 将部署 Apply/Delete 从“校验 + 审计”推进到 typed 优先、dynamic fallback 的 dry-run/apply/delete 执行器，并补齐真实写入前后的 diff、确认、资源归属 inventory、发布审计和回滚快照能力。
 
-**Architecture:** 第一层先在 `kubeclient` 收敛统一资源操作执行器：内置核心资源走 typed client，未知/CRD/多版本资源走 dynamic client fallback，所有路径共享解析、授权后执行、错误归一和审计摘要。第二层再在 `deployment` 服务层实现 Preview diff、Apply confirmation、inventory 和 history，确保真实写入具备可确认、可追踪、可回滚的 NovaObs 语义。
+**Architecture:** 第一层先在 `kubeclient` 收敛统一资源操作执行器：内置核心资源走 typed client，未知/CRD/多版本资源走 dynamic client fallback，所有路径共享解析、授权后执行、错误归一和审计摘要。第二层再在 `deployment` 服务层实现 Preview diff、Apply confirmation、inventory 和 history，确保真实写入具备可确认、可追踪、可回滚的 NovaAPM 语义。
 
-**Tech Stack:** Go、client-go dynamic client、Mongo/memstore repository、Gin handler、NovaObs RBAC/audit envelope、React 前端后续接入。
+**Tech Stack:** Go、client-go dynamic client、Mongo/memstore repository、Gin handler、NovaAPM RBAC/audit envelope、React 前端后续接入。
 
 ---
 
@@ -23,7 +23,7 @@
 - Create: `internal/modules/k8sops/kubeclient/resource_operation_model.go`
 	- 定义 `OperationMode`、`ApplyRequest`、`DeleteRequest`、`OperationResult` 等通用模型。
 - Create: `internal/modules/k8sops/deployment/inventory_model.go`
-	- 定义 NovaObs 管理的 K8s 资源归属记录。
+	- 定义 NovaAPM 管理的 K8s 资源归属记录。
 - Create: `internal/modules/k8sops/deployment/inventory_repository.go`
 	- 定义 inventory repository interface 与内存实现。
 - Create: `internal/modules/k8sops/deployment/apply_plan.go`
@@ -352,7 +352,7 @@ git commit -m "feat: require confirmed k8s apply and delete"
 ### Task 5: Frontend Preview Confirmation Flow
 
 **Files:**
-- Modify: `novaobs-fe` K8s deployment/template apply page files after locating exact routes.
+- Modify: `novaapm-fe` K8s deployment/template apply page files after locating exact routes.
 - Test: frontend unit or Playwright smoke test for preview -> confirm -> apply.
 
 - [ ] **Step 1: Locate current K8s deployment UI**

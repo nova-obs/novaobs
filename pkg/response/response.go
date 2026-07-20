@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	ErrorStatusKey  = "novaobs.error.status"
-	ErrorCodeKey    = "novaobs.error.code"
-	ErrorMessageKey = "novaobs.error.message"
+	ErrorStatusKey  = "novaapm.error.status"
+	ErrorCodeKey    = "novaapm.error.code"
+	ErrorMessageKey = "novaapm.error.message"
 )
 
 type Envelope struct {

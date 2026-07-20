@@ -17,7 +17,7 @@ import (
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 )
 
-const DefaultFieldManager = "novaobs-k8sops"
+const DefaultFieldManager = "novaapm-k8sops"
 
 var ErrResourceOperationInvalid = errors.New("k8s_resource_operation_invalid")
 

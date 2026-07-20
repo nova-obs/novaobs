@@ -21,6 +21,32 @@ func TestEnsureK8sOpsDefaultsAllowsDevAdminTerminal(t *testing.T) {
 	require.True(t, decision.Allowed)
 }
 
+func TestEnsurePlatformDefaultsAllowsExternalLogTenantOverride(t *testing.T) {
+	repo := NewMemoryRepository()
+	subject := Subject{ID: "platform-admin", Type: "user"}
+
+	err := EnsurePlatformDefaults(repo, subject)
+
+	require.NoError(t, err)
+	decision := NewService(repo).Authorize(subject, Request{
+		Resource: "logs.external-tenant",
+		Action:   "manage",
+		Scope:    Scope{Global: true},
+	})
+	require.True(t, decision.Allowed)
+	for _, req := range []Request{
+		{Resource: "observability.endpoint", Action: "manage", Scope: Scope{Global: true}},
+		{Resource: "metrics.integration", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "metrics.integration", Action: "manage", Scope: Scope{EnvironmentID: "env-prod"}},
+		{Resource: "metrics.deployment", Action: "manage", Scope: Scope{EnvironmentID: "env-prod"}},
+		{Resource: "platform.image", Action: "manage", Scope: Scope{Global: true}},
+		{Resource: "platform.environment", Action: "read", Scope: Scope{Global: true}},
+		{Resource: "platform.environment", Action: "manage", Scope: Scope{Global: true}},
+	} {
+		require.True(t, NewService(repo).Authorize(subject, req).Allowed, "%s:%s", req.Resource, req.Action)
+	}
+}
+
 func TestDevK8sOpsScopeDoesNotSeedDemoClusterNamespace(t *testing.T) {
 	scope := DevK8sOpsScope()
 

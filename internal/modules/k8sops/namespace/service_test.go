@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"novaobs/internal/modules/k8sops/cluster"
-	"novaobs/internal/platform/audit"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/cluster"
+	"novaapm/internal/platform/audit"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/stretchr/testify/require"
 )

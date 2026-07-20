@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/database"
-	"novaobs/internal/platform/audit"
+	"novaapm/internal/database"
+	"novaapm/internal/platform/audit"
 )
 
 // Repository 保存告警控制面的生产真值。SaveChange 必须原子校验

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,7 +55,7 @@ func (r StaticReader) Read(_ context.Context, query Query) (Snapshot, error) {
 		Signals: []Signal{},
 		Sync: SyncState{
 			Status:       SyncUnknown,
-			Source:       "NovaObs",
+			Source:       "NovaAPM",
 			TimeWindow:   "等待真实集群接入",
 			LastSyncedAt: now,
 		},

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/modules/k8sops/kubeclient"
 )
 
 type PreviewPlan struct {

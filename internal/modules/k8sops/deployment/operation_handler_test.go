@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"novaobs/internal/modules/k8sops/kubeclient"
-	"novaobs/internal/platform/audit"
-	"novaobs/internal/platform/authctx"
-	platformrbac "novaobs/internal/platform/rbac"
+	"novaapm/internal/modules/k8sops/kubeclient"
+	"novaapm/internal/platform/audit"
+	"novaapm/internal/platform/authctx"
+	platformrbac "novaapm/internal/platform/rbac"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
